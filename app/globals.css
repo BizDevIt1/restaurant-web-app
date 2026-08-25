@@ -1,0 +1,286 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #342c14;
+  --bg-deep: #140c0c;
+  --bg-soft: #241d10;
+  --surface: rgba(255, 255, 255, 0.045);
+  --surface-hi: rgba(255, 255, 255, 0.09);
+  --border: rgba(247, 231, 190, 0.12);
+  --border-hi: rgba(247, 231, 190, 0.26);
+  --gold: #e3b13b;
+  --gold-dim: rgba(227, 177, 59, 0.16);
+  --gold-glow: rgba(227, 177, 59, 0.45);
+  --orange: #e04e17;
+  --orange-dim: rgba(224, 78, 23, 0.16);
+  --orange-glow: rgba(224, 78, 23, 0.45);
+  --olive: #a3812c;
+  --olive-dim: rgba(163, 129, 44, 0.18);
+  --rust: #8a300e;
+  --rust-dim: rgba(138, 48, 14, 0.2);
+  --text-hi: #f7f0dd;
+  --text-lo: #c1b295;
+  --text-faint: #8d8067;
+  --radius: 18px;
+  --radius-pill: 20px;
+  --max-width: 1200px;
+}
+
+/* Base Body Ambient Background */
+body {
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(ellipse 65% 55% at 10% 0%, rgba(227, 177, 59, 0.18) 0%, transparent 70%),
+    radial-gradient(ellipse 65% 55% at 90% 12%, rgba(224, 78, 23, 0.14) 0%, transparent 65%),
+    radial-gradient(ellipse 80% 60% at 50% 100%, rgba(20, 12, 12, 0.85) 0%, transparent 100%);
+  background-attachment: fixed;
+  color: var(--text-hi);
+  font-family: var(--font-body), sans-serif;
+  overflow-x: hidden;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display), sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.font-display {
+  font-family: var(--font-display), sans-serif;
+}
+
+.font-body {
+  font-family: var(--font-body), sans-serif;
+}
+
+.font-mono {
+  font-family: var(--font-mono), monospace;
+}
+
+/* Button Styles */
+.btn-gold {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f5c85c 0%, #e3b13b 50%, #c99624 100%);
+  color: #241a06;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 4px 20px var(--gold-glow);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn-gold:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 28px rgba(227, 177, 59, 0.65);
+  filter: brightness(1.05);
+}
+
+.btn-gold:active {
+  transform: translateY(0);
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-hi);
+  font-weight: 600;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(12px);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn-ghost:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+  background: var(--gold-dim);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 18px var(--gold-dim);
+}
+
+.btn-ghost:active {
+  transform: translateY(0);
+}
+
+/* Card Surface & Hover */
+.glass-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-panel:hover {
+  border-color: var(--border-hi);
+  background: var(--surface-hi);
+  transform: translateY(-3px);
+}
+
+.glass-panel-static {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Text Gradients */
+.text-gradient-gold {
+  background: linear-gradient(135deg, #f7f0dd 20%, #e3b13b 70%, #e04e17 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.text-gradient-accent {
+  background: linear-gradient(135deg, #e3b13b 0%, #e04e17 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Orbit Rotations */
+@keyframes orbit-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes orbit-spin-reverse {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+.animate-orbit-spin {
+  animation: orbit-spin 46s linear infinite;
+}
+
+.animate-orbit-spin-reverse {
+  animation: orbit-spin-reverse 64s linear infinite;
+}
+
+/* Marquee Animation */
+@keyframes marquee-slide {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee-slide 32s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+/* Pulse Keyframes */
+@keyframes pulse-ring {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.6);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 14px rgba(37, 211, 102, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(37, 211, 102, 0);
+  }
+}
+
+.animate-pulse-ring {
+  animation: pulse-ring 2.4s infinite cubic-bezier(0.45, 0, 0.55, 1);
+}
+
+@keyframes live-dot {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.85);
+  }
+}
+
+.animate-live-dot {
+  animation: live-dot 1.8s ease-in-out infinite;
+}
+
+/* Scroll reveal classes */
+.reveal-init {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.65s cubic-bezier(0.16, 1, 0.3, 1), transform 0.65s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+
+.reveal-init.is-revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-deep);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(247, 231, 190, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gold);
+}
+
+/* Prefers Reduced Motion (Global rule) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  
+  .reveal-init {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  
+  .animate-orbit-spin,
+  .animate-orbit-spin-reverse,
+  .animate-marquee,
+  .animate-pulse-ring,
+  .animate-live-dot {
+    animation: none !important;
+  }
+}
