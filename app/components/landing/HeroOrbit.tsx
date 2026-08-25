@@ -3,6 +3,8 @@
 import React, { useState, useRef } from "react";
 import Link from "next/link";
 
+import HeroAnimatedFeature from "./HeroAnimatedFeature";
+
 export default function HeroOrbit() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
@@ -31,13 +33,20 @@ export default function HeroOrbit() {
               Built for restaurants in Pakistan
             </div>
 
-            {/* H1 Headline */}
-            <h1 className="font-display font-extrabold text-4xl sm:text-5xl lg:text-[3.4rem] leading-[1.12] text-[var(--text-hi)]">
-              Manage Your Restaurant with{" "}
-              <span className="text-gradient-gold block sm:inline">
-                One Complete POS &amp; Online Ordering
-              </span>{" "}
-              System
+            {/* H1 Headline with fixed proportional height to keep description below completely static */}
+            <h1 className="font-display font-extrabold text-4xl sm:text-5xl lg:text-[3.4rem] leading-[1.15] text-[var(--text-hi)] cursor-default min-h-[4.8em] sm:min-h-[3.6em]">
+              {/* Screen-reader static accessible label */}
+              <span className="sr-only">
+                Manage Your Restaurant with One Complete POS &amp; Online Ordering System
+              </span>
+
+              {/* Decorative visual heading with smooth rotating feature */}
+              <span aria-hidden="true">
+                Manage Your Restaurant with{" "}
+                <span className="text-gradient-gold">
+                  One Complete <HeroAnimatedFeature />
+                </span>
+              </span>
             </h1>
 
             {/* Subcopy */}

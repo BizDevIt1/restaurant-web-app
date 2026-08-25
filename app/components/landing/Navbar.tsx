@@ -70,10 +70,10 @@ export default function Navbar() {
           {/* Desktop Right Action Buttons */}
           <div className="hidden lg:flex items-center gap-3 shrink-0">
             <Link
-              href="/#demo"
-              className="btn-ghost text-xs px-4 py-2"
+              href="/login"
+              className="text-sm font-medium text-[var(--text-lo)] hover:text-[var(--gold)] transition-colors px-2 py-1.5 focus:outline-none"
             >
-              Book a Demo
+              Login
             </Link>
             <Link
               href="/pricing"
@@ -119,11 +119,11 @@ export default function Navbar() {
 
             <div className="pt-2 flex flex-col gap-2.5">
               <Link
-                href="/#demo"
+                href="/login"
                 onClick={() => setMobileMenuOpen(false)}
-                className="btn-ghost text-center py-2.5 text-sm"
+                className="text-center py-2 text-sm font-medium text-[var(--text-lo)] hover:text-[var(--gold)] transition-colors"
               >
-                Book a Demo
+                Login
               </Link>
               <Link
                 href="/pricing"
