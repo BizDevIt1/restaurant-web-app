@@ -3,7 +3,6 @@
 import React, { useEffect } from "react";
 import Navbar from "./components/landing/Navbar";
 import HeroOrbit from "./components/landing/HeroOrbit";
-import CityMarquee from "./components/landing/CityMarquee";
 import ProblemSolution from "./components/landing/ProblemSolution";
 import FeatureGrid from "./components/landing/FeatureGrid";
 import HowItWorks from "./components/landing/HowItWorks";
@@ -55,12 +54,7 @@ export default function Home() {
           <HeroOrbit />
         </div>
 
-        {/* 3. City Marquee */}
-        <div className="reveal-init">
-          <CityMarquee />
-        </div>
-
-        {/* 4. Problem Solution */}
+        {/* 3. Problem Solution */}
         <div className="reveal-init">
           <ProblemSolution />
         </div>
