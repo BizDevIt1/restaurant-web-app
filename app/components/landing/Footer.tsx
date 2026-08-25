@@ -25,10 +25,10 @@ export default function Footer() {
               </span>
             </Link>
             <p className="text-xs text-[var(--text-lo)] leading-relaxed">
-              The unified operating system for Pakistani restaurants, cloud kitchens, and franchise networks.
+              The unified operating system for restaurants, cloud kitchens, and franchise networks.
             </p>
             <div className="font-mono text-[11px] text-[var(--text-faint)]">
-              🇵🇰 Built in Punjab, Pakistan
+              Restaurant Operating System Platform
             </div>
           </div>
 
@@ -54,7 +54,7 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/#faq" className="hover:text-[var(--gold)] transition-colors">
+                <Link href="/faq" className="hover:text-[var(--gold)] transition-colors">
                   FAQ
                 </Link>
               </li>
@@ -78,9 +78,9 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/#demo" className="hover:text-[var(--gold)] transition-colors">
+                <a href="mailto:contact@omnibites.com" className="hover:text-[var(--gold)] transition-colors">
                   Contact Support
-                </Link>
+                </a>
               </li>
               <li>
                 <Link href="/#demo" className="hover:text-[var(--gold)] transition-colors">
@@ -98,7 +98,7 @@ export default function Footer() {
             <ul className="space-y-2">
               <li>
                 <Link href="/#demo" className="hover:text-[var(--gold)] transition-colors">
-                  Book a Demo
+                  View Demo
                 </Link>
               </li>
               <li>
@@ -142,10 +142,10 @@ export default function Footer() {
         {/* Bottom Bar */}
         <div className="pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left text-xs font-mono text-[var(--text-faint)]">
           <div>
-            &copy; {new Date().getFullYear()} Omnibites Technologies (Pvt) Ltd. All rights reserved.
+            &copy; {new Date().getFullYear()} Omnibites Technologies Inc. All rights reserved.
           </div>
           <div className="text-[var(--text-lo)] font-medium">
-            Made for restaurants across Pakistan · JazzCash · Easypaisa
+            Multi-currency &amp; multi-language ready
           </div>
         </div>
       </div>

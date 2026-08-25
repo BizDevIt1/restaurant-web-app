@@ -7,7 +7,7 @@ export default function WhatsAppFloat() {
     <aside aria-label="WhatsApp Fast Support" className="fixed bottom-6 right-6 z-50 flex items-center group">
       {/* Tooltip on hover */}
       <div className="mr-3 px-3 py-1.5 rounded-lg bg-[var(--bg-deep)] border border-[var(--border)] text-xs text-[var(--text-hi)] font-medium shadow-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none hidden sm:block">
-        Chat with Pakistan Team 💬
+        Chat with our team 💬
       </div>
 
       {/* Pulsing Outer Ring */}

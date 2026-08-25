@@ -10,7 +10,7 @@ export default function EarlyPartners() {
       role: "Delivery-First Operators",
       tag: "Founding Partner Program",
       benefit:
-        "Waived initial setup fees, personalized multi-brand KDS screen configuration, and direct technical integration with your dedicated rider fleets.",
+        "Waived initial setup fees, personalized multi-brand kitchen display configuration, and direct technical integration with your dedicated rider fleets.",
     },
     {
       title: "Single-Branch Restaurants",
@@ -18,15 +18,15 @@ export default function EarlyPartners() {
       role: "Dine-In & Takeaway Eateries",
       tag: "Founding Partner Program",
       benefit:
-        "Guaranteed locked-in monthly pricing for 2 years, free menu digitisation and recipe cost modeling, plus complimentary thermal printer setup.",
+        "Guaranteed locked-in monthly pricing for 2 years, free menu digitization and recipe cost modeling, plus complimentary thermal printer setup.",
     },
     {
       title: "Multi-Branch & Franchise Groups",
       initials: "FG",
-      role: "Regional Chains (3–10 Outlets)",
+      role: "Multi-Outlet Chains (3–10 Outlets)",
       tag: "Founding Partner Program",
       benefit:
-        "Free full historical data migration from legacy offline systems, dedicated account manager, and on-site staff training across all city locations.",
+        "Free full historical data migration from legacy systems, dedicated account manager, and staff training across all locations.",
     },
   ];
 
@@ -42,7 +42,7 @@ export default function EarlyPartners() {
             Join the Omnibites Founding Partner Program
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
-            We are actively onboarding forward-thinking restaurant operators across Pakistan into our inaugural cohort with exclusive onboarding benefits.
+            We&apos;re actively onboarding forward-thinking restaurant operators into our inaugural cohort, with exclusive onboarding benefits.
           </p>
         </div>
 

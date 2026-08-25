@@ -10,8 +10,8 @@ export default function PricingSection() {
     {
       name: "Starter",
       desc: "Perfect for single dine-in or takeaway restaurants starting their digital transformation.",
-      monthlyPrice: "₨7,500",
-      annualPrice: "₨6,375",
+      monthlyPrice: "$39",
+      annualPrice: "$33",
       isFeatured: false,
       badge: "Single Outlet",
       features: [
@@ -20,16 +20,16 @@ export default function PricingSection() {
         "6% Marketplace Commission",
         "High-Speed POS & Billing",
         "Basic Kitchen Display (1 station)",
-        "Standard Urdu/English Receipts",
-        "Standard Email & WhatsApp Support",
+        "Multi-Language Thermal Receipts",
+        "Standard Email & Chat Support",
       ],
       ctaText: "Get Started",
     },
     {
       name: "Professional",
-      desc: "Ideal for growing high-volume eateries, multi-station kitchens, and regional locations.",
-      monthlyPrice: "₨16,000",
-      annualPrice: "₨13,600",
+      desc: "Ideal for growing high-volume eateries, multi-station kitchens, and expanded locations.",
+      monthlyPrice: "$89",
+      annualPrice: "$75",
       isFeatured: true,
       badge: "Most Popular",
       features: [
@@ -40,18 +40,18 @@ export default function PricingSection() {
         "Recipe-Linked Inventory Deduction",
         "Direct Delivery & Rider Dispatch",
         "Customer Loyalty & Reward Points",
-        "Priority 24/7 Phone & WhatsApp Support",
+        "Priority 24/7 Phone & Chat Support",
       ],
       ctaText: "Get Started Now",
     },
     {
       name: "Franchise",
-      desc: "Engineered for established restaurant groups with strict central controls and multi-city branches.",
-      monthlyPrice: "₨34,000",
-      annualPrice: "₨28,900",
+      desc: "Engineered for established restaurant groups with strict central controls and multi-outlet chains.",
+      monthlyPrice: "$179",
+      annualPrice: "$149",
       isFeatured: false,
       badge: "Multi-Branch Groups",
-      note: "One-time setup fee applies",
+      note: "One-time setup assistance available",
       features: [
         "Up to 10 Branch Locations",
         "Up to 75 Staff Logins",
@@ -72,13 +72,13 @@ export default function PricingSection() {
       isFeatured: false,
       badge: "Custom Scale",
       features: [
-        "Unlimited Branches & Cities",
+        "Unlimited Outlets & Locations",
         "Unlimited Staff & Admin Seats",
         "Custom Negotiated Commission Rates",
-        "Custom ERP & SAP Integrations",
+        "Custom ERP & Integration Webhooks",
         "Dedicated Server Infrastructure",
         "Custom Feature Engineering",
-        "SLA Guarantee & Onsite Training",
+        "SLA Guarantee & Staff Training",
         "Executive Strategy Reviews",
       ],
       ctaText: "Contact Enterprise",
@@ -94,10 +94,10 @@ export default function PricingSection() {
             Transparent Pricing
           </div>
           <h2 className="font-display font-extrabold text-3xl sm:text-4xl text-[var(--text-hi)]">
-            Predictable Plans in Native Pakistani Rupee
+            Predictable Plans for Every Stage
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
-            No surprise foreign exchange currency shocks, no USD card billing problems. Transparent monthly rates that scale with your restaurant.
+            Transparent monthly rates that scale with your restaurant as you grow.
           </p>
 
           {/* Monthly / Annual Toggle */}
@@ -212,7 +212,7 @@ export default function PricingSection() {
 
               {/* Action Button */}
               <Link
-                href="/#demo"
+                href={tier.name === "Enterprise" ? "mailto:contact@omnibites.com" : "/#demo"}
                 className={`w-full py-3 text-xs font-bold text-center rounded-xl transition-all block ${
                   tier.isFeatured
                     ? "btn-gold shadow-lg shadow-[var(--gold-glow)]"

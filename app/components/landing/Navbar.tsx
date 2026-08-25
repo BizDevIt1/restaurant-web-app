@@ -20,18 +20,17 @@ export default function Navbar() {
     { name: "Features", href: "/#features" },
     { name: "Product", href: "/#product" },
     { name: "Pricing", href: "/pricing" },
-    { name: "How it works", href: "/#how-it-works" },
-    { name: "FAQ", href: "/#faq" },
+    { name: "How It Works", href: "/#how-it-works" },
+    { name: "FAQ", href: "/faq" },
     { name: "About", href: "/about" },
   ];
 
   return (
     <header
-      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
-        scrolled
+      className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled
           ? "bg-[var(--bg-deep)]/90 backdrop-blur-md border-b border-[var(--border)] py-3 shadow-xl shadow-black/40"
           : "bg-transparent py-5"
-      }`}
+        }`}
     >
       <div className="max-w-[1240px] mx-auto px-4 sm:px-6 flex items-center justify-between">
         {/* Brand Mark */}

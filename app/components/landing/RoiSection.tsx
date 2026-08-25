@@ -35,21 +35,21 @@ export default function RoiSection() {
       title: "Front-of-House Billing Speed",
       trend: "3x Faster",
       percent: 90,
-      note: "Instant split-bill checkout & integrated JazzCash/Easypaisa QR",
+      note: "Instant split-bill checkout & integrated digital wallet/QR payments",
       color: "var(--gold)",
     },
     {
       title: "Raw Ingredient Stock Wastage",
       trend: "Down drastically",
       percent: 78,
-      note: "Recipe-linked inventory auto-deducts exact grammages with reorder alerts",
+      note: "Recipe-linked inventory auto-deducts exact quantities with reorder alerts",
       color: "var(--olive)",
     },
     {
       title: "Kitchen Ticket Turnaround",
       trend: "2x Faster",
       percent: 88,
-      note: "Direct digital KDS routing by prep station prevents kitchen bottlenecks",
+      note: "Direct digital kitchen-display routing by prep station prevents bottlenecks",
       color: "var(--orange)",
     },
   ];
@@ -101,7 +101,7 @@ export default function RoiSection() {
                       Faster Billing &amp; Higher Table Turn
                     </h4>
                     <p className="text-xs text-[var(--text-lo)] leading-relaxed mt-0.5">
-                      Fast-tap till interface prints Urdu/English receipts in under two seconds, processing peak rush hours smoothly.
+                      Fast-tap till interface prints multi-language receipts in under two seconds, processing peak rush hours smoothly.
                     </p>
                   </div>
                 </div>

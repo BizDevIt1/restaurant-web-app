@@ -70,12 +70,12 @@ export default function AboutManifesto() {
             </div>
 
             <h2 className="font-display font-extrabold text-3xl sm:text-4xl text-[var(--text-hi)] leading-tight">
-              Software Built for the Realities of Pakistani Food Service
+              Software Built for Modern Food Service Operators
             </h2>
 
             <div className="space-y-4 text-[var(--text-lo)] text-sm sm:text-base leading-relaxed">
               <p>
-                For years, restaurant owners in Pakistan were forced to choose between rigid foreign software billed in US Dollars with zero local payment integrations, or outdated offline POS systems from the early 2000s that crash whenever the internet blinks.
+                For years, restaurant operators were forced to choose between legacy offline systems that crash during peak hours or rigid, overpriced software with zero localized payment options.
               </p>
               <p>
                 Omnibites was engineered from the ground up to bridge this gap. We built native JazzCash and Easypaisa QR workflows, dual Urdu/English thermal receipt formatting, and offline-first till architecture that survives local connectivity drops without missing a beat.
@@ -103,7 +103,7 @@ export default function AboutManifesto() {
                 Core Modules
               </span>
               <p className="text-[11px] text-[var(--text-lo)] leading-tight">
-                POS, KDS, Inventory, Delivery &amp; Marketplace
+                POS, KDS, Inventory, Delivery, Marketplace &amp; Franchise
               </p>
             </div>
 
@@ -113,10 +113,10 @@ export default function AboutManifesto() {
                 {count2}%
               </span>
               <span className="font-display font-bold text-sm text-[var(--text-hi)]">
-                PKR Native
+                Uptime SLA
               </span>
               <p className="text-[11px] text-[var(--text-lo)] leading-tight">
-                Zero currency volatility or foreign credit cards
+                Offline-first engine with seamless cloud sync
               </p>
             </div>
 
@@ -126,10 +126,10 @@ export default function AboutManifesto() {
                 {count3}
               </span>
               <span className="font-display font-bold text-sm text-[var(--text-hi)]">
-                Mobile Rails
+                Multi-Currency
               </span>
               <p className="text-[11px] text-[var(--text-lo)] leading-tight">
-                Instant JazzCash &amp; Easypaisa settlements
+                Support for all major payment rails &amp; tenders
               </p>
             </div>
 
@@ -139,10 +139,10 @@ export default function AboutManifesto() {
                 {count4}
               </span>
               <span className="font-display font-bold text-sm text-[var(--text-hi)]">
-                Live Dashboard
+                Unified Platform
               </span>
               <p className="text-[11px] text-[var(--text-lo)] leading-tight">
-                Complete multi-branch control anywhere in Pakistan
+                Complete multi-branch control anywhere you operate
               </p>
             </div>
           </div>

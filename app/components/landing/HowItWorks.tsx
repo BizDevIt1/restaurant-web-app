@@ -19,20 +19,20 @@ export default function HowItWorks() {
     {
       num: "03",
       title: "Add your menu & staff",
-      desc: "Upload menu categories, item modifiers, recipe costs in PKR, and assign PIN-protected roles for cashiers and cooks.",
+      desc: "Upload menu categories, item modifiers, recipe costs, and assign PIN-protected roles for cashiers and cooks.",
       badge: "Recipe Linked",
     },
     {
       num: "04",
       title: "Start receiving orders",
-      desc: "Process dine-in bills on the POS, stream KOT tickets straight to kitchen screens, and take direct digital marketplace orders.",
-      badge: "Live KDS Flow",
+      desc: "Process dine-in bills on the POS, stream kitchen tickets straight to prep screens, and take direct marketplace orders.",
+      badge: "Live Kitchen Flow",
     },
     {
       num: "05",
       title: "Track & grow",
-      desc: "Monitor live daily sales, view ingredient depletion in real-time, and run customer retention campaigns via WhatsApp.",
-      badge: "PKR Analytics",
+      desc: "Monitor live daily sales, view ingredient depletion in real time, and run retention campaigns via messaging.",
+      badge: "Real-Time Analytics",
     },
   ];
 
@@ -48,15 +48,12 @@ export default function HowItWorks() {
             Up and Running in Five Simple Steps
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
-            From initial registration to your first live order in under 24 hours — zero complicated hardware installations.
+            From initial registration to your first live order in under 24 hours — no complicated hardware installations.
           </p>
         </div>
 
         {/* 5-step horizontal timeline */}
         <div className="relative">
-          {/* Connecting dashed line (Desktop only) */}
-          <div className="hidden lg:block absolute top-1/2 left-10 right-10 h-[2px] border-t-2 border-dashed border-[var(--border-hi)] -translate-y-8 z-0"></div>
-
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 relative z-10">
             {steps.map((step, idx) => (
               <div
