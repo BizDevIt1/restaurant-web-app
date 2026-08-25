@@ -30,12 +30,12 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "FoodNet — The Operating System for Pakistani Restaurants",
+  title: "Omnibites — The Operating System for Pakistani Restaurants",
   description:
     "All-in-one POS, KDS, inventory management, and online ordering marketplace built specifically for restaurants, cloud kitchens, and franchises across Pakistan. Native PKR, JazzCash, Easypaisa, and thermal printer support.",
   keywords: [
     "Restaurant POS Pakistan",
-    "FoodNet",
+    "Omnibites",
     "Kitchen Display System Pakistan",
     "JazzCash restaurant payment",
     "Easypaisa POS",
@@ -43,7 +43,7 @@ export const metadata: Metadata = {
     "Restaurant inventory management PKR",
   ],
   openGraph: {
-    title: "FoodNet — The Operating System for Pakistani Restaurants",
+    title: "Omnibites — The Operating System for Pakistani Restaurants",
     description:
       "Manage your restaurant with one complete POS, KDS, inventory & online ordering system. Built for Pakistan.",
     type: "website",

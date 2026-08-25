@@ -86,7 +86,7 @@ export default function DemoContactSection() {
                   <div>
                     <div className="text-[11px] font-mono text-[var(--text-faint)]">Inquiries &amp; Enterprise</div>
                     <div className="text-xs sm:text-sm font-mono font-bold text-[var(--text-hi)]">
-                      contact@foodnet.pk
+                      contact@omnibites.pk
                     </div>
                   </div>
                 </div>

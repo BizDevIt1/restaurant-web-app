@@ -14,7 +14,6 @@ import EarlyPartners from "./components/landing/EarlyPartners";
 import IntegrationsGrid from "./components/landing/IntegrationsGrid";
 import SecuritySection from "./components/landing/SecuritySection";
 import FaqAccordion from "./components/landing/FaqAccordion";
-import AboutManifesto from "./components/landing/AboutManifesto";
 import DemoContactSection from "./components/landing/DemoContactSection";
 import FinalCta from "./components/landing/FinalCta";
 import Footer from "./components/landing/Footer";
@@ -110,23 +109,18 @@ export default function Home() {
           <FaqAccordion />
         </div>
 
-        {/* 14. About Manifesto */}
-        <div className="reveal-init">
-          <AboutManifesto />
-        </div>
-
-        {/* 15. Demo & Contact Section */}
+        {/* 14. Demo & Contact Section */}
         <div className="reveal-init">
           <DemoContactSection />
         </div>
 
-        {/* 16. Final CTA */}
+        {/* 15. Final CTA */}
         <div className="reveal-init">
           <FinalCta />
         </div>
       </main>
 
-      {/* 17. Footer */}
+      {/* 16. Footer */}
       <Footer />
 
       {/* WhatsApp Floating Action Button */}

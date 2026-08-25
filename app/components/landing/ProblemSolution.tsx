@@ -61,7 +61,7 @@ export default function ProblemSolution() {
             Stop Running Your Restaurant on Fragmented Tools
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
-            See how FoodNet replaces chaotic paper slips and WhatsApp confusion with unified, automated digital precision.
+            See how Omnibites replaces chaotic paper slips and WhatsApp confusion with unified, automated digital precision.
           </p>
         </div>
 
@@ -80,7 +80,7 @@ export default function ProblemSolution() {
                   <h3 className="font-display font-bold text-xl text-[var(--text-hi)]">
                     The Problem Today
                   </h3>
-                  <p className="text-xs text-[var(--text-lo)]">Without FoodNet</p>
+                  <p className="text-xs text-[var(--text-lo)]">Without Omnibites</p>
                 </div>
               </div>
               <span className="font-mono text-xs px-2.5 py-1 rounded bg-[var(--rust)]/20 text-[var(--rust)] font-semibold border border-[var(--rust)]/30">
@@ -107,7 +107,7 @@ export default function ProblemSolution() {
             </div>
           </div>
 
-          {/* Right Panel: How FoodNet Fixes It (Olive-tinted) */}
+          {/* Right Panel: How Omnibites Fixes It (Olive-tinted) */}
           <div className="rounded-2xl bg-[var(--olive-dim)]/40 border border-[var(--olive)]/40 p-6 sm:p-8 relative overflow-hidden backdrop-blur-md shadow-xl shadow-[var(--olive-dim)]">
             <div className="flex items-center justify-between pb-6 mb-6 border-b border-[var(--olive)]/30">
               <div className="flex items-center gap-3">
@@ -118,9 +118,9 @@ export default function ProblemSolution() {
                 </div>
                 <div>
                   <h3 className="font-display font-bold text-xl text-[var(--text-hi)]">
-                    How FoodNet Fixes It
+                    How Omnibites Fixes It
                   </h3>
-                  <p className="text-xs text-[var(--olive)] font-medium">With FoodNet OS</p>
+                  <p className="text-xs text-[var(--olive)] font-medium">With Omnibites</p>
                 </div>
               </div>
               <span className="font-mono text-xs px-2.5 py-1 rounded bg-[var(--olive)]/20 text-[var(--olive)] font-semibold border border-[var(--olive)]/40">

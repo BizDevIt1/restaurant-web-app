@@ -228,6 +228,26 @@ h1, h2, h3, h4, h5, h6 {
   animation: live-dot 1.8s ease-in-out infinite;
 }
 
+/* Mouse Scroll Animation */
+@keyframes mouse-scroll {
+  0% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 0.9;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+.animate-mouse-scroll {
+  animation: mouse-scroll 1.8s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
 /* Scroll reveal classes */
 .reveal-init {
   opacity: 0;

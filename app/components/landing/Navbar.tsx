@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import Image from "next/image";
 
 export default function Navbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -21,7 +22,7 @@ export default function Navbar() {
     { name: "Pricing", href: "/pricing" },
     { name: "How it works", href: "/#how-it-works" },
     { name: "FAQ", href: "/#faq" },
-    { name: "About", href: "/#about" },
+    { name: "About", href: "/about" },
   ];
 
   return (
@@ -34,17 +35,22 @@ export default function Navbar() {
     >
       <div className="max-w-[1240px] mx-auto px-4 sm:px-6 flex items-center justify-between">
         {/* Brand Mark */}
-        <Link href="/" className="flex items-center gap-3 group focus:outline-none">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center font-display font-extrabold text-[#241a06] text-lg bg-gradient-to-br from-[#e3b13b] via-[#f7f0dd] to-[#e04e17] shadow-lg shadow-[var(--gold-dim)] transition-transform duration-300 group-hover:scale-105">
-            FN
-          </div>
+        <Link href="/" className="flex items-center gap-1.5 group focus:outline-none">
+          <Image
+            src="/logo.png"
+            alt="Omnibites Logo"
+            width={64}
+            height={64}
+            className="w-14 h-14 sm:w-16 sm:h-16 object-contain -mr-1 transition-transform duration-300 group-hover:scale-105"
+            priority
+          />
           <div className="flex flex-col">
-            <span className="font-display font-extrabold text-xl tracking-tight text-[var(--text-hi)] flex items-center gap-1.5">
-              FoodNet
-              <span className="w-1.5 h-1.5 rounded-full bg-[var(--gold)] inline-block"></span>
+            <span className="font-display font-extrabold text-2xl sm:text-[26px] tracking-tight flex items-center">
+              <span className="text-[#f7f0dd]">Omni</span>
+              <span className="text-[#f5a623]">bites</span>
             </span>
             <span className="font-mono text-[10px] tracking-wider uppercase text-[var(--text-faint)] -mt-1 font-medium">
-              Restaurant OS · PK
+              Restaurant
             </span>
           </div>
         </Link>

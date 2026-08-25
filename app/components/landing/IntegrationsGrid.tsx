@@ -170,7 +170,7 @@ export default function IntegrationsGrid() {
             Seamlessly Integrated with Your Tech &amp; Payment Stack
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
-            FoodNet connects directly to Pakistan&apos;s leading payment networks, receipt hardware, messaging rails, and third-party delivery dispatchers.
+            Omnibites connects directly to Pakistan&apos;s leading payment networks, receipt hardware, messaging rails, and third-party delivery dispatchers.
           </p>
         </div>
 

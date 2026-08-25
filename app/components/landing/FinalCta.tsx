@@ -22,7 +22,7 @@ export default function FinalCta() {
             </h2>
 
             <p className="text-[var(--text-lo)] text-base sm:text-lg leading-relaxed">
-              Join leading Pakistani restaurants, cloud kitchens, and franchise groups upgrading to FoodNet. No setup hurdles, no foreign currency cards.
+              Join leading Pakistani restaurants, cloud kitchens, and franchise groups upgrading to Omnibites. No setup hurdles, no foreign currency cards.
             </p>
 
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">

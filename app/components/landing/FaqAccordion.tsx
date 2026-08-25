@@ -8,27 +8,27 @@ export default function FaqAccordion() {
   const faqs = [
     {
       q: "How does the 14-day free trial work?",
-      a: "You get full, unrestricted access to the complete FoodNet Operating System for 14 days without entering any credit card or banking details. You can configure your full menu, test POS billing, send test KDS tickets, and experience the online marketplace firsthand.",
+      a: "You get full, unrestricted access to the complete Omnibites Operating System for 14 days without entering any credit card or banking details. You can configure your full menu, test POS billing, send test KDS tickets, and experience the online marketplace firsthand.",
     },
     {
       q: "Can I manage multiple branches across different cities in Pakistan?",
-      a: "Yes! FoodNet natively supports multi-branch and multi-city architectures. Whether you have outlets in Lahore, Karachi, Islamabad, or Gujranwala, you can manage master menus, regional pricing, staff PINs, and branch comparisons from a single unified master dashboard.",
+      a: "Yes! Omnibites natively supports multi-branch and multi-city architectures. Whether you have outlets in Lahore, Karachi, Islamabad, or Gujranwala, you can manage master menus, regional pricing, staff PINs, and branch comparisons from a single unified master dashboard.",
     },
     {
       q: "Does the POS work when the internet is down?",
-      a: "Absolutely. FoodNet features an offline-first POS engine with local caching. During internet outages or broadband lag, cashiers can continue taking orders, applying discounts, and printing receipts. As soon as the internet recovers, all transactions sync automatically to the cloud.",
+      a: "Absolutely. Omnibites features an offline-first POS engine with local caching. During internet outages or broadband lag, cashiers can continue taking orders, applying discounts, and printing receipts. As soon as the internet recovers, all transactions sync automatically to the cloud.",
     },
     {
       q: "What thermal printers and receipt hardware are supported?",
-      a: "FoodNet supports standard 80mm and 58mm ESC/POS thermal printers via USB, Ethernet/LAN, Bluetooth, and Wi-Fi. It prints bilingual receipts (Urdu & English) formatted with Pakistani GST/PST tax numbers and custom QR codes for customer loyalty.",
+      a: "Omnibites supports standard 80mm and 58mm ESC/POS thermal printers via USB, Ethernet/LAN, Bluetooth, and Wi-Fi. It prints bilingual receipts (Urdu & English) formatted with Pakistani GST/PST tax numbers and custom QR codes for customer loyalty.",
     },
     {
       q: "How does the online marketplace ordering and rider integration work?",
       a: "You get a dedicated online ordering web storefront and QR code digital menu for your restaurant. Customers place orders directly, pay via JazzCash, Easypaisa, or Cash on Delivery, and your internal riders or integrated 3rd-party logistics dispatch automatically with live GPS tracking.",
     },
     {
-      q: "Can FoodNet import existing menu items, inventory, and historical data?",
-      a: "Yes. Our onboarding specialists provide free data migration services. You can send us your current Excel sheets, paper menus, or legacy POS exports, and our team will format, verify, and upload your entire item catalog and recipe costs into FoodNet.",
+      q: "Can Omnibites import existing menu items, inventory, and historical data?",
+      a: "Yes. Our onboarding specialists provide free data migration services. You can send us your current Excel sheets, paper menus, or legacy POS exports, and our team will format, verify, and upload your entire item catalog and recipe costs into Omnibites.",
     },
     {
       q: "How are software fees and marketplace commissions calculated?",
@@ -56,7 +56,7 @@ export default function FaqAccordion() {
             Frequently Asked Questions
           </h2>
           <p className="text-[var(--text-lo)] text-base">
-            Everything you need to know about adopting FoodNet in your restaurant operations.
+            Everything you need to know about adopting Omnibites in your restaurant operations.
           </p>
         </div>
 

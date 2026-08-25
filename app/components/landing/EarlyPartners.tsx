@@ -39,7 +39,7 @@ export default function EarlyPartners() {
             Exclusive Cohort
           </div>
           <h2 className="font-display font-extrabold text-3xl sm:text-4xl text-[var(--text-hi)]">
-            Join the FoodNet Founding Partner Program
+            Join the Omnibites Founding Partner Program
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
             We are actively onboarding forward-thinking restaurant operators across Pakistan into our inaugural cohort with exclusive onboarding benefits.

@@ -23,10 +23,10 @@ export default function ProductShowcase() {
             Live Interface Mockup
           </div>
           <h2 className="font-display font-extrabold text-3xl sm:text-4xl text-[var(--text-hi)]">
-            Explore the FoodNet Operating System
+            Explore the Omnibites Operating System
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
-            Switch between modules below to see how seamlessly FoodNet handles frontline billing, kitchen tickets, online marketplace, and backend financial control.
+            Switch between modules below to see how seamlessly Omnibites handles frontline billing, kitchen tickets, online marketplace, and backend financial control.
           </p>
         </div>
 
@@ -63,7 +63,7 @@ export default function ProductShowcase() {
               <svg className="w-3.5 h-3.5 text-[var(--gold)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
               </svg>
-              <span>app.foodnet.pk/live/{tabs[activeTab].toLowerCase().replace(/\s+/g, "-")}</span>
+              <span>app.omnibites.pk/live/{tabs[activeTab].toLowerCase().replace(/\s+/g, "-")}</span>
             </div>
 
             <div className="font-mono text-xs text-[var(--olive)] font-semibold flex items-center gap-1.5">

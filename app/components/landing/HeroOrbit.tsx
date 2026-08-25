@@ -43,7 +43,7 @@ export default function HeroOrbit() {
             {/* Subcopy */}
             <p className="text-base sm:text-lg text-[var(--text-lo)] max-w-xl leading-relaxed">
               Replace disconnected WhatsApp ordering, manual paper slips, and scattered Excel ledgers.
-              FoodNet unites your billing till, kitchen display, inventory, JazzCash &amp; Easypaisa payments, and direct delivery marketplace into one unified operating system.
+              Omnibites unites your billing till, kitchen display, inventory, JazzCash &amp; Easypaisa payments, and direct delivery marketplace into one unified operating system.
             </p>
 
             {/* CTA Button Pair */}

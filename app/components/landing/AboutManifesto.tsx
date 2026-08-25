@@ -1,6 +1,36 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
+import Link from "next/link";
+
+// Custom hook for smooth real-time number counting from 0
+function useCounter(target: number, duration: number = 1500, start: boolean = false) {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    if (!start) return;
+
+    let startTime: number | null = null;
+    let animationFrame: number;
+
+    const step = (timestamp: number) => {
+      if (!startTime) startTime = timestamp;
+      const progress = Math.min((timestamp - startTime) / duration, 1);
+      // Smooth ease-out quad curve
+      const easedProgress = 1 - (1 - progress) * (1 - progress);
+      setCount(Math.round(easedProgress * target));
+
+      if (progress < 1) {
+        animationFrame = requestAnimationFrame(step);
+      }
+    };
+
+    animationFrame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(animationFrame);
+  }, [target, duration, start]);
+
+  return count;
+}
 
 export default function AboutManifesto() {
   const [inView, setInView] = useState(false);
@@ -13,7 +43,7 @@ export default function AboutManifesto() {
           setInView(true);
         }
       },
-      { threshold: 0.2 }
+      { threshold: 0.15 }
     );
 
     if (sectionRef.current) {
@@ -23,8 +53,14 @@ export default function AboutManifesto() {
     return () => observer.disconnect();
   }, []);
 
+  // Real-time counters starting from 0
+  const count1 = useCounter(5, 1400, inView);
+  const count2 = useCounter(100, 1600, inView);
+  const count3 = useCounter(2, 1200, inView);
+  const count4 = useCounter(1, 1000, inView);
+
   return (
-    <section id="about" ref={sectionRef} className="py-20 md:py-28 relative">
+    <section id="mission" ref={sectionRef} className="pt-6 pb-20 md:pt-8 md:pb-24 relative scroll-mt-24">
       <div className="max-w-[1240px] mx-auto px-4 sm:px-6">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
           {/* Left Column: Manifesto Copy */}
@@ -42,29 +78,26 @@ export default function AboutManifesto() {
                 For years, restaurant owners in Pakistan were forced to choose between rigid foreign software billed in US Dollars with zero local payment integrations, or outdated offline POS systems from the early 2000s that crash whenever the internet blinks.
               </p>
               <p>
-                FoodNet was engineered from the ground up to bridge this gap. We built native JazzCash and Easypaisa QR workflows, dual Urdu/English thermal receipt formatting, and offline-first till architecture that survives local connectivity drops without missing a beat.
+                Omnibites was engineered from the ground up to bridge this gap. We built native JazzCash and Easypaisa QR workflows, dual Urdu/English thermal receipt formatting, and offline-first till architecture that survives local connectivity drops without missing a beat.
               </p>
               <p>
-                From an independent street food kitchen in Gujranwala or Rawalpindi to a 10-outlet franchise spanning Lahore and Karachi, FoodNet provides the modern digital operating system Pakistani food entrepreneurs deserve.
+                From an independent street food kitchen in Gujranwala or Rawalpindi to a 10-outlet franchise spanning Lahore and Karachi, Omnibites provides the modern digital operating system Pakistani food entrepreneurs deserve.
               </p>
             </div>
 
             <div className="pt-2 flex items-center gap-4">
-              <a href="#demo" className="btn-gold px-6 py-3 text-xs font-bold">
+              <Link href="/#demo" className="btn-gold px-6 py-3 text-xs font-bold">
                 Join the Network
-              </a>
-              <span className="font-mono text-xs text-[var(--text-faint)]">
-                Headquartered in Punjab, Pakistan 🇵🇰
-              </span>
+              </Link>
             </div>
           </div>
 
-          {/* Right Column: 2x2 Stat Tile Grid */}
+          {/* Right Column: 2x2 Stat Tile Grid with Real-time Count-up Animation */}
           <div className="lg:col-span-5 grid grid-cols-2 gap-4">
             {/* Stat 1 */}
             <div className="glass-panel p-6 rounded-2xl border-[var(--border)] text-center flex flex-col items-center justify-center space-y-2 group hover:border-[var(--gold)] transition-colors">
               <span className="font-mono font-extrabold text-4xl sm:text-5xl text-[var(--gold)]">
-                {inView ? "5" : "0"}
+                {count1}
               </span>
               <span className="font-display font-bold text-sm text-[var(--text-hi)]">
                 Core Modules
@@ -77,7 +110,7 @@ export default function AboutManifesto() {
             {/* Stat 2 */}
             <div className="glass-panel p-6 rounded-2xl border-[var(--border)] text-center flex flex-col items-center justify-center space-y-2 group hover:border-[var(--olive)] transition-colors">
               <span className="font-mono font-extrabold text-4xl sm:text-5xl text-[var(--olive)]">
-                {inView ? "100%" : "0%"}
+                {count2}%
               </span>
               <span className="font-display font-bold text-sm text-[var(--text-hi)]">
                 PKR Native
@@ -90,7 +123,7 @@ export default function AboutManifesto() {
             {/* Stat 3 */}
             <div className="glass-panel p-6 rounded-2xl border-[var(--border)] text-center flex flex-col items-center justify-center space-y-2 group hover:border-[var(--orange)] transition-colors">
               <span className="font-mono font-extrabold text-4xl sm:text-5xl text-[var(--orange)]">
-                {inView ? "2" : "0"}
+                {count3}
               </span>
               <span className="font-display font-bold text-sm text-[var(--text-hi)]">
                 Mobile Rails
@@ -103,7 +136,7 @@ export default function AboutManifesto() {
             {/* Stat 4 */}
             <div className="glass-panel p-6 rounded-2xl border-[var(--border)] text-center flex flex-col items-center justify-center space-y-2 group hover:border-[var(--gold)] transition-colors">
               <span className="font-mono font-extrabold text-4xl sm:text-5xl text-[var(--gold)]">
-                {inView ? "1" : "0"}
+                {count4}
               </span>
               <span className="font-display font-bold text-sm text-[var(--text-hi)]">
                 Live Dashboard

@@ -74,7 +74,7 @@ export default function RoiSection() {
               </h2>
 
               <p className="text-[var(--text-lo)] text-sm sm:text-base leading-relaxed">
-                FoodNet doesn&apos;t just record receipts — it removes friction from your entire food production pipeline, unlocking higher profit margins per seat and delivery order.
+                Omnibites doesn&apos;t just record receipts — it removes friction from your entire food production pipeline, unlocking higher profit margins per seat and delivery order.
               </p>
 
               <div className="space-y-4 pt-2">

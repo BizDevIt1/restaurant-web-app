@@ -2,6 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
+import Image from "next/image";
 
 export default function Footer() {
   return (
@@ -10,12 +11,17 @@ export default function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-10 pb-12 border-b border-[var(--border)]/60">
           {/* Col 1: Brand */}
           <div className="lg:col-span-1 space-y-4">
-            <Link href="/" className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center font-display font-extrabold text-[#241a06] text-sm bg-gradient-to-br from-[#e3b13b] to-[#e04e17]">
-                FN
-              </div>
-              <span className="font-display font-extrabold text-lg text-[var(--text-hi)]">
-                FoodNet
+            <Link href="/" className="flex items-center gap-1.5">
+              <Image
+                src="/logo.png"
+                alt="Omnibites Logo"
+                width={48}
+                height={48}
+                className="w-12 h-12 object-contain -mr-1"
+              />
+              <span className="font-display font-extrabold text-xl tracking-tight flex items-center">
+                <span className="text-[#f7f0dd]">Omni</span>
+                <span className="text-[#f5a623]">bites</span>
               </span>
             </Link>
             <p className="text-xs text-[var(--text-lo)] leading-relaxed">
@@ -44,7 +50,7 @@ export default function Footer() {
               </li>
               <li>
                 <Link href="/pricing" className="hover:text-[var(--gold)] transition-colors">
-                  Pricing (PKR)
+                  Pricing
                 </Link>
               </li>
               <li>
@@ -62,7 +68,7 @@ export default function Footer() {
             </h4>
             <ul className="space-y-2">
               <li>
-                <Link href="/#about" className="hover:text-[var(--gold)] transition-colors">
+                <Link href="/about" className="hover:text-[var(--gold)] transition-colors">
                   About Us
                 </Link>
               </li>
@@ -136,10 +142,10 @@ export default function Footer() {
         {/* Bottom Bar */}
         <div className="pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left text-xs font-mono text-[var(--text-faint)]">
           <div>
-            &copy; {new Date().getFullYear()} FoodNet Technologies (Pvt) Ltd. All rights reserved.
+            &copy; {new Date().getFullYear()} Omnibites Technologies (Pvt) Ltd. All rights reserved.
           </div>
           <div className="text-[var(--text-lo)] font-medium">
-            Made for restaurants across Pakistan · PKR · JazzCash · Easypaisa
+            Made for restaurants across Pakistan · JazzCash · Easypaisa
           </div>
         </div>
       </div>
