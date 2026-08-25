@@ -6,11 +6,12 @@ import Navbar from "../components/landing/Navbar";
 import Footer from "../components/landing/Footer";
 import WhatsAppFloat from "../components/landing/WhatsAppFloat";
 
-export default function LoginPage() {
+export default function SignUpPage() {
+  const [fullName, setFullName] = useState("");
+  const [restaurantName, setRestaurantName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,15 +39,45 @@ export default function LoginPage() {
                 FN
               </div>
               <h1 className="font-display font-bold text-2xl sm:text-3xl text-[var(--text-hi)]">
-                Welcome Back
+                Create Account
               </h1>
               <p className="text-xs sm:text-sm text-[var(--text-lo)]">
-                Sign in to manage your restaurant
+                Start managing your restaurant with FoodNet
               </p>
             </div>
 
-            {/* Simple Login Form */}
+            {/* Simple Sign Up Form */}
             <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Full Name */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-[var(--text-hi)] uppercase tracking-wider">
+                  Full Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Ali Khan"
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-sm text-[var(--text-hi)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--gold)] focus:ring-1 focus:ring-[var(--gold)] transition-colors"
+                />
+              </div>
+
+              {/* Restaurant Name */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-[var(--text-hi)] uppercase tracking-wider">
+                  Restaurant Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={restaurantName}
+                  onChange={(e) => setRestaurantName(e.target.value)}
+                  placeholder="Spice Grill Lahore"
+                  className="w-full px-4 py-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-sm text-[var(--text-hi)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--gold)] focus:ring-1 focus:ring-[var(--gold)] transition-colors"
+                />
+              </div>
+
               {/* Email */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-[var(--text-hi)] uppercase tracking-wider">
@@ -64,25 +95,16 @@ export default function LoginPage() {
 
               {/* Password */}
               <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="block text-xs font-semibold text-[var(--text-hi)] uppercase tracking-wider">
-                    Password
-                  </label>
-                  <a
-                    href="#forgot"
-                    onClick={(e) => e.preventDefault()}
-                    className="text-xs text-[var(--gold)] hover:underline"
-                  >
-                    Forgot password?
-                  </a>
-                </div>
+                <label className="block text-xs font-semibold text-[var(--text-hi)] uppercase tracking-wider">
+                  Password
+                </label>
                 <div className="relative">
                   <input
                     type={showPassword ? "text" : "password"}
                     required
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter your password"
+                    placeholder="Create a strong password"
                     className="w-full px-4 py-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-sm text-[var(--text-hi)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--gold)] focus:ring-1 focus:ring-[var(--gold)] transition-colors pr-11"
                   />
                   <button
@@ -105,34 +127,20 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              {/* Remember Me */}
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="rememberMe"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="w-4 h-4 rounded bg-[var(--surface-hi)] border-[var(--border)] text-[var(--gold)] focus:ring-[var(--gold)]"
-                />
-                <label htmlFor="rememberMe" className="text-xs text-[var(--text-lo)] select-none cursor-pointer">
-                  Remember this device
-                </label>
-              </div>
-
               {/* Submit Button */}
               <button
                 type="submit"
                 className="w-full btn-gold py-3 text-sm font-bold shadow-lg shadow-[var(--gold-glow)] mt-2"
               >
-                Sign In
+                Create Account
               </button>
             </form>
 
-            {/* Switch to Sign Up */}
+            {/* Switch to Login */}
             <div className="pt-2 text-center text-xs text-[var(--text-lo)] border-t border-[var(--border)]/60">
-              Don&apos;t have an account?{" "}
-              <Link href="/signup" className="text-[var(--gold)] font-semibold hover:underline">
-                Create Account
+              Already have an account?{" "}
+              <Link href="/login" className="text-[var(--gold)] font-semibold hover:underline">
+                Sign In
               </Link>
             </div>
           </div>
