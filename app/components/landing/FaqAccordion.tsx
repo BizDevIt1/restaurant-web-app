@@ -1,42 +1,27 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
+import { ArrowRight } from "lucide-react";
 
 export default function FaqAccordion() {
   const [openIndex, setOpenIndex] = useState<number | null>(0);
 
-  const faqs = [
+  const teaserFaqs = [
     {
+      num: "01",
       q: "How does the 14-day free trial work?",
-      a: "You get full, unrestricted access to the complete FoodNet Operating System for 14 days without entering any credit card or banking details. You can configure your full menu, test POS billing, send test KDS tickets, and experience the online marketplace firsthand.",
+      a: "You get full, unrestricted access to the complete Omnibites operating system for 14 days without entering any credit card or banking details. Configure your full menu, test POS billing, send test kitchen tickets, and try the online marketplace firsthand.",
     },
     {
-      q: "Can I manage multiple branches across different cities in Pakistan?",
-      a: "Yes! FoodNet natively supports multi-branch and multi-city architectures. Whether you have outlets in Lahore, Karachi, Islamabad, or Gujranwala, you can manage master menus, regional pricing, staff PINs, and branch comparisons from a single unified master dashboard.",
+      num: "02",
+      q: "Can I manage multiple branches across different cities or countries?",
+      a: "Yes. Professional and higher plans support unlimited branches with a consolidated master dashboard, regardless of location.",
     },
     {
+      num: "03",
       q: "Does the POS work when the internet is down?",
-      a: "Absolutely. FoodNet features an offline-first POS engine with local caching. During internet outages or broadband lag, cashiers can continue taking orders, applying discounts, and printing receipts. As soon as the internet recovers, all transactions sync automatically to the cloud.",
-    },
-    {
-      q: "What thermal printers and receipt hardware are supported?",
-      a: "FoodNet supports standard 80mm and 58mm ESC/POS thermal printers via USB, Ethernet/LAN, Bluetooth, and Wi-Fi. It prints bilingual receipts (Urdu & English) formatted with Pakistani GST/PST tax numbers and custom QR codes for customer loyalty.",
-    },
-    {
-      q: "How does the online marketplace ordering and rider integration work?",
-      a: "You get a dedicated online ordering web storefront and QR code digital menu for your restaurant. Customers place orders directly, pay via JazzCash, Easypaisa, or Cash on Delivery, and your internal riders or integrated 3rd-party logistics dispatch automatically with live GPS tracking.",
-    },
-    {
-      q: "Can FoodNet import existing menu items, inventory, and historical data?",
-      a: "Yes. Our onboarding specialists provide free data migration services. You can send us your current Excel sheets, paper menus, or legacy POS exports, and our team will format, verify, and upload your entire item catalog and recipe costs into FoodNet.",
-    },
-    {
-      q: "How are software fees and marketplace commissions calculated?",
-      a: "All software plan subscriptions are billed in flat Pakistani Rupees (PKR) monthly or annually with zero foreign exchange fees. Marketplace commissions only apply to orders generated through your digital ordering web storefront (from 4% to 6% based on your chosen tier) with 0% commission on in-house POS dine-in or takeaway.",
-    },
-    {
-      q: "Is technical support and staff onboarding included?",
-      a: "Yes, 24/7 localized support via direct WhatsApp and phone is included in every plan. For multi-branch and franchise accounts, we also provide on-site setup and interactive staff training sessions across all major Pakistani cities.",
+      a: "Yes. Local offline cache keeps billing and kitchen ticket printing running, syncing automatically once you're back online.",
     },
   ];
 
@@ -45,67 +30,86 @@ export default function FaqAccordion() {
   };
 
   return (
-    <section id="faq" className="py-20 md:py-28 relative bg-[var(--bg-deep)]/50 border-y border-[var(--border)]">
-      <div className="max-w-3xl mx-auto px-4 sm:px-6">
+    <section id="faq-teaser" className="py-20 md:py-24 relative bg-[var(--bg-deep)]/50 border-y border-[var(--border)]">
+      <div className="max-w-[960px] mx-auto px-4 sm:px-6">
         {/* Section Header */}
-        <div className="text-center mb-14 space-y-4">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-xs font-semibold uppercase tracking-wider text-[var(--gold)]">
-            Got Questions?
+        <div className="text-center mb-12 space-y-3">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-xs font-mono font-bold uppercase tracking-wider text-[var(--gold)]">
+            FREQUENTLY ASKED QUESTIONS
           </div>
           <h2 className="font-display font-extrabold text-3xl sm:text-4xl text-[var(--text-hi)]">
-            Frequently Asked Questions
+            Got Questions? We Have Answers.
           </h2>
-          <p className="text-[var(--text-lo)] text-base">
-            Everything you need to know about adopting FoodNet in your restaurant operations.
+          <p className="text-[var(--text-lo)] text-base max-w-2xl mx-auto">
+            Everything you need to know about adopting Omnibites in your restaurant operations.
           </p>
         </div>
 
-        {/* Accordion Container */}
-        <div className="space-y-3.5">
-          {faqs.map((faq, idx) => {
-            const isOpen = openIndex === idx;
-            return (
-              <div
-                key={idx}
-                className={`rounded-2xl border transition-all duration-300 overflow-hidden ${
-                  isOpen
-                    ? "bg-[var(--surface-hi)] border-[var(--gold)] shadow-lg shadow-[var(--gold-dim)]/40"
-                    : "bg-[var(--surface)] border-[var(--border)] hover:border-[var(--border-hi)]"
-                }`}
-              >
-                <button
-                  onClick={() => toggleItem(idx)}
-                  className="w-full px-6 py-5 flex items-center justify-between text-left gap-4 cursor-pointer focus:outline-none"
-                  aria-expanded={isOpen}
-                >
-                  <span className="font-display font-bold text-base sm:text-lg text-[var(--text-hi)]">
-                    {faq.q}
-                  </span>
-                  <div
-                    className={`w-8 h-8 rounded-full border border-[var(--border)] flex items-center justify-center shrink-0 transition-transform duration-300 ${
-                      isOpen
-                        ? "rotate-45 bg-[var(--gold)] text-[#241a06] border-[var(--gold)]"
-                        : "bg-[var(--surface-hi)] text-[var(--text-lo)]"
-                    }`}
-                  >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
-                    </svg>
-                  </div>
-                </button>
-
+        {/* Main Glassmorphic Container Card */}
+        <div className="bg-[#140c0c]/80 backdrop-blur-2xl border border-[var(--border)] rounded-3xl p-6 sm:p-10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] relative overflow-hidden">
+          {/* 3 Teaser Accordion Items */}
+          <div className="divide-y divide-[var(--border)]/40">
+            {teaserFaqs.map((faq, idx) => {
+              const isOpen = openIndex === idx;
+              return (
                 <div
-                  className={`transition-all duration-300 ease-in-out px-6 overflow-hidden ${
-                    isOpen ? "max-h-96 pb-6 opacity-100" : "max-h-0 pb-0 opacity-0"
+                  key={idx}
+                  className={`py-5 sm:py-6 transition-all duration-300 ${
+                    isOpen ? "opacity-100" : "opacity-90 hover:opacity-100"
                   }`}
                 >
-                  <p className="text-sm text-[var(--text-lo)] leading-relaxed pt-1 border-t border-[var(--border)]/40">
-                    {faq.a}
-                  </p>
+                  <button
+                    onClick={() => toggleItem(idx)}
+                    className="w-full flex items-center justify-between text-left gap-4 cursor-pointer focus:outline-none group"
+                    aria-expanded={isOpen}
+                  >
+                    <div className="flex items-center gap-3.5">
+                      {/* Numbered Gold Badge */}
+                      <div className="w-8 h-8 rounded-lg bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono font-bold text-xs flex items-center justify-center shrink-0 group-hover:border-[var(--gold)] transition-colors">
+                        {faq.num}
+                      </div>
+                      <span className="font-display font-bold text-base sm:text-lg text-[var(--text-hi)] group-hover:text-[var(--gold)] transition-colors">
+                        {faq.q}
+                      </span>
+                    </div>
+
+                    <div
+                      className={`w-7 h-7 rounded-full border border-[var(--border)] flex items-center justify-center shrink-0 transition-all duration-300 ${
+                        isOpen
+                          ? "rotate-45 bg-[var(--gold)] text-[#241a06] border-[var(--gold)]"
+                          : "bg-[var(--surface-hi)] text-[var(--text-lo)] group-hover:border-[var(--gold)]/50"
+                      }`}
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                      </svg>
+                    </div>
+                  </button>
+
+                  <div
+                    className={`transition-all duration-300 ease-in-out pl-11 pr-2 overflow-hidden ${
+                      isOpen ? "max-h-96 pt-3.5 opacity-100" : "max-h-0 pt-0 opacity-0"
+                    }`}
+                  >
+                    <p className="text-sm sm:text-base text-[var(--text-lo)] leading-relaxed font-normal">
+                      {faq.a}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
+
+          {/* View All FAQs Link Button */}
+          <div className="mt-8 text-center pt-4 border-t border-[var(--border)]/40">
+            <Link
+              href="/faq"
+              className="inline-flex items-center justify-center gap-2.5 px-8 py-3.5 rounded-full bg-gradient-to-br from-[#f5c85c] via-[#e3b13b] to-[#c99624] text-[#241a06] font-bold text-sm shadow-[0_4px_20px_rgba(227,177,59,0.45)] hover:shadow-[0_6px_28px_rgba(227,177,59,0.65)] hover:-translate-y-0.5 transition-all duration-300 border border-white/30 cursor-pointer"
+            >
+              <span>View All 8+ FAQs &amp; Knowledge Base</span>
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+          </div>
         </div>
       </div>
     </section>

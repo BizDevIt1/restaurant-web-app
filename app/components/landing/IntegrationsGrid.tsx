@@ -49,8 +49,8 @@ function IntegrationChip({ name, category, icon }: IntegrationChipProps) {
 export default function IntegrationsGrid() {
   const integrations = [
     {
-      name: "JazzCash",
-      category: "Mobile Wallet & QR",
+      name: "Digital Wallets",
+      category: "Mobile & QR Payments",
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -58,8 +58,8 @@ export default function IntegrationsGrid() {
       ),
     },
     {
-      name: "Easypaisa",
-      category: "Digital Payments",
+      name: "Card Processors",
+      category: "Visa / Mastercard / NFC",
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -68,7 +68,7 @@ export default function IntegrationsGrid() {
     },
     {
       name: "Payment Gateways",
-      category: "Visa / Mastercard / 1Link",
+      category: "Online Checkout & 3DS",
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
@@ -85,7 +85,7 @@ export default function IntegrationsGrid() {
       ),
     },
     {
-      name: "WhatsApp",
+      name: "Messaging Apps",
       category: "Automated Receipts & Opt-in",
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -170,7 +170,7 @@ export default function IntegrationsGrid() {
             Seamlessly Integrated with Your Tech &amp; Payment Stack
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
-            FoodNet connects directly to Pakistan&apos;s leading payment networks, receipt hardware, messaging rails, and third-party delivery dispatchers.
+            Omnibites connects directly to leading payment networks, receipt hardware, messaging rails, and third-party delivery dispatchers.
           </p>
         </div>
 

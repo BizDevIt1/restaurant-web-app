@@ -23,10 +23,10 @@ export default function ProductShowcase() {
             Live Interface Mockup
           </div>
           <h2 className="font-display font-extrabold text-3xl sm:text-4xl text-[var(--text-hi)]">
-            Explore the FoodNet Operating System
+            Explore the Omnibites Operating System
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
-            Switch between modules below to see how seamlessly FoodNet handles frontline billing, kitchen tickets, online marketplace, and backend financial control.
+            Switch between modules below to see how seamlessly Omnibites handles frontline billing, kitchen tickets, online marketplace, and backend financial control.
           </p>
         </div>
 
@@ -63,7 +63,7 @@ export default function ProductShowcase() {
               <svg className="w-3.5 h-3.5 text-[var(--gold)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
               </svg>
-              <span>app.foodnet.pk/live/{tabs[activeTab].toLowerCase().replace(/\s+/g, "-")}</span>
+              <span>app.omnibites.com/live/{tabs[activeTab].toLowerCase().replace(/\s+/g, "-")}</span>
             </div>
 
             <div className="font-mono text-xs text-[var(--olive)] font-semibold flex items-center gap-1.5">
@@ -82,10 +82,10 @@ export default function ProductShowcase() {
                     <span className="px-2.5 py-1 rounded bg-[var(--gold-dim)] text-[var(--gold)] font-mono text-xs font-bold border border-[var(--gold)]/30">
                       TABLE #04
                     </span>
-                    <span className="text-xs text-[var(--text-lo)]">Waiter: Hamza A.</span>
+                    <span className="text-xs text-[var(--text-lo)]">Waiter: Order Ref #OB-9042</span>
                   </div>
                   <div className="font-mono text-xs text-[var(--text-lo)]">
-                    Order Ref: <span className="text-[var(--text-hi)] font-bold">#PK-9042</span>
+                    Terminal: <span className="text-[var(--text-hi)] font-bold">POS Till #01</span>
                   </div>
                 </div>
 
@@ -97,10 +97,10 @@ export default function ProductShowcase() {
                         <div className="font-display text-xs sm:text-sm font-bold text-[var(--text-hi)]">
                           2x Gourmet Beef Smash Burger
                         </div>
-                        <div className="text-[11px] text-[var(--text-lo)]">+ Extra Cheddar, + Jalapeno</div>
+                        <div className="text-[11px] text-[var(--text-lo)]">+ Extra Cheddar, + Jalapeño</div>
                       </div>
                       <div className="font-mono text-xs sm:text-sm font-bold text-[var(--text-hi)]">
-                        ₨1,900
+                        $19.00
                       </div>
                     </div>
 
@@ -112,7 +112,7 @@ export default function ProductShowcase() {
                         <div className="text-[11px] text-[var(--text-lo)]">Garlic mayo dip</div>
                       </div>
                       <div className="font-mono text-xs sm:text-sm font-bold text-[var(--text-hi)]">
-                        ₨650
+                        $6.50
                       </div>
                     </div>
 
@@ -124,7 +124,7 @@ export default function ProductShowcase() {
                         <div className="text-[11px] text-[var(--text-lo)]">Less sugar</div>
                       </div>
                       <div className="font-mono text-xs sm:text-sm font-bold text-[var(--text-hi)]">
-                        ₨500
+                        $5.00
                       </div>
                     </div>
                   </div>
@@ -134,15 +134,15 @@ export default function ProductShowcase() {
                     <div className="space-y-1.5 text-xs text-[var(--text-lo)] border-b border-[var(--border)] pb-2.5">
                       <div className="flex justify-between">
                         <span>Subtotal</span>
-                        <span className="font-mono text-[var(--text-hi)]">₨3,050</span>
+                        <span className="font-mono text-[var(--text-hi)]">$30.50</span>
                       </div>
                       <div className="flex justify-between">
-                        <span>Sales Tax (16%)</span>
-                        <span className="font-mono text-[var(--text-hi)]">₨488</span>
+                        <span>Sales Tax (varies by region)</span>
+                        <span className="font-mono text-[var(--text-hi)]">$4.88</span>
                       </div>
                       <div className="flex justify-between font-bold text-[var(--text-hi)] pt-1 text-sm">
                         <span>Bill Total</span>
-                        <span className="font-mono text-[var(--gold)] text-base font-extrabold">₨3,538</span>
+                        <span className="font-mono text-[var(--gold)] text-base font-extrabold">$35.38</span>
                       </div>
                     </div>
 
@@ -153,17 +153,17 @@ export default function ProductShowcase() {
                           💵 Cash
                         </button>
                         <button className="py-2 px-1 rounded bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-semibold text-[var(--gold)] hover:border-[var(--gold)] flex items-center justify-center gap-1">
-                          ⚡ JazzCash
+                          📱 Mobile Wallet
                         </button>
                         <button className="py-2 px-1 rounded bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-semibold text-[var(--olive)] hover:border-[var(--olive)] flex items-center justify-center gap-1">
-                          🟢 Easypaisa
+                          💳 Card
                         </button>
                         <button className="py-2 px-1 rounded bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-semibold text-[var(--text-lo)] hover:border-[var(--text-hi)] flex items-center justify-center gap-1">
-                          💳 Card
+                          ⚡ QR Code
                         </button>
                       </div>
                       <button className="w-full btn-gold py-2 text-xs font-bold mt-2">
-                        Print Thermal Receipt (Urdu/Eng)
+                        Print Thermal Receipt (multi-language)
                       </button>
                     </div>
                   </div>
@@ -176,7 +176,7 @@ export default function ProductShowcase() {
               <div className="space-y-4 animate-in fade-in duration-200">
                 <div className="flex items-center justify-between pb-3 border-b border-[var(--border)] text-xs font-mono">
                   <span className="text-[var(--text-lo)]">Active Kitchen Queue: <b className="text-[var(--gold)]">3 Orders</b></span>
-                  <span className="text-[var(--olive)]">KDS Station: Main Grill &amp; Fryer</span>
+                  <span className="text-[var(--olive)]">KDS Station: Main Grill &amp; Prep</span>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
@@ -231,11 +231,11 @@ export default function ProductShowcase() {
                     <ul className="space-y-1.5 text-xs text-[var(--text-lo)]">
                       <li className="flex items-center gap-2">
                         <input type="checkbox" className="accent-[var(--olive)]" />
-                        <span className="text-[var(--text-hi)] font-medium">1x Chicken Karahi Full</span>
+                        <span className="text-[var(--text-hi)] font-medium">1x Roasted Chicken Platter</span>
                       </li>
                       <li className="flex items-center gap-2">
                         <input type="checkbox" className="accent-[var(--olive)]" />
-                        <span className="text-[var(--text-hi)] font-medium">4x Roghani Naan</span>
+                        <span className="text-[var(--text-hi)] font-medium">4x Garlic Flatbreads</span>
                       </li>
                     </ul>
                     <button className="w-full py-1.5 rounded bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--text-lo)] font-mono text-xs hover:border-[var(--gold)] transition-colors">
@@ -251,9 +251,9 @@ export default function ProductShowcase() {
               <div className="space-y-4 animate-in fade-in duration-200">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div className="p-3 rounded-xl bg-[var(--surface)] border border-[var(--border)]">
-                    <div className="text-[11px] text-[var(--text-lo)]">Today&apos;s Gross Sales</div>
+                    <div className="text-[11px] text-[var(--text-lo)]">Today&apos;s Gross Revenue</div>
                     <div className="font-mono text-base sm:text-lg font-bold text-[var(--gold)] mt-0.5">
-                      ₨184,500
+                      $4,826.50
                     </div>
                     <div className="text-[10px] font-mono text-[var(--olive)]">↑ 24% vs yesterday</div>
                   </div>
@@ -263,15 +263,15 @@ export default function ProductShowcase() {
                     <div className="font-mono text-base sm:text-lg font-bold text-[var(--text-hi)] mt-0.5">
                       142 Orders
                     </div>
-                    <div className="text-[10px] font-mono text-[var(--text-faint)]">Avg ₨1,299/bill</div>
+                    <div className="text-[10px] font-mono text-[var(--text-faint)]">Avg $33.98/bill</div>
                   </div>
 
                   <div className="p-3 rounded-xl bg-[var(--surface)] border border-[var(--border)]">
-                    <div className="text-[11px] text-[var(--text-lo)]">Active Branches</div>
+                    <div className="text-[11px] text-[var(--text-lo)]">Active Outlets</div>
                     <div className="font-mono text-base sm:text-lg font-bold text-[var(--text-hi)] mt-0.5">
                       3 / 3 Online
                     </div>
-                    <div className="text-[10px] font-mono text-[var(--olive)]">Lahore · Karachi · Isb</div>
+                    <div className="text-[10px] font-mono text-[var(--olive)]">Central · West · East</div>
                   </div>
 
                   <div className="p-3 rounded-xl bg-[var(--surface)] border border-[var(--border)]">
@@ -286,7 +286,7 @@ export default function ProductShowcase() {
                 {/* Sales Hourly Bar Chart Strip */}
                 <div className="p-4 rounded-xl bg-[var(--surface)] border border-[var(--border)] space-y-2">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-display font-semibold text-[var(--text-hi)]">Hourly Sales Velocity (PKR)</span>
+                    <span className="font-display font-semibold text-[var(--text-hi)]">Hourly Sales Velocity ($)</span>
                     <span className="font-mono text-[var(--text-lo)] text-[11px]">Peak: 8:00 PM – 10:00 PM</span>
                   </div>
                   <div className="grid grid-cols-12 gap-1.5 items-end h-24 pt-4">
@@ -310,7 +310,7 @@ export default function ProductShowcase() {
                 <div className="flex items-center justify-between pb-3 border-b border-[var(--border)]">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-[var(--olive)]"></span>
-                    <span className="text-xs font-semibold text-[var(--text-hi)]">Customer Ordering App · Gulberg Lahore</span>
+                    <span className="text-xs font-semibold text-[var(--text-hi)]">Customer Digital Menu Storefront</span>
                   </div>
                   <span className="font-mono text-xs text-[var(--gold)] font-bold">Delivery ETA: 25-35 mins</span>
                 </div>
@@ -325,7 +325,7 @@ export default function ProductShowcase() {
                         <div className="font-bold text-xs text-[var(--text-hi)]">Firehouse Double Beef</div>
                         <div className="text-[10px] text-[var(--text-lo)]">Smoked gouda &amp; bbq aioli</div>
                       </div>
-                      <div className="font-mono text-xs font-bold text-[var(--gold)]">₨950</div>
+                      <div className="font-mono text-xs font-bold text-[var(--gold)]">$9.50</div>
                     </div>
                     <button className="w-full btn-gold py-1 text-[11px] font-bold">
                       Add to Cart +
@@ -341,7 +341,7 @@ export default function ProductShowcase() {
                         <div className="font-bold text-xs text-[var(--text-hi)]">Peri-Peri Tender Strip</div>
                         <div className="text-[10px] text-[var(--text-lo)]">Served with seasoned fries</div>
                       </div>
-                      <div className="font-mono text-xs font-bold text-[var(--gold)]">₨820</div>
+                      <div className="font-mono text-xs font-bold text-[var(--gold)]">$8.20</div>
                     </div>
                     <button className="w-full btn-gold py-1 text-[11px] font-bold">
                       Add to Cart +
@@ -357,7 +357,7 @@ export default function ProductShowcase() {
                         <div className="font-bold text-xs text-[var(--text-hi)]">Cold Brew Caramel</div>
                         <div className="text-[10px] text-[var(--text-lo)]">Fresh espresso &amp; foam</div>
                       </div>
-                      <div className="font-mono text-xs font-bold text-[var(--gold)]">₨450</div>
+                      <div className="font-mono text-xs font-bold text-[var(--gold)]">$4.50</div>
                     </div>
                     <button className="w-full btn-gold py-1 text-[11px] font-bold">
                       Add to Cart +
@@ -366,8 +366,8 @@ export default function ProductShowcase() {
                 </div>
 
                 <div className="p-2.5 rounded-lg bg-[var(--bg-soft)] border border-[var(--border)] flex items-center justify-between text-xs font-mono">
-                  <span>Cart: <b>2 Items (₨1,770)</b></span>
-                  <span className="text-[var(--gold)] font-bold">Checkout with JazzCash / Easypaisa →</span>
+                  <span>Cart: <b>2 Items ($17.70)</b></span>
+                  <span className="text-[var(--gold)] font-bold">Checkout with Card / Wallet →</span>
                 </div>
               </div>
             )}
@@ -384,7 +384,7 @@ export default function ProductShowcase() {
                   <div className="p-3 rounded-xl bg-[var(--surface)] border border-[var(--border)] flex items-center justify-between text-xs">
                     <div>
                       <div className="font-bold text-[var(--text-hi)]">Prime Beef Patties (150g)</div>
-                      <div className="text-[11px] text-[var(--text-lo)] font-mono">Unit Cost: ₨240 / patty · Deducts 1 per burger</div>
+                      <div className="text-[11px] text-[var(--text-lo)] font-mono">Unit Cost: $2.40 / patty · Deducts 1 per burger</div>
                     </div>
                     <div className="text-right">
                       <div className="font-mono font-bold text-[var(--text-hi)]">148 pcs</div>
@@ -408,7 +408,7 @@ export default function ProductShowcase() {
                   <div className="p-3 rounded-xl bg-[var(--surface)] border border-[var(--border)] flex items-center justify-between text-xs">
                     <div>
                       <div className="font-bold text-[var(--text-hi)]">Cooking Oil (Canola 16L Tin)</div>
-                      <div className="text-[11px] text-[var(--text-lo)] font-mono">Unit Cost: ₨8,400 / tin · 4 Tins in Storage</div>
+                      <div className="text-[11px] text-[var(--text-lo)] font-mono">Unit Cost: $84.00 / tin · 4 Tins in Storage</div>
                     </div>
                     <div className="text-right">
                       <div className="font-mono font-bold text-[var(--text-hi)]">4 Tins</div>
@@ -424,43 +424,43 @@ export default function ProductShowcase() {
               <div className="space-y-4 animate-in fade-in duration-200">
                 <div className="flex items-center justify-between pb-3 border-b border-[var(--border)] text-xs">
                   <span className="font-semibold text-[var(--text-hi)]">End-of-Day Financial &amp; Payment Settlement</span>
-                  <span className="font-mono text-[var(--text-lo)]">Period: Today (PKT)</span>
+                  <span className="font-mono text-[var(--text-lo)]">Period: Today (UTC)</span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="p-3 rounded-xl bg-[var(--surface)] border border-[var(--border)]">
-                    <div className="text-[11px] text-[var(--text-lo)]">JazzCash QR &amp; App</div>
-                    <div className="font-mono text-base font-bold text-[var(--gold)] mt-0.5">₨78,400</div>
+                    <div className="text-[11px] text-[var(--text-lo)]">Cards &amp; Gateways</div>
+                    <div className="font-mono text-base font-bold text-[var(--gold)] mt-0.5">$2,051.26</div>
                     <div className="text-[10px] font-mono text-[var(--text-faint)]">42.5% of total volume</div>
                   </div>
 
                   <div className="p-3 rounded-xl bg-[var(--surface)] border border-[var(--border)]">
-                    <div className="text-[11px] text-[var(--text-lo)]">Easypaisa Mobile</div>
-                    <div className="font-mono text-base font-bold text-[var(--olive)] mt-0.5">₨51,200</div>
+                    <div className="text-[11px] text-[var(--text-lo)] font-semibold">Mobile Wallets</div>
+                    <div className="font-mono text-base font-bold text-[var(--olive)] mt-0.5">$1,336.94</div>
                     <div className="text-[10px] font-mono text-[var(--text-faint)]">27.7% of total volume</div>
                   </div>
 
                   <div className="p-3 rounded-xl bg-[var(--surface)] border border-[var(--border)]">
                     <div className="text-[11px] text-[var(--text-lo)]">Cash on Delivery &amp; Till</div>
-                    <div className="font-mono text-base font-bold text-[var(--text-hi)] mt-0.5">₨54,900</div>
+                    <div className="font-mono text-base font-bold text-[var(--text-hi)] mt-0.5">$1,438.30</div>
                     <div className="text-[10px] font-mono text-[var(--text-faint)]">29.8% of total volume</div>
                   </div>
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-[var(--bg-soft)] border border-[var(--border)]">
-                  <div className="text-xs font-semibold text-[var(--text-hi)] mb-2">Top Grossing Dishes Today (PKR)</div>
+                  <div className="text-xs font-semibold text-[var(--text-hi)] mb-2">Top Grossing Dishes Today</div>
                   <div className="space-y-1.5 text-xs">
                     <div className="flex justify-between items-center">
                       <span className="text-[var(--text-lo)]">1. Classic Cheeseburger Combo</span>
-                      <span className="font-mono font-bold text-[var(--text-hi)]">₨42,600 (36 sold)</span>
+                      <span className="font-mono font-bold text-[var(--text-hi)]">$1,260.00 (36 sold)</span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-[var(--text-lo)]">2. Special Chicken Handi (Half)</span>
-                      <span className="font-mono font-bold text-[var(--text-hi)]">₨34,500 (23 sold)</span>
+                      <span className="text-[var(--text-lo)]">2. Roasted Chicken Platter</span>
+                      <span className="font-mono font-bold text-[var(--text-hi)]">$1,035.00 (23 sold)</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-[var(--text-lo)]">3. Crispy Club Sandwich</span>
-                      <span className="font-mono font-bold text-[var(--text-hi)]">₨22,800 (38 sold)</span>
+                      <span className="font-mono font-bold text-[var(--text-hi)]">$684.00 (38 sold)</span>
                     </div>
                   </div>
                 </div>

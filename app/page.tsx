@@ -5,6 +5,7 @@ import Navbar from "./components/landing/Navbar";
 import HeroOrbit from "./components/landing/HeroOrbit";
 import CityMarquee from "./components/landing/CityMarquee";
 import ProblemSolution from "./components/landing/ProblemSolution";
+import Demo from "./components/landing/Demo";
 import FeatureGrid from "./components/landing/FeatureGrid";
 import HowItWorks from "./components/landing/HowItWorks";
 import WhoItsFor from "./components/landing/WhoItsFor";
@@ -15,7 +16,6 @@ import IntegrationsGrid from "./components/landing/IntegrationsGrid";
 import SecuritySection from "./components/landing/SecuritySection";
 import FaqAccordion from "./components/landing/FaqAccordion";
 import AboutManifesto from "./components/landing/AboutManifesto";
-import DemoContactSection from "./components/landing/DemoContactSection";
 import FinalCta from "./components/landing/FinalCta";
 import Footer from "./components/landing/Footer";
 import WhatsAppFloat from "./components/landing/WhatsAppFloat";
@@ -65,59 +65,59 @@ export default function Home() {
           <ProblemSolution />
         </div>
 
-        {/* 5. Feature Grid */}
+        {/* 5. Live Demo Section (Moved right after Problem Solution) */}
+        <div className="reveal-init">
+          <Demo />
+        </div>
+
+        {/* 6. Feature Grid */}
         <div className="reveal-init">
           <FeatureGrid />
         </div>
 
-        {/* 6. How It Works */}
+        {/* 7. How It Works */}
         <div className="reveal-init">
           <HowItWorks />
         </div>
 
-        {/* 7. Who It's For */}
+        {/* 8. Who It's For */}
         <div className="reveal-init">
           <WhoItsFor />
         </div>
 
-        {/* 8. Product Showcase */}
+        {/* 9. Product Showcase */}
         <div className="reveal-init">
           <ProductShowcase />
         </div>
 
-        {/* 9. ROI Section */}
+        {/* 10. ROI Section */}
         <div className="reveal-init">
           <RoiSection />
         </div>
 
-        {/* 10. Early Partners */}
+        {/* 11. Early Partners */}
         <div className="reveal-init">
           <EarlyPartners />
         </div>
 
-        {/* 11. Integrations Grid */}
+        {/* 12. Integrations Grid */}
         <div className="reveal-init">
           <IntegrationsGrid />
         </div>
 
-        {/* 12. Security Section */}
+        {/* 13. Security Section */}
         <div className="reveal-init">
           <SecuritySection />
         </div>
 
-        {/* 13. FAQ Accordion */}
+        {/* 14. FAQ Accordion */}
         <div className="reveal-init">
           <FaqAccordion />
         </div>
 
-        {/* 14. About Manifesto */}
+        {/* 15. About Manifesto */}
         <div className="reveal-init">
           <AboutManifesto />
-        </div>
-
-        {/* 15. Demo & Contact Section */}
-        <div className="reveal-init">
-          <DemoContactSection />
         </div>
 
         {/* 16. Final CTA */}

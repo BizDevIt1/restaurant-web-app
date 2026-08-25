@@ -28,7 +28,7 @@ export default function HeroOrbit() {
             {/* Eyebrow */}
             <div className="inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] text-xs font-semibold uppercase tracking-wider">
               <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot"></span>
-              Built for restaurants in Pakistan
+              Restaurant Operating System — Built for Growth
             </div>
 
             {/* H1 Headline */}
@@ -42,8 +42,7 @@ export default function HeroOrbit() {
 
             {/* Subcopy */}
             <p className="text-base sm:text-lg text-[var(--text-lo)] max-w-xl leading-relaxed">
-              Replace disconnected WhatsApp ordering, manual paper slips, and scattered Excel ledgers.
-              FoodNet unites your billing till, kitchen display, inventory, JazzCash &amp; Easypaisa payments, and direct delivery marketplace into one unified operating system.
+              Replace disconnected WhatsApp ordering, manual paper slips, and scattered spreadsheets. Omnibites unites your billing till, kitchen display, inventory, local payment methods, and direct delivery marketplace into one unified operating system — wherever your restaurant operates.
             </p>
 
             {/* CTA Button Pair */}
@@ -55,26 +54,26 @@ export default function HeroOrbit() {
                 Get Started
               </Link>
               <Link
-                href="/#demo"
+                href="#demo"
                 className="btn-ghost px-7 py-3.5 text-base text-center"
               >
-                Book a Demo
+                View Demo
               </Link>
             </div>
 
             {/* Trust Strip */}
             <div className="pt-3 border-t border-[var(--border)]/70">
               <p className="font-mono text-xs text-[var(--text-faint)] tracking-tight flex items-center gap-2 flex-wrap">
-                <span>No card required</span>
+                <span>No credit card required</span>
                 <span className="text-[var(--gold)]">·</span>
                 <span>Setup in under a day</span>
                 <span className="text-[var(--gold)]">·</span>
-                <span className="text-[var(--text-lo)] font-medium">PKR &amp; Urdu/English ready</span>
+                <span className="text-[var(--text-lo)] font-medium">Multi-currency &amp; multi-language ready</span>
               </p>
             </div>
           </div>
 
-          {/* Right Column: Visual Mockup matching the original reference exactly */}
+          {/* Right Column: Visual Mockup */}
           <div
             ref={containerRef}
             onMouseMove={handleMouseMove}
@@ -88,7 +87,7 @@ export default function HeroOrbit() {
                 transformStyle: "preserve-3d",
               }}
             >
-              {/* 1. Top Right Pill: Order #4471 accepted */}
+              {/* 1. Top Right Pill: Order #2141 accepted */}
               <div
                 className="absolute top-0 right-0 z-20 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border shadow-xl backdrop-blur-md"
                 style={{
@@ -104,7 +103,7 @@ export default function HeroOrbit() {
                   }}
                 ></span>
                 <span className="font-display font-bold text-xs text-[#f7f0dd] tracking-tight">
-                  Order #4471 accepted
+                  Order #2141 · Table 6 · Ready
                 </span>
               </div>
 
@@ -161,12 +160,12 @@ export default function HeroOrbit() {
                     REVENUE
                   </span>
                   <span className="text-xs font-semibold text-[#c1b295]">
-                    <span className="text-[9px] font-normal mr-0.5">Rs</span>4,82,650
+                    $4,826.50
                   </span>
                 </div>
               </div>
 
-              {/* 3. Bottom Left Card: Kitchen Ticket Slips (Tight gap right under Network Overview) */}
+              {/* 3. Bottom Left Card: Kitchen Ticket Slips */}
               <div
                 className="absolute top-[220px] left-6 w-[195px] sm:w-[205px] rounded-[16px] border p-3 shadow-lg backdrop-blur-xl z-10"
                 style={{
@@ -259,7 +258,7 @@ export default function HeroOrbit() {
                   </div>
                 </div>
 
-                {/* 5. Floating Bottom Pill: Rider en route · 12 min (Overlapping Phone) */}
+                {/* 5. Floating Bottom Pill: Rider en route · 12 min */}
                 <div
                   className="absolute bottom-4 -left-11 z-30 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border shadow-2xl backdrop-blur-md whitespace-nowrap"
                   style={{

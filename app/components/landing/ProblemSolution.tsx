@@ -1,59 +1,66 @@
 "use client";
 
 import React from "react";
+import { motion } from "framer-motion";
 
 export default function ProblemSolution() {
   const problems = [
     {
-      title: "Manual Orders over Phone & WhatsApp",
+      title: "Manual Orders over Phone & Messaging Apps",
       desc: "Orders get missed, kitchen instructions get lost in chat threads, and staff waste peak hours typing receipts by hand.",
     },
     {
       title: "Stock Wastage from Guesswork",
-      desc: "No link between sales and inventory. High-cost items (oil, beef, cheese) run out mid-shift or rot in storage unaccounted.",
+      desc: "No link between sales and inventory. High-cost items run out mid-shift or go unaccounted for in storage.",
     },
     {
       title: "Billing & Cash Register Discrepancies",
-      desc: "Manual calculator additions, unrecorded discounts, and cash-drawer mismatch create constant financial leakage.",
+      desc: "Manual calculator additions, unrecorded discounts, and cash-drawer mismatches create constant financial leakage.",
     },
     {
       title: "Scattered, Disconnected Systems",
-      desc: "A separate delivery portal, a paper KOT book, a WhatsApp rider group, and an offline ledger that never talk to each other.",
+      desc: "A separate delivery portal, a paper kitchen ticket book, a messaging-app rider group, and an offline ledger that never talk to each other.",
     },
     {
       title: "Blind Spot Reporting",
-      desc: "Owners only see end-of-month estimates without itemized profit margins, peak hour velocity, or branch comparisons.",
+      desc: "Owners only see end-of-month estimates without itemized profit margins, peak-hour velocity, or branch comparisons.",
     },
   ];
 
   const solutions = [
     {
       title: "Direct Digital Order Pipeline",
-      desc: "Orders from dining tables, WhatsApp, and your direct marketplace route instantly to the kitchen KDS with zero retyping.",
+      desc: "Orders from dining tables, online ordering, and your direct marketplace route instantly to the kitchen display with zero retyping.",
     },
     {
       title: "Recipe-Linked Inventory Deduction",
-      desc: "Every burger, biryani, or karahi sold automatically deducts exact ingredient grammages with live low-stock alerts.",
+      desc: "Every dish sold automatically deducts exact ingredient quantities with live low-stock alerts.",
     },
     {
-      title: "Unified Billing with JazzCash & Easypaisa",
-      desc: "Lightning-fast till checkout with integrated QR/digital mobile payments, auto-tax calculations, and thermal printing.",
+      title: "Unified Billing with Local & Global Payments",
+      desc: "Lightning-fast till checkout with integrated card, wallet, and QR payments, plus automatic tax calculation and thermal printing.",
     },
     {
       title: "All-in-One Restaurant Operations",
-      desc: "POS, Kitchen Display, Delivery Fleet dispatch, and Multi-branch inventory unified into a single live dashboard.",
+      desc: "POS, kitchen display, delivery fleet dispatch, and multi-branch inventory unified into a single live dashboard.",
     },
     {
       title: "Live Real-Time P&L Intelligence",
-      desc: "Track sales velocity, highest-margin dishes, hourly trends, and branch performance on your phone from anywhere in Pakistan.",
+      desc: "Track sales velocity, highest-margin dishes, hourly trends, and branch performance from anywhere in the world.",
     },
   ];
 
   return (
-    <section className="py-20 md:py-28 relative">
+    <section className="py-20 md:py-28 relative overflow-hidden">
       <div className="max-w-[1240px] mx-auto px-4 sm:px-6">
         {/* Section Header */}
-        <div className="text-center max-w-3xl mx-auto mb-16 space-y-4">
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, amount: 0.3 }}
+          transition={{ duration: 0.6, ease: "easeOut" }}
+          className="text-center max-w-3xl mx-auto mb-16 space-y-4"
+        >
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-semibold uppercase tracking-wider text-[var(--gold)]">
             Transformation
           </div>
@@ -61,14 +68,20 @@ export default function ProblemSolution() {
             Stop Running Your Restaurant on Fragmented Tools
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
-            See how FoodNet replaces chaotic paper slips and WhatsApp confusion with unified, automated digital precision.
+            See how Omnibites replaces chaotic paper slips and messaging-app confusion with unified, automated digital precision.
           </p>
-        </div>
+        </motion.div>
 
         {/* Side-by-Side Comparison Panels */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Left Panel: The Problem Today (Rust-tinted) */}
-          <div className="rounded-2xl bg-[var(--rust-dim)]/40 border border-[var(--rust)]/30 p-6 sm:p-8 relative overflow-hidden backdrop-blur-md">
+          {/* Left Panel: The Problem Today (Slides in from Left) */}
+          <motion.div
+            initial={{ opacity: 0, x: -70 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true, amount: 0.2 }}
+            transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+            className="rounded-2xl bg-[var(--rust-dim)]/40 border border-[var(--rust)]/30 p-6 sm:p-8 relative overflow-hidden backdrop-blur-md"
+          >
             <div className="flex items-center justify-between pb-6 mb-6 border-b border-[var(--rust)]/30">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-[var(--rust)]/20 text-[var(--rust)] border border-[var(--rust)]/40 flex items-center justify-center">
@@ -80,7 +93,7 @@ export default function ProblemSolution() {
                   <h3 className="font-display font-bold text-xl text-[var(--text-hi)]">
                     The Problem Today
                   </h3>
-                  <p className="text-xs text-[var(--text-lo)]">Without FoodNet</p>
+                  <p className="text-xs text-[var(--text-lo)]">Without Omnibites</p>
                 </div>
               </div>
               <span className="font-mono text-xs px-2.5 py-1 rounded bg-[var(--rust)]/20 text-[var(--rust)] font-semibold border border-[var(--rust)]/30">
@@ -105,10 +118,16 @@ export default function ProblemSolution() {
                 </div>
               ))}
             </div>
-          </div>
+          </motion.div>
 
-          {/* Right Panel: How FoodNet Fixes It (Olive-tinted) */}
-          <div className="rounded-2xl bg-[var(--olive-dim)]/40 border border-[var(--olive)]/40 p-6 sm:p-8 relative overflow-hidden backdrop-blur-md shadow-xl shadow-[var(--olive-dim)]">
+          {/* Right Panel: How Omnibites Fixes It (Slides in from Right) */}
+          <motion.div
+            initial={{ opacity: 0, x: 70 }}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true, amount: 0.2 }}
+            transition={{ duration: 0.7, delay: 0.1, ease: [0.22, 1, 0.36, 1] }}
+            className="rounded-2xl bg-[var(--olive-dim)]/40 border border-[var(--olive)]/40 p-6 sm:p-8 relative overflow-hidden backdrop-blur-md shadow-xl shadow-[var(--olive-dim)]"
+          >
             <div className="flex items-center justify-between pb-6 mb-6 border-b border-[var(--olive)]/30">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-[var(--olive)]/20 text-[var(--olive)] border border-[var(--olive)]/40 flex items-center justify-center">
@@ -118,9 +137,9 @@ export default function ProblemSolution() {
                 </div>
                 <div>
                   <h3 className="font-display font-bold text-xl text-[var(--text-hi)]">
-                    How FoodNet Fixes It
+                    How Omnibites Fixes It
                   </h3>
-                  <p className="text-xs text-[var(--olive)] font-medium">With FoodNet OS</p>
+                  <p className="text-xs text-[var(--olive)] font-medium">With Omnibites OS</p>
                 </div>
               </div>
               <span className="font-mono text-xs px-2.5 py-1 rounded bg-[var(--olive)]/20 text-[var(--olive)] font-semibold border border-[var(--olive)]/40">
@@ -145,7 +164,7 @@ export default function ProblemSolution() {
                 </div>
               ))}
             </div>
-          </div>
+          </motion.div>
         </div>
       </div>
     </section>

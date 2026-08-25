@@ -30,22 +30,22 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "FoodNet — The Operating System for Pakistani Restaurants",
+  title: "Omnibites — One Platform for Every Restaurant, Cloud Kitchen & Franchise",
   description:
-    "All-in-one POS, KDS, inventory management, and online ordering marketplace built specifically for restaurants, cloud kitchens, and franchises across Pakistan. Native PKR, JazzCash, Easypaisa, and thermal printer support.",
+    "Omnibites unifies POS, kitchen display, inventory, online ordering, delivery, and multi-branch management into one complete restaurant operating system.",
   keywords: [
-    "Restaurant POS Pakistan",
-    "FoodNet",
-    "Kitchen Display System Pakistan",
-    "JazzCash restaurant payment",
-    "Easypaisa POS",
-    "Cloud kitchen software Lahore Karachi Islamabad",
-    "Restaurant inventory management PKR",
+    "Restaurant POS Software",
+    "Omnibites",
+    "Kitchen Display System",
+    "Cloud Kitchen Operating System",
+    "Multi-Branch Restaurant Software",
+    "Restaurant Inventory Management",
+    "Direct Online Ordering Marketplace",
   ],
   openGraph: {
-    title: "FoodNet — The Operating System for Pakistani Restaurants",
+    title: "Omnibites — One Platform for Every Restaurant, Cloud Kitchen & Franchise",
     description:
-      "Manage your restaurant with one complete POS, KDS, inventory & online ordering system. Built for Pakistan.",
+      "Omnibites unifies POS, kitchen display, inventory, online ordering, delivery, and multi-branch management into one complete restaurant operating system.",
     type: "website",
   },
 };

@@ -73,8 +73,8 @@ export default function WhoItsFor() {
       tagline: "Dine-in, takeaway & local delivery",
       benefits: [
         "1-station fast POS with thermal billing",
-        "Recipe ingredient tracking in PKR",
-        "Direct WhatsApp ordering for regulars",
+        "Recipe ingredient tracking in your currency",
+        "Direct messaging-app ordering for regulars",
       ],
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -84,9 +84,9 @@ export default function WhoItsFor() {
     },
     {
       title: "Cloud Kitchens",
-      tagline: "Delivery-only multi-brand setups",
+      tagline: "Delivery-only, multi-brand setups",
       benefits: [
-        "Multi-brand routing to one KDS screen",
+        "Multi-brand routing to one kitchen display",
         "Direct rider dispatch & cash settlement",
         "Commission-free online marketplace storefront",
       ],
@@ -98,10 +98,10 @@ export default function WhoItsFor() {
     },
     {
       title: "Multi-Branch Restaurants",
-      tagline: "Regional chains across Pakistan",
+      tagline: "Multi-outlet food chains",
       benefits: [
         "Consolidated master admin & sales ledger",
-        "City-wide menu & pricing synchronisation",
+        "Chain-wide menu & pricing synchronization",
         "Inter-branch stock transfers & audits",
       ],
       icon: (
@@ -116,7 +116,7 @@ export default function WhoItsFor() {
       benefits: [
         "Franchisee role permissions & royalty reporting",
         "Standardized recipe specs & portion control",
-        "Audit logs for all voids, discounts & cash outs",
+        "Audit logs for all voids, discounts & cash-outs",
       ],
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -142,9 +142,9 @@ export default function WhoItsFor() {
       title: "Cafés & Food Businesses",
       tagline: "Bakeries, beverage bars & snack spots",
       benefits: [
-        "Fast-tap barcode scanning & quick addons",
+        "Fast-tap barcode scanning & quick add-ons",
         "Customer loyalty numbers for repeat points",
-        "JazzCash & Easypaisa QR instant billing",
+        "Card, wallet & QR instant billing",
       ],
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -163,10 +163,10 @@ export default function WhoItsFor() {
             Ecosystem Fit
           </div>
           <h2 className="font-display font-extrabold text-3xl sm:text-4xl text-[var(--text-hi)]">
-            Engineered for Every Pakistani Food Format
+            Engineered for Every Restaurant Format
           </h2>
           <p className="text-[var(--text-lo)] text-base sm:text-lg">
-            Whether you operate an independent local kitchen in Rawalpindi or a 10-branch franchise across Lahore and Karachi.
+            Whether you run an independent local kitchen or a growing multi-branch franchise.
           </p>
         </div>
 
