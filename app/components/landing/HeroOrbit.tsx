@@ -3,6 +3,8 @@
 import React, { useState, useRef } from "react";
 import Link from "next/link";
 
+import HeroAnimatedFeature from "./HeroAnimatedFeature";
+
 export default function HeroOrbit() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
@@ -20,8 +22,8 @@ export default function HeroOrbit() {
   };
 
   return (
-    <section className="relative pt-32 pb-20 md:pt-40 md:pb-28 overflow-hidden">
-      <div className="max-w-[1240px] mx-auto px-4 sm:px-6">
+    <section className="relative pt-32 pb-16 md:pt-36 md:pb-20 overflow-hidden">
+      <div className="max-w-[1240px] mx-auto px-4 sm:px-6 w-full">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-6 items-center">
           {/* Left Column: Copy & Actions */}
           <div className="lg:col-span-6 space-y-7 text-left z-10">
@@ -31,14 +33,23 @@ export default function HeroOrbit() {
               Restaurant Operating System — Built for Growth
             </div>
 
-            {/* H1 Headline */}
-            <h1 className="font-display font-extrabold text-4xl sm:text-5xl lg:text-[3.4rem] leading-[1.12] text-[var(--text-hi)]">
-              Manage Your Restaurant with{" "}
-              <span className="text-gradient-gold block sm:inline">
-                One Complete POS &amp; Online Ordering
-              </span>{" "}
-              System
-            </h1>
+            {/* Animated Heading Container with explicit reserved height and relative stacking context */}
+            <div className="relative overflow-hidden min-h-[160px] sm:min-h-[150px] lg:min-h-[175px] flex items-start">
+              <h1 className="font-display font-extrabold text-3xl sm:text-4xl lg:text-[2.9rem] leading-[1.15] text-[var(--text-hi)] cursor-default">
+                {/* Screen-reader static accessible label */}
+                <span className="sr-only">
+                  Manage Your Restaurant with One Complete POS &amp; Online Ordering System
+                </span>
+
+                {/* Decorative visual heading with smooth rotating feature */}
+                <span aria-hidden="true">
+                  Manage Your Restaurant with{" "}
+                  <span className="text-gradient-gold">
+                    One Complete <HeroAnimatedFeature />
+                  </span>
+                </span>
+              </h1>
+            </div>
 
             {/* Subcopy */}
             <p className="text-base sm:text-lg text-[var(--text-lo)] max-w-xl leading-relaxed">

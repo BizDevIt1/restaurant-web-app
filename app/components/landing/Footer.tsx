@@ -121,8 +121,8 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/#demo" className="hover:text-[var(--gold)] transition-colors">
-                  Terms of Service
+                <Link href="/terms-and-conditions" className="hover:text-[var(--gold)] transition-colors">
+                  Terms and Conditions
                 </Link>
               </li>
               <li>

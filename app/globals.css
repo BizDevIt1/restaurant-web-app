@@ -280,6 +280,115 @@ h1, h2, h3, h4, h5, h6 {
   background: var(--gold);
 }
 
+/* Hero Feature Glitch Keyframes & Slices */
+@keyframes glitch-out {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) skew(0deg);
+  }
+  20% {
+    opacity: 0.9;
+    transform: translate(-3px, 1px) skew(-1.5deg);
+    filter: drop-shadow(-2px 0 0 rgba(227, 177, 59, 0.6));
+  }
+  40% {
+    opacity: 0.8;
+    transform: translate(3px, -1px) skew(1.5deg);
+    filter: drop-shadow(2px 0 0 rgba(224, 78, 23, 0.6));
+  }
+  60% {
+    opacity: 0.6;
+    transform: translate(-2px, -1px) skew(-0.5deg);
+  }
+  80% {
+    opacity: 0.3;
+    transform: translate(1px, 2px) skew(0.5deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(0, 4px);
+  }
+}
+
+@keyframes glitch-in {
+  0% {
+    opacity: 0;
+    transform: translate(0, -4px);
+  }
+  20% {
+    opacity: 0.7;
+    transform: translate(-3px, 1px) skew(1.5deg);
+    filter: drop-shadow(-2px 0 0 rgba(227, 177, 59, 0.7));
+  }
+  50% {
+    opacity: 0.9;
+    transform: translate(2px, -1px) skew(-1deg);
+    filter: drop-shadow(2px 0 0 rgba(224, 78, 23, 0.7));
+  }
+  80% {
+    opacity: 1;
+    transform: translate(-1px, 0) skew(0.5deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0) skew(0deg);
+    filter: none;
+  }
+}
+
+@keyframes glitch-slice-top {
+  0%, 100% {
+    clip-path: polygon(0 18%, 100% 18%, 100% 48%, 0 48%);
+    transform: translate(-2.5px, 0);
+    opacity: 0.75;
+  }
+  50% {
+    clip-path: polygon(0 10%, 100% 10%, 100% 38%, 0 38%);
+    transform: translate(2.5px, -1px);
+    opacity: 0.9;
+  }
+}
+
+@keyframes glitch-slice-bottom {
+  0%, 100% {
+    clip-path: polygon(0 58%, 100% 58%, 100% 88%, 0 88%);
+    transform: translate(2.5px, 0);
+    opacity: 0.75;
+  }
+  50% {
+    clip-path: polygon(0 68%, 100% 68%, 100% 95%, 0 95%);
+    transform: translate(-2.5px, 1px);
+    opacity: 0.9;
+  }
+}
+
+.hero-glitch-idle {
+  opacity: 1;
+  transform: translate(0, 0);
+}
+
+.hero-glitch-out {
+  animation: glitch-out 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.hero-glitch-in {
+  animation: glitch-in 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.hero-glitch-slice-1 {
+  color: var(--gold);
+  text-shadow: -1.5px 0 var(--gold-glow);
+  animation: glitch-slice-top 0.25s steps(2, jump-none) infinite;
+  mix-blend-mode: screen;
+}
+
+.hero-glitch-slice-2 {
+  color: var(--orange);
+  text-shadow: 1.5px 0 var(--orange-glow);
+  animation: glitch-slice-bottom 0.25s steps(2, jump-none) infinite;
+  mix-blend-mode: screen;
+}
+
 /* Prefers Reduced Motion (Global rule) */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -300,7 +409,11 @@ h1, h2, h3, h4, h5, h6 {
   .animate-orbit-spin-reverse,
   .animate-marquee,
   .animate-pulse-ring,
-  .animate-live-dot {
+  .animate-live-dot,
+  .hero-glitch-out,
+  .hero-glitch-in,
+  .hero-glitch-slice-1,
+  .hero-glitch-slice-2 {
     animation: none !important;
   }
 }
