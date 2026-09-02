@@ -2,20 +2,63 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
-import Navbar from "../components/landing/Navbar";
-import Footer from "../components/landing/Footer";
-import WhatsAppFloat from "../components/landing/WhatsAppFloat";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { createClient } from "../../lib/supabase";
+import Navbar from "../components/Navbar";
+import WhatsAppFloat from "../components/WhatsAppFloat";
+import { useSplash } from "../components/SplashScreen";
 
 export default function SignUpPage() {
+  const router = useRouter();
+  const { triggerSplash, hideSplash, isVisible: isSplashVisible } = useSplash();
   const [fullName, setFullName] = useState("");
   const [restaurantName, setRestaurantName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // No backend functionality right now
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    // Trigger splash screen to cover account creation
+    triggerSplash(3000);
+
+    try {
+      const supabase = createClient();
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password: password,
+        options: {
+          data: {
+            full_name: fullName,
+            restaurant_name: restaurantName,
+          },
+        },
+      });
+
+      if (error) {
+        hideSplash();
+        setErrorMessage(error.message);
+        return;
+      }
+
+      if (data?.session) {
+        router.push("/super-admin/dashboard");
+        router.refresh();
+      } else {
+        hideSplash();
+        setSuccessMessage("Account created successfully! Please check your email for confirmation.");
+      }
+    } catch (err: unknown) {
+      hideSplash();
+      const message = err instanceof Error ? err.message : "Failed to create account. Please try again.";
+      setErrorMessage(message);
+    }
   };
 
   return (
@@ -35,16 +78,40 @@ export default function SignUpPage() {
           <div className="bg-[var(--bg-deep)]/85 backdrop-blur-2xl border border-[var(--border)] rounded-2xl sm:rounded-3xl p-7 sm:p-9 shadow-2xl space-y-6">
             {/* Header */}
             <div className="text-center space-y-2">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-[#e3b13b] to-[#e04e17] text-[#241a06] font-display font-extrabold text-lg shadow-lg shadow-[var(--gold-glow)] mb-2">
-                FN
-              </div>
+              <Image
+                src="/logo.png"
+                alt="Omnibites"
+                width={52}
+                height={52}
+                className="w-12 h-12 sm:w-14 sm:h-14 object-contain mx-auto mb-2"
+              />
               <h1 className="font-display font-bold text-2xl sm:text-3xl text-[var(--text-hi)]">
                 Create Account
               </h1>
-              <p className="text-xs sm:text-sm text-[var(--text-lo)]">
-                Start managing your restaurant with FoodNet
+              <p className="text-xs sm:text-sm text-[var(--text-lo)] flex items-center justify-center gap-1">
+                <span>Start managing your restaurant with</span>
+                <span className="font-semibold">
+                  <span className="text-[#f7f0dd]">Omni</span>
+                  <span className="text-[#f5a623]">bites</span>
+                </span>
               </p>
             </div>
+
+            {/* Error Message Alert */}
+            {errorMessage && (
+              <div className="p-3.5 rounded-xl bg-[var(--orange-dim)] border border-[var(--orange)]/40 text-[var(--text-hi)] text-xs flex items-start gap-2.5">
+                <span className="w-2 h-2 rounded-full bg-[var(--orange)] mt-1 shrink-0 animate-pulse"></span>
+                <span className="leading-relaxed">{errorMessage}</span>
+              </div>
+            )}
+
+            {/* Success Message Alert */}
+            {successMessage && (
+              <div className="p-3.5 rounded-xl bg-[#25d366]/15 border border-[#25d366]/40 text-[var(--text-hi)] text-xs flex items-start gap-2.5">
+                <span className="w-2 h-2 rounded-full bg-[#25d366] mt-1 shrink-0"></span>
+                <span className="leading-relaxed">{successMessage}</span>
+              </div>
+            )}
 
             {/* Simple Sign Up Form */}
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -130,25 +197,31 @@ export default function SignUpPage() {
               {/* Submit Button */}
               <button
                 type="submit"
-                className="w-full btn-gold py-3 text-sm font-bold shadow-lg shadow-[var(--gold-glow)] mt-2"
+                disabled={isSplashVisible}
+                className="w-full btn-gold py-3 text-sm font-bold shadow-lg shadow-[var(--gold-glow)] mt-2 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
               >
-                Create Account
+                <span>Create Account</span>
               </button>
             </form>
 
             {/* Switch to Login */}
             <div className="pt-2 text-center text-xs text-[var(--text-lo)] border-t border-[var(--border)]/60">
               Already have an account?{" "}
-              <Link href="/login" className="text-[var(--gold)] font-semibold hover:underline">
+              <Link
+                href="/login"
+                onClick={(e) => {
+                  e.preventDefault();
+                  triggerSplash(1200);
+                  router.push("/login");
+                }}
+                className="text-[var(--gold)] font-semibold hover:underline"
+              >
                 Sign In
               </Link>
             </div>
           </div>
         </div>
       </main>
-
-      {/* 3. Footer */}
-      <Footer />
 
       {/* WhatsApp Floating Action Button */}
       <WhatsAppFloat />

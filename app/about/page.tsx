@@ -1,12 +1,12 @@
 "use client";
 
 import React, { useEffect } from "react";
-import Navbar from "../components/landing/Navbar";
-import AboutHero from "../components/landing/AboutHero";
-import FounderSection from "../components/landing/FounderSection";
-import AboutManifesto from "../components/landing/AboutManifesto";
-import Footer from "../components/landing/Footer";
-import WhatsAppFloat from "../components/landing/WhatsAppFloat";
+import Navbar from "../components/Navbar";
+import AboutHero from "../components/AboutHero";
+import FounderSection from "../components/FounderSection";
+import AboutManifesto from "../components/AboutManifesto";
+import Footer from "../components/Footer";
+import WhatsAppFloat from "../components/WhatsAppFloat";
 
 export default function AboutPage() {
   useEffect(() => {

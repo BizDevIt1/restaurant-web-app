@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Manrope, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { SplashProvider } from "../components/SplashScreen";
 
 const manrope = Manrope({
   variable: "--font-display",
@@ -33,6 +34,11 @@ export const metadata: Metadata = {
   title: "Omnibites — One Platform for Every Restaurant, Cloud Kitchen & Franchise",
   description:
     "Omnibites unifies POS, kitchen display, inventory, online ordering, delivery, and multi-branch management into one complete restaurant operating system.",
+  icons: {
+    icon: "/favicon.png",
+    shortcut: "/favicon.png",
+    apple: "/favicon.png",
+  },
   keywords: [
     "Restaurant POS Software",
     "Omnibites",
@@ -60,8 +66,15 @@ export default function RootLayout({
       lang="en"
       className={`${manrope.variable} ${inter.variable} ${jetbrainsMono.variable} scroll-smooth`}
     >
+      <head>
+        <link rel="icon" href="/favicon.png" type="image/png" sizes="any" />
+        <link rel="shortcut icon" href="/favicon.png" type="image/png" />
+        <link rel="apple-touch-icon" href="/favicon.png" />
+      </head>
       <body className="min-h-screen text-[var(--text-hi)] bg-[var(--bg)] font-[family-name:var(--font-body)] antialiased selection:bg-[var(--gold)] selection:text-[var(--bg-deep)]">
-        {children}
+        <SplashProvider defaultDuration={1200} autoPlayOnMount={true}>
+          {children}
+        </SplashProvider>
       </body>
     </html>
   );

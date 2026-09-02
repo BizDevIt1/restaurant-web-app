@@ -3,9 +3,9 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, MessageCircle, Mail } from "lucide-react";
-import Navbar from "../components/landing/Navbar";
-import Footer from "../components/landing/Footer";
-import WhatsAppFloat from "../components/landing/WhatsAppFloat";
+import Navbar from "../components/Navbar";
+import Footer from "../components/Footer";
+import WhatsAppFloat from "../components/WhatsAppFloat";
 
 export default function FaqPage() {
   const [openIndex, setOpenIndex] = useState<number | null>(0);
@@ -14,7 +14,11 @@ export default function FaqPage() {
     {
       num: "01",
       q: "How does the 14-day free trial work?",
-      a: "You get full, unrestricted access to the complete Omnibites operating system for 14 days without entering any credit card or banking details. Configure your full menu, test POS billing, send test kitchen tickets, and try the online marketplace firsthand.",
+      a: (
+        <span>
+          You get full, unrestricted access to the complete <span className="font-semibold"><span className="text-[#f7f0dd]">Omni</span><span className="text-[#f5a623]">bites</span></span> operating system for 14 days without entering any credit card or banking details. Configure your full menu, test POS billing, send test kitchen tickets, and try the online marketplace firsthand.
+        </span>
+      ),
     },
     {
       num: "02",
@@ -29,7 +33,11 @@ export default function FaqPage() {
     {
       num: "04",
       q: "What thermal printers and receipt hardware are supported?",
-      a: "Omnibites supports standard ESC/POS-compatible thermal printers over USB and LAN, with multi-language receipt templates.",
+      a: (
+        <span>
+          <span className="font-semibold"><span className="text-[#f7f0dd]">Omni</span><span className="text-[#f5a623]">bites</span></span> supports standard ESC/POS-compatible thermal printers over USB and LAN, with multi-language receipt templates.
+        </span>
+      ),
     },
     {
       num: "05",
@@ -38,7 +46,11 @@ export default function FaqPage() {
     },
     {
       num: "06",
-      q: "Can Omnibites import existing menu items, inventory, and historical data?",
+      q: (
+        <span>
+          Can <span className="font-semibold"><span className="text-[#f7f0dd]">Omni</span><span className="text-[#f5a623]">bites</span></span> import existing menu items, inventory, and historical data?
+        </span>
+      ),
       a: "In most cases, yes — our team helps migrate your existing menu, inventory, and customer data during onboarding.",
     },
     {
@@ -62,7 +74,7 @@ export default function FaqPage() {
       {/* Top Navbar */}
       <Navbar />
 
-      <main className="flex-1 pt-28 pb-24">
+      <main className="flex-1 pt-28 md:pt-32 pb-24">
         {/* Hero Section */}
         <div className="max-w-[880px] mx-auto px-4 sm:px-6 text-center mb-10 space-y-4">
           {/* Breadcrumb Pill */}
@@ -83,7 +95,7 @@ export default function FaqPage() {
 
           {/* Hero Subtitle */}
           <p className="text-[var(--text-lo)] text-base sm:text-lg leading-relaxed max-w-2xl mx-auto">
-            Everything you need to know about Omnibites POS, KDS, inventory, hardware compatibility, pricing, and onboarding.
+            Everything you need to know about <span className="font-semibold"><span className="text-[#f7f0dd]">Omni</span><span className="text-[#f5a623]">bites</span></span> POS, KDS, inventory, hardware compatibility, pricing, and onboarding.
           </p>
 
           {/* Meta Info */}
@@ -94,58 +106,43 @@ export default function FaqPage() {
           </div>
         </div>
 
-        {/* Main Glassmorphic Container Card (960px max-width) */}
+        {/* 8 FAQs Modern Container */}
         <div className="max-w-[960px] mx-auto px-4 sm:px-6">
-          <div className="bg-[#140c0c]/80 backdrop-blur-2xl border border-[var(--border)] rounded-3xl p-6 sm:p-10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] relative overflow-hidden">
-            {/* Ambient Inner Glow */}
-            <div className="absolute -top-32 -right-32 w-96 h-96 bg-[var(--gold-dim)] rounded-full blur-3xl opacity-15 pointer-events-none" />
+          <div className="bg-[var(--surface)]/90 backdrop-blur-2xl border border-[var(--border)] rounded-3xl p-6 sm:p-10 shadow-2xl relative overflow-hidden">
+            {/* Ambient Background Glow */}
+            <div className="absolute top-0 right-0 w-80 h-80 bg-[var(--gold-dim)] rounded-full blur-3xl opacity-30 pointer-events-none" />
 
-            {/* Accordion List */}
-            <div className="divide-y divide-[var(--border)]/40">
+            <div className="divide-y divide-[var(--border)]/60 relative z-10">
               {fullFaqs.map((faq, idx) => {
                 const isOpen = openIndex === idx;
                 return (
-                  <div
-                    key={idx}
-                    className={`py-5 sm:py-6 transition-all duration-300 ${
-                      isOpen ? "opacity-100" : "opacity-90 hover:opacity-100"
-                    }`}
-                  >
-                    {/* Header Button */}
+                  <div key={idx} className="py-5 sm:py-6 transition-all duration-300">
                     <button
                       onClick={() => toggleItem(idx)}
-                      className="w-full flex items-center justify-between text-left gap-4 cursor-pointer focus:outline-none group"
-                      aria-expanded={isOpen}
+                      className="w-full flex items-start justify-between gap-4 text-left group cursor-pointer focus:outline-none"
                     >
-                      <div className="flex items-center gap-3.5">
-                        {/* Numbered Gold Badge */}
-                        <div className="w-8 h-8 rounded-lg bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono font-bold text-xs flex items-center justify-center shrink-0 group-hover:border-[var(--gold)] transition-colors">
+                      <div className="flex items-start gap-3.5">
+                        <span className="font-mono text-xs text-[var(--gold)] font-bold pt-1 shrink-0">
                           {faq.num}
-                        </div>
-                        {/* Title */}
-                        <h2 className="font-display font-bold text-base sm:text-lg text-[var(--text-hi)] group-hover:text-[var(--gold)] transition-colors">
+                        </span>
+                        <span className="font-display font-bold text-base sm:text-lg text-[var(--text-hi)] group-hover:text-[var(--gold)] transition-colors">
                           {faq.q}
-                        </h2>
+                        </span>
                       </div>
-
-                      {/* Expand / Collapse Icon */}
                       <div
-                        className={`w-7 h-7 rounded-full border border-[var(--border)] flex items-center justify-center shrink-0 transition-all duration-300 ${
+                        className={`w-7 h-7 rounded-full border border-[var(--border)] flex items-center justify-center text-xs shrink-0 transition-transform duration-300 ${
                           isOpen
-                            ? "rotate-45 bg-[var(--gold)] text-[#241a06] border-[var(--gold)]"
-                            : "bg-[var(--surface-hi)] text-[var(--text-lo)] group-hover:border-[var(--gold)]/50"
+                            ? "rotate-180 bg-[var(--gold)] text-[#241a06] border-[var(--gold)]"
+                            : "bg-[var(--surface-hi)] text-[var(--text-lo)] group-hover:border-[var(--gold)]"
                         }`}
                       >
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
-                        </svg>
+                        ↓
                       </div>
                     </button>
 
-                    {/* Expandable Answer Content */}
                     <div
-                      className={`transition-all duration-300 ease-in-out pl-11 pr-2 overflow-hidden ${
-                        isOpen ? "max-h-96 pt-3.5 opacity-100" : "max-h-0 pt-0 opacity-0"
+                      className={`overflow-hidden transition-all duration-300 ${
+                        isOpen ? "max-h-60 opacity-100 mt-3 pl-7" : "max-h-0 opacity-0"
                       }`}
                     >
                       <p className="text-sm sm:text-base text-[var(--text-lo)] leading-relaxed font-normal">
@@ -164,7 +161,7 @@ export default function FaqPage() {
                   Need Direct Support or Custom Hardware Setup?
                 </p>
                 <p className="text-[var(--text-lo)] font-sans text-xs sm:text-sm leading-relaxed">
-                  Email: <strong className="text-[var(--text-hi)]">contact@omnibites.com</strong> &bull; Hotline: <strong className="text-[var(--text-hi)]">+1 (800) 555-0199</strong> &bull; Company: <strong className="text-[var(--text-hi)]">Omnibites Technologies Inc.</strong>
+                  Email: <strong className="text-[var(--text-hi)]">contact@omnibites.com</strong> &bull; Hotline: <strong className="text-[var(--text-hi)]">+1 (800) 555-0199</strong> &bull; Company: <strong className="text-[var(--text-hi)]"><span className="text-[#f7f0dd]">Omni</span><span className="text-[#f5a623]">bites</span> Technologies Inc.</strong>
                 </p>
               </div>
             </div>

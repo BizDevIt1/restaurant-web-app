@@ -2,14 +2,14 @@
 
 import React, { useEffect } from "react";
 import Link from "next/link";
-import Navbar from "../components/landing/Navbar";
-import Footer from "../components/landing/Footer";
-import WhatsAppFloat from "../components/landing/WhatsAppFloat";
+import Navbar from "../components/Navbar";
+import Footer from "../components/Footer";
+import WhatsAppFloat from "../components/WhatsAppFloat";
 
 export default function TermsPage() {
   useEffect(() => {
     // Set explicit browser tab page title
-    document.title = "Terms and Conditions | FoodNet";
+    document.title = "Terms and Conditions | Omnibites";
 
     // Scroll reveal observer
     const elements = document.querySelectorAll(".reveal-init");
@@ -45,7 +45,7 @@ export default function TermsPage() {
         />
 
         {/* Hero Header */}
-        <section className="pt-24 pb-12 md:pt-32 md:pb-16 text-center">
+        <section className="pt-28 pb-12 md:pt-32 md:pb-16 text-center">
           <div className="max-w-[880px] mx-auto px-4 sm:px-6">
             {/* Breadcrumb */}
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-mono text-[var(--text-lo)] mb-6">
@@ -63,7 +63,7 @@ export default function TermsPage() {
             </h1>
 
             <p className="text-base sm:text-lg text-[var(--text-lo)] max-w-2xl mx-auto leading-relaxed">
-              Please review these terms carefully. By accessing or using FoodNet’s Point of Sale, Online Ordering, and Restaurant Management OS, you agree to be bound by this agreement.
+              Please review these terms carefully. By accessing or using <span className="font-semibold"><span className="text-[#f7f0dd]">Omni</span><span className="text-[#f5a623]">bites</span></span>’s Point of Sale, Online Ordering, and Restaurant Management OS, you agree to be bound by this agreement.
             </p>
 
             <div className="mt-6 flex items-center justify-center gap-4 text-xs font-mono text-[var(--text-faint)]">
@@ -144,11 +144,11 @@ export default function TermsPage() {
                     04
                   </span>
                   <h2 className="font-display font-bold text-xl sm:text-2xl text-[var(--text-hi)]">
-                    Subscriptions, Pricing &amp; Payments in PKR
+                    Subscriptions, Pricing &amp; Payments ($)
                   </h2>
                 </div>
                 <p>
-                  All subscription fees are billed in Pakistani Rupees (PKR) according to your selected plan (Starter, Growth, or Multi-Branch Enterprise).
+                  All subscription fees are billed in US Dollars ($) according to your selected plan (Starter, Growth, or Multi-Branch Enterprise).
                 </p>
                 <ul className="list-disc list-inside space-y-2 pl-2 text-[var(--text-lo)]">
                   <li><strong className="text-[var(--text-hi)]">Billing Cycles:</strong> Subscriptions are billed on a monthly or discounted annual cycle in advance.</li>

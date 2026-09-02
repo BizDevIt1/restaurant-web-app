@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useEffect } from "react";
-import Navbar from "../components/landing/Navbar";
-import PricingSection from "../components/landing/PricingSection";
-import Footer from "../components/landing/Footer";
-import WhatsAppFloat from "../components/landing/WhatsAppFloat";
+import Navbar from "../components/Navbar";
+import PricingSection from "../components/PricingSection";
+import Footer from "../components/Footer";
+import WhatsAppFloat from "../components/WhatsAppFloat";
 
 export default function PricingPage() {
   useEffect(() => {
@@ -31,7 +31,7 @@ export default function PricingPage() {
   }, []);
 
   return (
-    <div className="relative min-h-screen flex flex-col pt-16">
+    <div className="relative min-h-screen flex flex-col">
       {/* 1. Header Navbar (Same) */}
       <Navbar />
 

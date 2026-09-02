@@ -2,25 +2,149 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
-import Navbar from "../components/landing/Navbar";
-import Footer from "../components/landing/Footer";
-import WhatsAppFloat from "../components/landing/WhatsAppFloat";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { createClient } from "../../lib/supabase";
+import Navbar from "../components/Navbar";
+import WhatsAppFloat from "../components/WhatsAppFloat";
+import { useSplash } from "../components/SplashScreen";
 
 export default function LoginPage() {
+  const router = useRouter();
+  const { triggerSplash, hideSplash, isVisible: isSplashVisible } = useSplash();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Forgot password state
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotSuccess, setForgotSuccess] = useState<string | null>(null);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // No backend functionality right now
+    setErrorMessage(null);
+
+    // Trigger splash screen to cover authentication process
+    triggerSplash(3000);
+
+    try {
+      const supabase = createClient();
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password,
+      });
+
+      if (error) {
+        hideSplash();
+        const displayMsg =
+          error.message.toLowerCase().includes("invalid login credentials") ||
+          error.message.toLowerCase().includes("invalid credentials")
+            ? "Incorrect email or password. Please try again."
+            : error.message;
+        setErrorMessage(displayMsg);
+        setTimeout(() => {
+          setErrorMessage(null);
+        }, 3200);
+        return;
+      }
+
+      if (data?.session || data?.user) {
+        const userRole = data.user?.user_metadata?.role;
+        const userEmail = email.trim().toLowerCase();
+
+        if (userRole === "restaurant_admin") {
+          router.push("/admin");
+        } else if (userRole === "super_admin") {
+          router.push("/super-admin/dashboard");
+        } else {
+          try {
+            const { data: restData } = await supabase
+              .from("restaurants")
+              .select("id, owner_email")
+              .eq("owner_email", userEmail)
+              .limit(1)
+              .maybeSingle();
+
+            if (restData) {
+              router.push("/admin");
+            } else {
+              router.push("/super-admin/dashboard");
+            }
+          } catch {
+            router.push("/admin");
+          }
+        }
+        router.refresh();
+      } else {
+        hideSplash();
+      }
+    } catch (err: unknown) {
+      hideSplash();
+      const message = err instanceof Error ? err.message : "An unexpected error occurred. Please try again.";
+      setErrorMessage(message);
+      setTimeout(() => {
+        setErrorMessage(null);
+      }, 3200);
+    }
+  };
+
+  const handleForgotPasswordClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    triggerSplash(1200);
+    setShowForgotModal(true);
+    setForgotSuccess(null);
+    setForgotError(null);
+    if (email) setForgotEmail(email);
+  };
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail.trim()) return;
+
+    setForgotLoading(true);
+    setForgotError(null);
+    setForgotSuccess(null);
+
+    // Trigger splash screen
+    triggerSplash(1200);
+
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail.trim(), {
+        redirectTo: `${window.location.origin}/login`,
+      });
+
+      if (error) {
+        setForgotError(error.message);
+      } else {
+        setForgotSuccess("Password reset instructions sent to your email.");
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to send reset link.";
+      setForgotError(message);
+    } finally {
+      setForgotLoading(false);
+    }
   };
 
   return (
     <div className="relative min-h-screen flex flex-col">
       {/* 1. Header Navbar */}
       <Navbar />
+
+      {/* Floating Error Tooltip on Invalid Login */}
+      {errorMessage && (
+        <div className="fixed top-[88px] right-6 sm:right-8 z-50 flex items-center px-4 py-2 rounded-full bg-[#ef4444]/15 backdrop-blur-2xl border border-[#ef4444]/40 text-[#ef4444] shadow-xl shadow-black/40 animate-in fade-in slide-in-from-top-3 duration-300 pointer-events-none select-none">
+          <span className="text-xs sm:text-sm font-semibold tracking-tight">
+            {errorMessage}
+          </span>
+        </div>
+      )}
 
       <main className="flex-1 flex flex-col items-center justify-start sm:justify-center pt-24 sm:pt-32 md:pt-36 pb-12 sm:pb-16 px-4 sm:px-6">
         {/* Ambient Glow */}
@@ -34,9 +158,13 @@ export default function LoginPage() {
           <div className="bg-[var(--bg-deep)]/85 backdrop-blur-2xl border border-[var(--border)] rounded-2xl sm:rounded-3xl p-7 sm:p-9 shadow-2xl space-y-6">
             {/* Header */}
             <div className="text-center space-y-2">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-[#e3b13b] to-[#e04e17] text-[#241a06] font-display font-extrabold text-lg shadow-lg shadow-[var(--gold-glow)] mb-2">
-                FN
-              </div>
+              <Image
+                src="/logo.png"
+                alt="Omnibites"
+                width={52}
+                height={52}
+                className="w-12 h-12 sm:w-14 sm:h-14 object-contain mx-auto mb-2"
+              />
               <h1 className="font-display font-bold text-2xl sm:text-3xl text-[var(--text-hi)]">
                 Welcome Back
               </h1>
@@ -68,13 +196,13 @@ export default function LoginPage() {
                   <label className="block text-xs font-semibold text-[var(--text-hi)] uppercase tracking-wider">
                     Password
                   </label>
-                  <a
-                    href="#forgot"
-                    onClick={(e) => e.preventDefault()}
-                    className="text-xs text-[var(--gold)] hover:underline"
+                  <button
+                    type="button"
+                    onClick={handleForgotPasswordClick}
+                    className="text-xs text-[var(--gold)] hover:underline cursor-pointer focus:outline-none"
                   >
                     Forgot password?
-                  </a>
+                  </button>
                 </div>
                 <div className="relative">
                   <input
@@ -122,25 +250,103 @@ export default function LoginPage() {
               {/* Submit Button */}
               <button
                 type="submit"
-                className="w-full btn-gold py-3 text-sm font-bold shadow-lg shadow-[var(--gold-glow)] mt-2"
+                disabled={isSplashVisible}
+                className="w-full btn-gold py-3 text-sm font-bold shadow-lg shadow-[var(--gold-glow)] mt-2 disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
               >
-                Sign In
+                <span>Sign In</span>
               </button>
             </form>
 
             {/* Switch to Sign Up */}
             <div className="pt-2 text-center text-xs text-[var(--text-lo)] border-t border-[var(--border)]/60">
               Don&apos;t have an account?{" "}
-              <Link href="/signup" className="text-[var(--gold)] font-semibold hover:underline">
+              <Link
+                href="/signup"
+                onClick={(e) => {
+                  e.preventDefault();
+                  triggerSplash(1200);
+                  router.push("/signup");
+                }}
+                className="text-[var(--gold)] font-semibold hover:underline"
+              >
                 Create Account
               </Link>
             </div>
           </div>
         </div>
-      </main>
 
-      {/* 3. Footer */}
-      <Footer />
+        {/* Forgot Password Modal */}
+        {showForgotModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
+            <div className="bg-[var(--bg-deep)] border border-[var(--border)] rounded-2xl sm:rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl space-y-5 relative">
+              <button
+                type="button"
+                onClick={() => setShowForgotModal(false)}
+                className="absolute top-4 right-4 p-2 text-[var(--text-faint)] hover:text-[var(--text-hi)] rounded-lg hover:bg-[var(--surface-hi)] transition-colors"
+                aria-label="Close modal"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+
+              <div className="space-y-2">
+                <h2 className="font-display font-bold text-xl sm:text-2xl text-[var(--text-hi)]">
+                  Reset Password
+                </h2>
+                <p className="text-xs sm:text-sm text-[var(--text-lo)]">
+                  Enter your email address and we will send you instructions to reset your password.
+                </p>
+              </div>
+
+              {forgotError && (
+                <div className="p-3 rounded-xl bg-[var(--orange-dim)] border border-[var(--orange)]/40 text-[var(--text-hi)] text-xs">
+                  {forgotError}
+                </div>
+              )}
+
+              {forgotSuccess && (
+                <div className="p-3 rounded-xl bg-[#25d366]/15 border border-[#25d366]/40 text-[var(--text-hi)] text-xs">
+                  {forgotSuccess}
+                </div>
+              )}
+
+              <form onSubmit={handleForgotSubmit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-[var(--text-hi)] uppercase tracking-wider">
+                    Email Address
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={forgotEmail}
+                    onChange={(e) => setForgotEmail(e.target.value)}
+                    placeholder="owner@restaurant.pk"
+                    className="w-full px-4 py-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-sm text-[var(--text-hi)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--gold)] focus:ring-1 focus:ring-[var(--gold)] transition-colors"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowForgotModal(false)}
+                    className="px-4 py-2 text-xs font-semibold text-[var(--text-lo)] hover:text-[var(--text-hi)] transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={forgotLoading}
+                    className="btn-gold px-5 py-2.5 text-xs font-bold shadow-md shadow-[var(--gold-glow)] cursor-pointer disabled:opacity-60"
+                  >
+                    {forgotLoading ? "Sending..." : "Send Reset Link"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </main>
 
       {/* WhatsApp Floating Action Button */}
       <WhatsAppFloat />

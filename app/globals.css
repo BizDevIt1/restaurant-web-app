@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: dark;
   --bg: #342c14;
   --bg-deep: #140c0c;
   --bg-soft: #241d10;
@@ -18,12 +19,53 @@
   --olive-dim: rgba(163, 129, 44, 0.18);
   --rust: #8a300e;
   --rust-dim: rgba(138, 48, 14, 0.2);
+  --red: #ff4d4f;
+  --red-dim: rgba(255, 77, 79, 0.16);
   --text-hi: #f7f0dd;
   --text-lo: #c1b295;
   --text-faint: #8d8067;
   --radius: 18px;
   --radius-pill: 20px;
   --max-width: 1200px;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f8f6f0;
+  --bg-deep: #ede8dc;
+  --bg-soft: #ffffff;
+  --surface: rgba(52, 44, 20, 0.045);
+  --surface-hi: rgba(52, 44, 20, 0.08);
+  --border: rgba(52, 44, 20, 0.15);
+  --border-hi: rgba(52, 44, 20, 0.28);
+  --gold: #b88519;
+  --gold-dim: rgba(184, 133, 25, 0.14);
+  --gold-glow: rgba(184, 133, 25, 0.35);
+  --orange: #c73e0e;
+  --orange-dim: rgba(199, 62, 14, 0.14);
+  --orange-glow: rgba(199, 62, 14, 0.35);
+  --olive: #785c18;
+  --olive-dim: rgba(120, 92, 24, 0.14);
+  --rust: #6e2006;
+  --rust-dim: rgba(110, 32, 6, 0.14);
+  --red: #dc2626;
+  --red-dim: rgba(220, 38, 38, 0.14);
+  --text-hi: #342c14;
+  --text-lo: #5c4e26;
+  --text-faint: #8a7c55;
+}
+
+select {
+  color-scheme: dark;
+}
+
+[data-theme="light"] select {
+  color-scheme: light;
+}
+
+select option {
+  background-color: var(--bg-deep);
+  color: var(--text-hi);
 }
 
 /* Base Body Ambient Background */
@@ -62,7 +104,7 @@ h1, h2, h3, h4, h5, h6 {
   align-items: center;
   justify-content: center;
   background: linear-gradient(135deg, #f5c85c 0%, #e3b13b 50%, #c99624 100%);
-  color: #241a06;
+  color: #342c14;
   font-weight: 700;
   border-radius: var(--radius-pill);
   box-shadow: 0 4px 20px var(--gold-glow);
@@ -109,20 +151,13 @@ h1, h2, h3, h4, h5, h6 {
   transform: translateY(0);
 }
 
-/* Card Surface & Hover */
+/* Card Surface */
 .glass-panel {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.glass-panel:hover {
-  border-color: var(--border-hi);
-  background: var(--surface-hi);
-  transform: translateY(-3px);
 }
 
 .glass-panel-static {
@@ -416,4 +451,36 @@ h1, h2, h3, h4, h5, h6 {
   .hero-glitch-slice-2 {
     animation: none !important;
   }
+}
+
+/* Light Sheen Button Animation */
+@keyframes light-sheen {
+  0% {
+    transform: translateX(-160%) skewX(-25deg);
+  }
+  25%, 100% {
+    transform: translateX(260%) skewX(-25deg);
+  }
+}
+
+.animate-sheen {
+  position: relative;
+  overflow: hidden;
+}
+
+.animate-sheen::after {
+  content: "";
+  position: absolute;
+  top: -50%;
+  bottom: -50%;
+  left: 0;
+  width: 50%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+  animation: light-sheen 4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+/* Smooth theme transition */
+html {
+  transition: background-color 0.4s ease, color 0.4s ease;
 }

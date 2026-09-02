@@ -1,23 +1,23 @@
 "use client";
 
 import React, { useEffect } from "react";
-import Navbar from "./components/landing/Navbar";
-import HeroOrbit from "./components/landing/HeroOrbit";
-import ProblemSolution from "./components/landing/ProblemSolution";
-import Demo from "./components/landing/Demo";
-import FeatureGrid from "./components/landing/FeatureGrid";
-import HowItWorks from "./components/landing/HowItWorks";
-import WhoItsFor from "./components/landing/WhoItsFor";
-import ProductShowcase from "./components/landing/ProductShowcase";
-import RoiSection from "./components/landing/RoiSection";
-import EarlyPartners from "./components/landing/EarlyPartners";
-import IntegrationsGrid from "./components/landing/IntegrationsGrid";
-import SecuritySection from "./components/landing/SecuritySection";
-import FaqAccordion from "./components/landing/FaqAccordion";
-import AboutManifesto from "./components/landing/AboutManifesto";
-import FinalCta from "./components/landing/FinalCta";
-import Footer from "./components/landing/Footer";
-import WhatsAppFloat from "./components/landing/WhatsAppFloat";
+import Navbar from "./components/Navbar";
+import HeroOrbit from "./components/HeroOrbit";
+import ProblemSolution from "./components/ProblemSolution";
+import Demo from "./components/Demo";
+import FeatureGrid from "./components/FeatureGrid";
+import HowItWorks from "./components/HowItWorks";
+import WhoItsFor from "./components/WhoItsFor";
+import ProductShowcase from "./components/ProductShowcase";
+import RoiSection from "./components/RoiSection";
+import EarlyPartners from "./components/EarlyPartners";
+import IntegrationsGrid from "./components/IntegrationsGrid";
+import SecuritySection from "./components/SecuritySection";
+import FaqAccordion from "./components/FaqAccordion";
+import AboutManifesto from "./components/AboutManifesto";
+import FinalCta from "./components/FinalCta";
+import Footer from "./components/Footer";
+import WhatsAppFloat from "./components/WhatsAppFloat";
 
 export default function Home() {
   useEffect(() => {
