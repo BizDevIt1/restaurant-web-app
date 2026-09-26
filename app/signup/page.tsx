@@ -48,6 +48,11 @@ export default function SignUpPage() {
       }
 
       if (data?.session) {
+        if (typeof window !== "undefined") {
+          try {
+            localStorage.setItem("sa_admin_current_password", password);
+          } catch {}
+        }
         router.push("/super-admin/dashboard");
         router.refresh();
       } else {
@@ -56,7 +61,14 @@ export default function SignUpPage() {
       }
     } catch (err: unknown) {
       hideSplash();
-      const message = err instanceof Error ? err.message : "Failed to create account. Please try again.";
+      let message = "Failed to create account. Please try again.";
+      if (err instanceof Error) {
+        if (err.message.includes("Failed to fetch") || err.name === "TypeError") {
+          message = "Unable to reach the server. Please check your internet connection or verify your Supabase project status.";
+        } else {
+          message = err.message;
+        }
+      }
       setErrorMessage(message);
     }
   };

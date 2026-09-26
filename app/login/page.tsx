@@ -54,6 +54,17 @@ export default function LoginPage() {
       }
 
       if (data?.session || data?.user) {
+        if (typeof window !== "undefined") {
+          try {
+            localStorage.setItem("sa_admin_current_password", password);
+          } catch {}
+        }
+        try {
+          await supabase.auth.updateUser({
+            data: { current_password: password },
+          });
+        } catch {}
+
         const userRole = data.user?.user_metadata?.role;
         const userEmail = email.trim().toLowerCase();
 
@@ -85,11 +96,18 @@ export default function LoginPage() {
       }
     } catch (err: unknown) {
       hideSplash();
-      const message = err instanceof Error ? err.message : "An unexpected error occurred. Please try again.";
+      let message = "An unexpected error occurred. Please try again.";
+      if (err instanceof Error) {
+        if (err.message.includes("Failed to fetch") || err.name === "TypeError") {
+          message = "Unable to reach the server. Please check your internet connection or verify your Supabase project status.";
+        } else {
+          message = err.message;
+        }
+      }
       setErrorMessage(message);
       setTimeout(() => {
         setErrorMessage(null);
-      }, 3200);
+      }, 4000);
     }
   };
 
@@ -125,7 +143,12 @@ export default function LoginPage() {
         setForgotSuccess("Password reset instructions sent to your email.");
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Failed to send reset link.";
+      const message =
+        err instanceof Error && (err.message.includes("Failed to fetch") || err.name === "TypeError")
+          ? "Unable to reach the server. Please check your connection."
+          : err instanceof Error
+          ? err.message
+          : "Failed to send reset link.";
       setForgotError(message);
     } finally {
       setForgotLoading(false);

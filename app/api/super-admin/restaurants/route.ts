@@ -124,6 +124,9 @@ function buildInviteEmailHtml({
 </html>`;
 }
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function GET() {
   try {
     const { data, error } = await supabase
@@ -135,7 +138,14 @@ export async function GET() {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
-    return NextResponse.json({ restaurants: data || [] });
+    return NextResponse.json(
+      { restaurants: data || [] },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+        },
+      }
+    );
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : "Failed to fetch restaurants";
     return NextResponse.json({ error: errorMsg }, { status: 500 });
@@ -158,6 +168,7 @@ export async function POST(request: Request) {
       initial_status,
       branches,
       enabled_modules,
+      logo_url,
     } = body;
 
     // 1. Mandatory Validations
@@ -174,7 +185,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Owner email is required to create admin account" }, { status: 400 });
     }
 
-    // 2. Create or Update Supabase Auth User with direct password
+    // 2. Create or Update Supabase Auth User with direct password (Fast path)
     let owner_id: string | null = null;
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
     const redirectUrl = `${siteUrl}/auth/update-password`;
@@ -182,133 +193,93 @@ export async function POST(request: Request) {
     let isExistingUser = false;
 
     try {
-      // Check if user already exists in Supabase Auth
-      const { data: usersData } = await supabase.auth.admin.listUsers();
-      const existingUser = usersData?.users?.find(
-        (u) => u.email?.toLowerCase() === trimmedEmail.toLowerCase()
-      );
+      const initialPass = trimmedPassword || "AdminPass123!";
 
-      if (existingUser) {
-        owner_id = existingUser.id;
+      // Fast attempt: Create user directly
+      const { data: newUserData, error: createError } = await supabase.auth.admin.createUser({
+        email: trimmedEmail,
+        password: initialPass,
+        email_confirm: true,
+        user_metadata: {
+          full_name: trimmedContact || trimmedBrand,
+          brand_name: trimmedBrand,
+          role: "restaurant_admin",
+        },
+      });
+
+      if (!createError && newUserData?.user?.id) {
+        owner_id = newUserData.user.id;
+        console.log(`[Supabase Auth] New restaurant admin created! User ID: ${owner_id}`);
+      } else {
+        // User already exists or createUser returned notice
         isExistingUser = true;
-        console.log(`[Supabase Auth] Found existing user: ${owner_id}`);
+        console.log(`[Supabase Auth] Existing user notice for ${trimmedEmail}:`, createError?.message);
 
-        // Update password & metadata for existing user if password was provided
-        const updatePayload: {
-          password?: string;
-          email_confirm?: boolean;
-          user_metadata: Record<string, any>;
-        } = {
-          email_confirm: true,
-          user_metadata: {
-            full_name: trimmedContact || trimmedBrand,
-            brand_name: trimmedBrand,
-            role: "restaurant_admin",
-          },
-        };
-        if (trimmedPassword) {
-          updatePayload.password = trimmedPassword;
+        // Fast lookup for owner_id from restaurants table
+        const { data: existingRest } = await supabase
+          .from("restaurants")
+          .select("owner_id")
+          .eq("owner_email", trimmedEmail)
+          .not("owner_id", "is", null)
+          .limit(1)
+          .maybeSingle();
+
+        if (existingRest?.owner_id) {
+          owner_id = existingRest.owner_id;
         }
-        await supabase.auth.admin.updateUserById(existingUser.id, updatePayload);
 
-        // Generate recovery link if needed for email
+        // Generate recovery link for invite url
         const { data: recoveryData } = await supabase.auth.admin.generateLink({
           type: "recovery",
           email: trimmedEmail,
           options: { redirectTo: redirectUrl },
         });
+
         if (recoveryData?.properties?.action_link) {
           inviteUrl = recoveryData.properties.action_link;
-        }
-      } else {
-        // Create new user directly with password and email_confirm: true
-        const initialPass = trimmedPassword || "AdminPass123!";
-        const { data: newUserData, error: createError } = await supabase.auth.admin.createUser({
-          email: trimmedEmail,
-          password: initialPass,
-          email_confirm: true,
-          user_metadata: {
-            full_name: trimmedContact || trimmedBrand,
-            brand_name: trimmedBrand,
-            role: "restaurant_admin",
-          },
-        });
-
-        if (createError) {
-          console.error("[Supabase CreateUser Error]:", createError);
-          // Fallback to generateLink if createUser had a glitch
-          const { data: inviteLinkData } = await supabase.auth.admin.generateLink({
-            type: "invite",
-            email: trimmedEmail,
-            options: {
-              data: {
-                full_name: trimmedContact || trimmedBrand,
-                brand_name: trimmedBrand,
-                role: "restaurant_admin",
-              },
-              redirectTo: redirectUrl,
-            },
-          });
-          if (inviteLinkData?.properties?.action_link) {
-            owner_id = inviteLinkData.user?.id || null;
-            inviteUrl = inviteLinkData.properties.action_link;
+          if (!owner_id && recoveryData.user?.id) {
+            owner_id = recoveryData.user.id;
           }
-        } else if (newUserData?.user?.id) {
-          owner_id = newUserData.user.id;
-          console.log(`[Supabase Auth] New restaurant admin created with direct password! User ID: ${owner_id}`);
+        }
+
+        // If we identified owner_id, update password & metadata
+        if (owner_id) {
+          const updatePayload: {
+            password?: string;
+            email_confirm?: boolean;
+            user_metadata: Record<string, any>;
+          } = {
+            email_confirm: true,
+            user_metadata: {
+              full_name: trimmedContact || trimmedBrand,
+              brand_name: trimmedBrand,
+              role: "restaurant_admin",
+            },
+          };
+          if (trimmedPassword) {
+            updatePayload.password = trimmedPassword;
+          }
+          await supabase.auth.admin.updateUserById(owner_id, updatePayload);
         }
       }
     } catch (authErr: unknown) {
       console.error("[Supabase Auth Link Exception]:", authErr);
     }
 
-    // 3. Send Transactional Email via Resend SDK
-    let emailSent = false;
-    let resendMessageId: string | null = null;
-    let emailError: string | null = null;
-
-    if (resend) {
+    // 3. Database Insertion with JSONB arrays and owner_id (Primary Priority)
+    let branchesArray: any[] = [];
+    if (typeof branches === "string") {
       try {
-        const fromEmail = process.env.RESEND_FROM_EMAIL || "Omnibites <onboarding@resend.dev>";
-        const emailHtml = buildInviteEmailHtml({
-          brandName: trimmedBrand,
-          contactPerson: trimmedContact,
-          city: String(city || "Lahore").trim(),
-          assignedPlan: String(assigned_plan || "Enterprise Plus").trim(),
-          ownerEmail: trimmedEmail,
-          inviteUrl: inviteUrl,
-        });
-
-        const resendRes = await resend.emails.send({
-          from: fromEmail,
-          to: trimmedEmail,
-          subject: `Action Required: Set up your restaurant portal for ${trimmedBrand}`,
-          html: emailHtml,
-        });
-
-        if (resendRes.error) {
-          console.error("[Resend Error]:", resendRes.error);
-          emailError = resendRes.error.message;
-        } else {
-          emailSent = true;
-          resendMessageId = resendRes.data?.id || null;
-          console.log(`[Resend Success]: Email sent to ${trimmedEmail} (ID: ${resendMessageId})`);
-        }
-      } catch (rErr: unknown) {
-        const rMsg = rErr instanceof Error ? rErr.message : "Failed to dispatch email via Resend";
-        console.error("[Resend Exception]:", rMsg);
-        emailError = rMsg;
+        const parsed = JSON.parse(branches);
+        branchesArray = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        branchesArray = branches ? [{ name: branches, address: "" }] : [];
       }
-    } else {
-      console.warn("[Resend Notice]: RESEND_API_KEY is not configured in environment. Skipping email dispatch.");
+    } else if (Array.isArray(branches)) {
+      branchesArray = branches;
+    } else if (branches) {
+      branchesArray = [branches];
     }
-
-    // 4. Database Insertion with JSONB arrays and owner_id
-    const branchesArray = Array.isArray(branches)
-      ? branches
-      : branches
-      ? [branches]
-      : [];
 
     const modulesArray = Array.isArray(enabled_modules)
       ? enabled_modules
@@ -329,6 +300,7 @@ export async function POST(request: Request) {
       branches: branchesArray,
       enabled_modules: modulesArray,
       owner_id: owner_id,
+      logo_url: logo_url ? String(logo_url).trim() : null,
     };
 
     const { data, error: dbError } = await supabase
@@ -342,13 +314,48 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Database insertion failed: ${dbError.message}` }, { status: 400 });
     }
 
+    // 4. Send Transactional Email via Resend SDK asynchronously in background (Non-blocking)
+    let emailSent = false;
+    if (resend) {
+      const fromEmail = process.env.RESEND_FROM_EMAIL || "Omnibites <onboarding@resend.dev>";
+      const emailHtml = buildInviteEmailHtml({
+        brandName: trimmedBrand,
+        contactPerson: trimmedContact,
+        city: String(city || "Lahore").trim(),
+        assignedPlan: String(assigned_plan || "Enterprise Plus").trim(),
+        ownerEmail: trimmedEmail,
+        inviteUrl: inviteUrl,
+      });
+
+      resend.emails
+        .send({
+          from: fromEmail,
+          to: trimmedEmail,
+          subject: `Action Required: Set up your restaurant portal for ${trimmedBrand}`,
+          html: emailHtml,
+        })
+        .then((resendRes) => {
+          if (resendRes.error) {
+            console.error("[Resend Async Error]:", resendRes.error);
+          } else {
+            console.log(`[Resend Async Success]: Email sent to ${trimmedEmail} (ID: ${resendRes.data?.id})`);
+          }
+        })
+        .catch((rErr) => {
+          console.error("[Resend Async Exception]:", rErr);
+        });
+
+      emailSent = true;
+    } else {
+      console.warn("[Resend Notice]: RESEND_API_KEY is not configured in environment. Skipping email dispatch.");
+    }
+
     return NextResponse.json({
       success: true,
       restaurant: data,
       owner_id,
       isExistingUser,
       emailSent,
-      emailError,
       inviteLink: inviteUrl,
       message: emailSent
         ? `Restaurant registered and invitation email sent to ${trimmedEmail} via Resend.`
@@ -364,7 +371,22 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   try {
     const body = await request.json();
-    const { id, initial_status, brand_name, city, cuisine, assigned_plan, phone } = body;
+    const {
+      id,
+      initial_status,
+      brand_name,
+      city,
+      cuisine,
+      assigned_plan,
+      phone,
+      hq_address,
+      contact_person,
+      owner_email,
+      owner_password,
+      branches,
+      enabled_modules,
+      logo_url,
+    } = body;
 
     const numericId = typeof id === "number" ? id : parseInt(String(id).replace(/[^0-9]/g, ""), 10);
 
@@ -373,12 +395,67 @@ export async function PUT(request: Request) {
     }
 
     const payload: Record<string, any> = {};
-    if (initial_status !== undefined) payload.initial_status = initial_status;
-    if (brand_name !== undefined) payload.brand_name = brand_name;
-    if (city !== undefined) payload.city = city;
-    if (cuisine !== undefined) payload.cuisine = cuisine;
-    if (assigned_plan !== undefined) payload.assigned_plan = assigned_plan;
-    if (phone !== undefined) payload.phone = phone;
+    if (initial_status !== undefined) payload.initial_status = String(initial_status).trim();
+    if (brand_name !== undefined) payload.brand_name = String(brand_name).trim();
+    if (city !== undefined) payload.city = String(city).trim();
+    if (cuisine !== undefined) payload.cuisine = String(cuisine).trim();
+    if (assigned_plan !== undefined) payload.assigned_plan = String(assigned_plan).trim();
+    if (phone !== undefined) payload.phone = String(phone).trim();
+    if (hq_address !== undefined) payload.hq_address = String(hq_address).trim();
+    if (contact_person !== undefined) payload.contact_person = String(contact_person).trim();
+    if (owner_email !== undefined) payload.owner_email = String(owner_email).trim();
+
+    if (branches !== undefined) {
+      if (typeof branches === "string") {
+        try {
+          const parsed = JSON.parse(branches);
+          payload.branches = Array.isArray(parsed) ? parsed : [parsed];
+        } catch {
+          payload.branches = branches ? [{ name: branches, address: "" }] : [];
+        }
+      } else {
+        payload.branches = Array.isArray(branches) ? branches : [branches];
+      }
+    }
+    if (enabled_modules !== undefined) {
+      payload.enabled_modules = Array.isArray(enabled_modules) ? enabled_modules : [enabled_modules];
+    }
+    if (logo_url !== undefined) {
+      payload.logo_url = logo_url ? String(logo_url).trim() : null;
+    }
+
+    // If owner_password is provided in update, update Supabase Auth User password
+    if (owner_password && String(owner_password).trim().length >= 6) {
+      const trimmedPass = String(owner_password).trim();
+      try {
+        const { data: currentRest } = await supabase
+          .from("restaurants")
+          .select("owner_id, owner_email")
+          .eq("id", numericId)
+          .single();
+
+        let authUserId = currentRest?.owner_id;
+        const targetEmail = owner_email || currentRest?.owner_email;
+
+        if (!authUserId && targetEmail) {
+          const { data: recoveryData } = await supabase.auth.admin.generateLink({
+            type: "recovery",
+            email: targetEmail,
+          });
+          if (recoveryData?.user?.id) {
+            authUserId = recoveryData.user.id;
+          }
+        }
+
+        if (authUserId) {
+          await supabase.auth.admin.updateUserById(authUserId, {
+            password: trimmedPass,
+          });
+        }
+      } catch (authErr) {
+        console.warn("[Auth Password Update Warning]:", authErr);
+      }
+    }
 
     const { data, error } = await supabase
       .from("restaurants")

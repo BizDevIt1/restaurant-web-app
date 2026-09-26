@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase";
 import {
   LayoutDashboard,
   UtensilsCrossed,
@@ -327,6 +328,23 @@ export default function AdminDashboardClient({
   const [branchStatus, setBranchStatus] = useState<"open" | "rush" | "paused">("open");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Dynamic White-Labeled Restaurant Branding State
+  const [restaurantBranding, setRestaurantBranding] = useState<{
+    name: string;
+    logoUrl: string | null;
+    branchName: string;
+    address: string;
+    city: string;
+    cuisine: string;
+  }>({
+    name: "Omnibites POS",
+    logoUrl: null,
+    branchName: "Gulberg Main Outlet",
+    address: "MM Alam Road, Block B2, Lahore",
+    city: "Lahore",
+    cuisine: "Fine Dining",
+  });
+
   // POS State
   const [menuItems, setMenuItems] = useState<MenuItem[]>(INITIAL_MENU);
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
@@ -361,6 +379,65 @@ export default function AdminDashboardClient({
         document.documentElement.setAttribute("data-theme", savedTheme);
       }
     }
+  }, []);
+
+  // Fetch Tenant Restaurant Branding dynamically for white-labeling
+  useEffect(() => {
+    const fetchTenantBranding = async () => {
+      try {
+        const supabase = createClient();
+        const { data: userData } = await supabase.auth.getUser();
+        const user = userData?.user;
+
+        let queryParam = "";
+        if (user?.email) {
+          queryParam = `?email=${encodeURIComponent(user.email)}`;
+        } else if (user?.id) {
+          queryParam = `?owner_id=${encodeURIComponent(user.id)}`;
+        }
+
+        const res = await fetch(`/api/admin/restaurant${queryParam}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.restaurant) {
+            const r = data.restaurant;
+            const primaryBranch = r.branches?.[0]?.name || r.hq_address || "Main Outlet";
+            const primaryAddress = r.branches?.[0]?.address || r.hq_address || `${r.city || "Lahore"}, Pakistan`;
+
+            setRestaurantBranding({
+              name: r.brand_name || "Omnibites POS",
+              logoUrl: r.logo_url || null,
+              branchName: primaryBranch,
+              address: primaryAddress,
+              city: r.city || "Lahore",
+              cuisine: r.cuisine || "Fine Dining",
+            });
+            return;
+          }
+        }
+
+        // Fallback: check localStorage for cached restaurant details
+        const cached = localStorage.getItem("sa_restaurants");
+        if (cached) {
+          const list = JSON.parse(cached);
+          if (Array.isArray(list) && list.length > 0) {
+            const first = list[0];
+            setRestaurantBranding({
+              name: first.name || first.brand_name || "Omnibites POS",
+              logoUrl: first.logoUrl || first.logo_url || null,
+              branchName: first.branch || first.hqAddress || "Main Outlet",
+              address: first.hqAddress || first.branch || `${first.city || "Lahore"}, Pakistan`,
+              city: first.city || "Lahore",
+              cuisine: first.category || first.cuisine || "Fine Dining",
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to load restaurant branding:", e);
+      }
+    };
+
+    fetchTenantBranding();
   }, []);
 
   const toggleTheme = () => {
@@ -493,17 +570,36 @@ export default function AdminDashboardClient({
         <div>
           <div className="h-20 flex items-center justify-between px-5 border-b border-[var(--border)]">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#f5c85c] via-[#e3b13b] to-[#e04e17] flex items-center justify-center text-[#342c14] font-black text-base shadow-lg shadow-[var(--gold-glow)] shrink-0">
-                <Store className="w-5 h-5 stroke-[2.5]" />
-              </div>
+              {restaurantBranding.logoUrl ? (
+                <div className="w-10 h-10 rounded-2xl overflow-hidden border border-[var(--gold)]/40 bg-[var(--surface-hi)] flex items-center justify-center shrink-0 shadow-lg shadow-[var(--gold-glow)]">
+                  <img
+                    src={restaurantBranding.logoUrl}
+                    alt={restaurantBranding.name}
+                    className="w-full h-full object-contain p-0.5"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = "none";
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#f5c85c] via-[#e3b13b] to-[#e04e17] flex items-center justify-center text-[#342c14] font-black text-base shadow-lg shadow-[var(--gold-glow)] shrink-0">
+                  {restaurantBranding.name && restaurantBranding.name !== "Omnibites POS" ? (
+                    <span className="text-xs font-black">
+                      {restaurantBranding.name.slice(0, 2).toUpperCase()}
+                    </span>
+                  ) : (
+                    <Store className="w-5 h-5 stroke-[2.5]" />
+                  )}
+                </div>
+              )}
               {!isSidebarCollapsed && (
                 <div className="min-w-0">
                   <h2 className="font-display font-extrabold text-sm text-[var(--text-hi)] leading-tight truncate">
-                    Omnibites <span className="text-[var(--gold)]">POS</span>
+                    {restaurantBranding.name}
                   </h2>
                   <p className="text-[10.5px] font-mono text-[var(--text-faint)] truncate flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-[#25d366] animate-pulse" />
-                    Gulberg Main Outlet
+                    {restaurantBranding.branchName}
                   </p>
                 </div>
               )}
@@ -616,18 +712,27 @@ export default function AdminDashboardClient({
         <header className="h-20 bg-[var(--bg-deep)]/80 backdrop-blur-xl border-b border-[var(--border)] px-5 sm:px-8 flex items-center justify-between gap-4 sticky top-0 z-30 shrink-0">
           {/* Branch Identity & Live Status Toggle */}
           <div className="flex items-center gap-3 min-w-0">
+            {restaurantBranding.logoUrl && (
+              <div className="w-10 h-10 rounded-xl overflow-hidden border border-[var(--gold)]/30 bg-[var(--surface-hi)] flex items-center justify-center shrink-0 shadow-sm hidden sm:flex">
+                <img
+                  src={restaurantBranding.logoUrl}
+                  alt={restaurantBranding.name}
+                  className="w-full h-full object-contain p-0.5"
+                />
+              </div>
+            )}
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="font-display font-black text-base sm:text-lg text-[var(--text-hi)] truncate">
-                  Gulberg Main Branch
+                  {restaurantBranding.name} — {restaurantBranding.branchName}
                 </h1>
                 <span className="hidden sm:inline-block px-2.5 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] font-mono text-[10px] font-bold uppercase border border-[var(--gold)]/30">
-                  Outlet #104
+                  {restaurantBranding.cuisine}
                 </span>
               </div>
               <p className="text-[11px] text-[var(--text-lo)] font-mono flex items-center gap-1.5">
                 <MapPin className="w-3 h-3 text-[var(--gold)]" />
-                MM Alam Road, Block B2, Lahore
+                {restaurantBranding.address}
               </p>
             </div>
           </div>
