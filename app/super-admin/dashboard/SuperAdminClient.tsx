@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { useSplash } from "@/components/SplashScreen";
+import { useCustomAlert } from "@/app/components/CustomAlertModal";
 import {
   LayoutDashboard,
   ShoppingBag,
@@ -57,6 +58,8 @@ import SubscriptionsPlansView from "../subscriptions&plans/SubscriptionsPlansVie
 import RestaurantsView from "../restaurants/RestaurantsView";
 import PaymentsView from "../payments/PaymentsView";
 import SettingsView from "../settings/SettingsView";
+import SuperAdminBottomDock from "../components/SuperAdminBottomDock";
+import SuperAdminMenuDrawer from "../components/SuperAdminMenuDrawer";
 
 // Count-up animation hook
 function useCountUp(target: number, duration: number = 1400) {
@@ -100,6 +103,7 @@ export default function SuperAdminClient({
   const router = useRouter();
   const pathname = usePathname();
   const { triggerSplash } = useSplash();
+  const { showAlert } = useCustomAlert();
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [activeNav, setActiveNav] = useState(() => {
     if (initialNav) return initialNav;
@@ -155,7 +159,7 @@ export default function SuperAdminClient({
     try {
       const saved = localStorage.getItem("sa_admin_avatar");
       if (saved) setAdminAvatarUrl(saved);
-    } catch {}
+    } catch { }
 
     const handleAvatarUpdate = (e: any) => {
       if (e.type === "storage" && e.key && e.key !== "sa_admin_avatar") return;
@@ -184,8 +188,74 @@ export default function SuperAdminClient({
     router.refresh();
   };
 
-  // New Vendor Approvals State (Real-time live queue)
-  const [pendingVendors, setPendingVendors] = useState<any[]>([]);
+  // Vendor & Exporter Verifications State (Retains Verified/Approved History)
+  const [pendingVendors, setPendingVendors] = useState<
+    Array<{
+      id: string;
+      name: string;
+      city: string;
+      category: string;
+      submitted: string;
+      initials: string;
+      color: string;
+      status: "PENDING" | "VERIFIED" | "REJECTED";
+      verifiedAt?: string;
+      sellerType?: string;
+      tradeLicense?: string;
+    }>
+  >([
+    {
+      id: "v-1",
+      name: "Saffron Grill & Biryani",
+      city: "Lahore · Gulberg III",
+      category: "Desi / Dine-in",
+      submitted: "12m ago",
+      initials: "SG",
+      color: "from-[#f5c85c] to-[#e3b13b]",
+      status: "PENDING",
+      sellerType: "Direct Exporter / Restaurant",
+      tradeLicense: "PK-TR-94281",
+    },
+    {
+      id: "v-2",
+      name: "Burger District 9",
+      city: "Karachi · DHA Phase 6",
+      category: "Fast Food / Takeaway",
+      submitted: "45m ago",
+      initials: "BD",
+      color: "from-[#e04e17] to-[#8a300e]",
+      status: "PENDING",
+      sellerType: "Cloud Kitchen / Exporter",
+      tradeLicense: "PK-TR-18293",
+    },
+    {
+      id: "v-3",
+      name: "Artisan Roasters & Cafe",
+      city: "Islamabad · F-7 Markaz",
+      category: "Cafe & Desserts",
+      submitted: "2h ago",
+      initials: "AR",
+      color: "from-[#a3812c] to-[#e3b13b]",
+      status: "PENDING",
+      sellerType: "Commercial Roastery",
+      tradeLicense: "PK-TR-55012",
+    },
+    {
+      id: "v-4",
+      name: "Indus Spice & Organic Grains",
+      city: "Multan · Industrial Zone",
+      category: "Agri-Bulk / Exporter",
+      submitted: "1d ago",
+      initials: "IS",
+      color: "from-[#25d366] to-[#128c7e]",
+      status: "VERIFIED",
+      verifiedAt: "Yesterday at 4:15 PM",
+      sellerType: "Certified Agri-Exporter",
+      tradeLicense: "PK-EXP-77291",
+    },
+  ]);
+
+  const [verificationFilter, setVerificationFilter] = useState<"ALL" | "PENDING" | "VERIFIED">("ALL");
 
   // Form State for Adding Restaurant
   const [newRestaurant, setNewRestaurant] = useState({
@@ -396,7 +466,7 @@ export default function SuperAdminClient({
               setAllRestaurants(mapRestaurantsForSearch(parsed));
             }
           }
-        } catch {}
+        } catch { }
       }
 
       // Primary: Secure internal API route (safe against CORS & extensions)
@@ -414,7 +484,7 @@ export default function SuperAdminClient({
             if (typeof window !== "undefined") {
               try {
                 localStorage.setItem("sa_restaurants", JSON.stringify(data.restaurants));
-              } catch {}
+              } catch { }
             }
             return;
           }
@@ -439,14 +509,14 @@ export default function SuperAdminClient({
             if (typeof window !== "undefined") {
               try {
                 localStorage.setItem("sa_restaurants", JSON.stringify(data));
-              } catch {}
+              } catch { }
             }
           }
         }
       } catch (dbErr) {
         // Safe fallback
       }
-    } catch {}
+    } catch { }
   };
 
   // Filtered restaurants for global search dropdown (By Name or By Location)
@@ -608,12 +678,16 @@ export default function SuperAdminClient({
 
     // 1. Restore saved theme
     try {
-      const savedTheme = localStorage.getItem("theme") as "dark" | "light" | null;
-      if (savedTheme) {
-        setTheme(savedTheme);
-        document.documentElement.setAttribute("data-theme", savedTheme);
+      const savedTheme = (localStorage.getItem("theme") || (localStorage as any).theme) as "dark" | "light" | null;
+      const active = savedTheme === "light" ? "light" : "dark";
+      setTheme(active);
+      document.documentElement.setAttribute("data-theme", active);
+      if (active === "dark") {
+        document.documentElement.classList.add("dark");
+        document.documentElement.classList.remove("light");
       } else {
-        document.documentElement.setAttribute("data-theme", "dark");
+        document.documentElement.classList.remove("dark");
+        document.documentElement.classList.add("light");
       }
     } catch {
       // ignore
@@ -730,10 +804,18 @@ export default function SuperAdminClient({
     setTheme(nextTheme);
     try {
       localStorage.setItem("theme", nextTheme);
+      (localStorage as any).theme = nextTheme;
     } catch {
       // ignore
     }
     document.documentElement.setAttribute("data-theme", nextTheme);
+    if (nextTheme === "dark") {
+      document.documentElement.classList.add("dark");
+      document.documentElement.classList.remove("light");
+    } else {
+      document.documentElement.classList.remove("dark");
+      document.documentElement.classList.add("light");
+    }
   };
 
   // Sidebar toggle handler with persistence in both localStorage and cookie
@@ -756,12 +838,52 @@ export default function SuperAdminClient({
   };
 
   const handleApproveVendor = (id: string, name: string) => {
-    setPendingVendors((prev) => prev.filter((v) => v.id !== id));
-    showToast(`Approved "${name}" — Credentials sent to owner`);
+    // 1. Retain approved verification in list with dynamic status update
+    setPendingVendors((prev) =>
+      prev.map((v) =>
+        v.id === id
+          ? {
+            ...v,
+            status: "VERIFIED" as const,
+            verifiedAt: "Just now",
+          }
+          : v
+      )
+    );
+
+    // 2. Custom solid dark-grey modal (zero purple glow/borders) replacing native alert()
+    showAlert({
+      title: "Verification Approved",
+      message: `Verification approved for "${name}"! Seller account status has been updated to Verified and credentials have been dispatched.`,
+      type: "success",
+      confirmText: "Understood",
+    });
+
+    showToast(`Approved & Verified "${name}" — Status updated to Verified`);
   };
 
   const handleRejectVendor = (id: string, name: string) => {
-    setPendingVendors((prev) => prev.filter((v) => v.id !== id));
+    // 1. Update status to Rejected dynamically
+    setPendingVendors((prev) =>
+      prev.map((v) =>
+        v.id === id
+          ? {
+            ...v,
+            status: "REJECTED" as const,
+            verifiedAt: "Rejected just now",
+          }
+          : v
+      )
+    );
+
+    // 2. Custom solid dark-grey modal
+    showAlert({
+      title: "Verification Rejected",
+      message: `Verification request for "${name}" was rejected. The applicant has been notified with revision instructions.`,
+      type: "warning",
+      confirmText: "Acknowledge",
+    });
+
     showToast(`Rejected request for "${name}"`);
   };
 
@@ -904,9 +1026,8 @@ export default function SuperAdminClient({
       <div className="flex min-h-screen w-full max-w-full">
         {/* ===================== 1. SIDEBAR (DESKTOP & TABLET >= 768px) ===================== */}
         <aside
-          className={`hidden md:flex flex-col shrink-0 bg-[var(--bg-deep)]/90 backdrop-blur-2xl border-r border-[var(--border)] sticky top-0 h-screen z-40 transition-[width] duration-300 ease-in-out ${
-            isSidebarCollapsed ? "w-[72px]" : "w-[252px]"
-          }`}
+          className={`hidden xl:flex flex-col shrink-0 bg-[var(--bg-deep)]/90 backdrop-blur-2xl border-r border-[var(--border)] sticky top-0 h-screen z-40 transition-[width] duration-300 ease-in-out ${isSidebarCollapsed ? "w-[72px]" : "w-[252px]"
+            }`}
         >
           {/* Brand Logo & Title with Toggle Action (Logo stays 100% fixed at x=36px) */}
           <div
@@ -927,11 +1048,10 @@ export default function SuperAdminClient({
 
             {/* Brand Text - smoothly slides in and out without moving the logo */}
             <div
-              className={`flex flex-col justify-center min-w-0 pr-4 overflow-hidden transition-all duration-300 ease-in-out ${
-                isSidebarCollapsed
+              className={`flex flex-col justify-center min-w-0 pr-4 overflow-hidden transition-all duration-300 ease-in-out ${isSidebarCollapsed
                   ? "w-0 opacity-0 -translate-x-3 pointer-events-none"
                   : "w-[170px] opacity-100 translate-x-0"
-              }`}
+                }`}
             >
               <span className="font-bold text-xl sm:text-[22px] tracking-tight leading-tight whitespace-nowrap">
                 <span className="text-[var(--text-hi)]">Omni</span>
@@ -952,11 +1072,10 @@ export default function SuperAdminClient({
                 <button
                   key={item.name}
                   onClick={() => handleNavClick(item.name)}
-                  className={`w-full flex items-center h-11 rounded-xl text-[13.5px] font-medium transition-all duration-200 relative group cursor-pointer ${
-                    isActive
+                  className={`w-full flex items-center h-11 rounded-xl text-[13.5px] font-medium transition-all duration-200 relative group cursor-pointer ${isActive
                       ? "bg-[var(--gold-dim)] text-[var(--gold)] shadow-sm font-semibold"
                       : "text-[var(--text-lo)] hover:text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
-                  }`}
+                    }`}
                 >
                   {/* Active Indicator Bar */}
                   {isActive && (
@@ -970,20 +1089,18 @@ export default function SuperAdminClient({
 
                   {/* Text and Badge smoothly expanding/collapsing */}
                   <div
-                    className={`flex-1 flex items-center justify-between pr-3 overflow-hidden transition-all duration-300 ease-in-out ${
-                      isSidebarCollapsed
+                    className={`flex-1 flex items-center justify-between pr-3 overflow-hidden transition-all duration-300 ease-in-out ${isSidebarCollapsed
                         ? "w-0 opacity-0 -translate-x-3 pointer-events-none"
                         : "w-auto opacity-100 translate-x-0"
-                    }`}
+                      }`}
                   >
                     <span className="whitespace-nowrap">{item.name}</span>
                     {item.badge && (
                       <span
-                        className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border shrink-0 ${
-                          isActive
+                        className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border shrink-0 ${isActive
                             ? "bg-[var(--gold)] text-[#342c14] border-transparent"
                             : "bg-[var(--surface-hi)] text-[var(--text-faint)] border-[var(--border)]"
-                        }`}
+                          }`}
                       >
                         {item.badge}
                       </span>
@@ -1023,11 +1140,10 @@ export default function SuperAdminClient({
 
               {/* Text smoothly expanding/collapsing */}
               <div
-                className={`flex-1 flex items-center justify-between pr-3 overflow-hidden transition-all duration-300 ease-in-out ${
-                  isSidebarCollapsed
+                className={`flex-1 flex items-center justify-between pr-3 overflow-hidden transition-all duration-300 ease-in-out ${isSidebarCollapsed
                     ? "w-0 opacity-0 -translate-x-3 pointer-events-none"
                     : "w-auto opacity-100 translate-x-0"
-                }`}
+                  }`}
               >
                 <span className="whitespace-nowrap font-bold text-[#ff4d4f]">Log Out</span>
               </div>
@@ -1047,131 +1163,34 @@ export default function SuperAdminClient({
           </div>
         </aside>
 
-        {/* ===================== MOBILE BOTTOM MENU MODAL (< 768px: 300px-767px) ===================== */}
-        {mobileSidebarOpen && (
-          <div
-            style={{ zIndex: 100000 }}
-            className="md:hidden fixed inset-0 flex flex-col justify-end"
-          >
-            {/* Backdrop */}
-            <div
-              className="fixed inset-0 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200"
-              onClick={() => setMobileSidebarOpen(false)}
-            />
+        {/* ===================== MOBILE / TABLET BOTTOM DOCK & MENU DRAWER (< 1024px) ===================== */}
+        <SuperAdminBottomDock
+          activeNav={activeNav}
+          onSelectNav={(nav) => handleNavClick(nav)}
+          onOpenMenuDrawer={() => setMobileSidebarOpen(true)}
+          userInitials="SA"
+          isHidden={mobileSidebarOpen}
+        />
 
-            {/* Bottom Sheet Modal Popup (Full Width on 300px-767px) */}
-            <div className="relative w-full bg-[var(--bg-deep)] border-t border-[var(--border)] rounded-t-[24px] sm:rounded-t-[28px] p-3.5 min-[360px]:p-5 pb-8 sm:p-6 sm:pb-10 shadow-[0_-12px_50px_rgba(0,0,0,0.8)] z-10 animate-in slide-in-from-bottom duration-200 select-none max-h-[85vh] overflow-y-auto">
-              {/* Top Drag Indicator / Handle */}
-              <div className="w-10 h-1 bg-[var(--border)] rounded-full mx-auto mb-2.5 min-[360px]:mb-3 sm:mb-4 shrink-0" />
-
-              {/* Sheet Header: "Menu" on left, Theme switch & Close on right */}
-              <div className="flex items-center justify-between pb-2.5 min-[360px]:pb-3 border-b border-[var(--border)] shrink-0">
-                <h3
-                  style={{ fontSize: "clamp(16px, 4.5vw, 20px)" }}
-                  className="font-bold text-[var(--text-hi)] tracking-tight"
-                >
-                  Menu
-                </h3>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={toggleTheme}
-                    className="p-1.5 min-[360px]:p-2 rounded-xl text-[var(--text-lo)] hover:text-[var(--text-hi)] hover:bg-[var(--surface-hi)] transition-colors"
-                    aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-                  >
-                    {theme === "dark" ? (
-                      <Sun className="w-5 h-5 text-[var(--gold)]" />
-                    ) : (
-                      <Moon className="w-5 h-5 text-indigo-400" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMobileSidebarOpen(false)}
-                    className="p-1.5 min-[360px]:p-2 rounded-xl text-[var(--text-lo)] hover:text-[var(--text-hi)] hover:bg-[var(--surface-hi)] transition-colors"
-                    aria-label="Close menu"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Grid of Navigation items */}
-              <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 min-[360px]:gap-2 sm:gap-3.5 pt-2.5 min-[360px]:pt-3">
-                {navOverview.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeNav === item.name;
-                  return (
-                    <button
-                      key={item.name}
-                      type="button"
-                      onClick={() => {
-                        handleNavClick(item.name);
-                        setMobileSidebarOpen(false);
-                      }}
-                      className={`group flex flex-col items-center justify-center p-2 min-[360px]:p-2.5 sm:p-3.5 min-h-[78px] min-[360px]:min-h-[86px] sm:min-h-[96px] rounded-2xl transition-all cursor-pointer select-none text-center ${
-                        isActive
-                          ? "bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/40 shadow-sm shadow-[var(--gold-glow)] scale-[1.02]"
-                          : "bg-[var(--surface-lo)]/40 hover:bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-[var(--text-hi)] border border-[var(--border)]/40 hover:border-[var(--border)]"
-                      }`}
-                    >
-                      <div className={`p-1.5 rounded-xl transition-all ${isActive ? "text-[var(--gold)]" : "text-[var(--text-lo)] group-hover:text-[var(--text-hi)]"}`}>
-                        <Icon className="w-5 h-5 sm:w-6 sm:h-6 shrink-0" />
-                      </div>
-                      <div className="w-full flex items-center justify-center min-h-[28px] px-0.5 text-center">
-                        <span
-                          style={{ fontSize: "clamp(10px, 2.7vw, 12.5px)" }}
-                          className={`leading-[1.15] line-clamp-2 text-center max-w-full tracking-tight ${
-                            isActive
-                              ? "font-bold text-[var(--gold)]"
-                              : "font-medium text-[var(--text-lo)] group-hover:text-[var(--text-hi)]"
-                          }`}
-                        >
-                          {item.name}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
-
-                {/* Log Out Tile */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMobileSidebarOpen(false);
-                    handleLogout();
-                  }}
-                  className="group flex flex-col items-center justify-center p-2 min-[360px]:p-2.5 sm:p-3.5 min-h-[78px] min-[360px]:min-h-[86px] sm:min-h-[96px] rounded-2xl bg-red-500/10 hover:bg-red-500/20 text-[#ff4d4f] border border-red-500/25 transition-all cursor-pointer select-none text-center"
-                >
-                  <div className="p-1.5 rounded-xl text-[#ff4d4f]">
-                    <LogOut className="w-5 h-5 sm:w-6 sm:h-6 shrink-0" />
-                  </div>
-                  <div className="w-full flex items-center justify-center min-h-[28px] px-0.5 text-center">
-                    <span
-                      style={{ fontSize: "clamp(10px, 2.7vw, 12.5px)" }}
-                      className="font-bold leading-[1.15] text-center max-w-full text-[#ff4d4f] tracking-tight"
-                    >
-                      Log Out
-                    </span>
-                  </div>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <SuperAdminMenuDrawer
+          isOpen={mobileSidebarOpen}
+          onClose={() => setMobileSidebarOpen(false)}
+          activeNav={activeNav}
+          onSelectNav={(nav) => handleNavClick(nav)}
+          theme={theme}
+          toggleTheme={toggleTheme}
+          onLogout={handleLogout}
+        />
 
         {/* ===================== 2. MAIN CONTENT AREA ===================== */}
         <div className="flex-1 flex flex-col min-w-0 w-full max-w-full">
           {/* ===================== TOP BAR ===================== */}
-          <header className="sticky top-0 z-40 h-16 sm:h-20 shrink-0 bg-[var(--bg-deep)]/95 backdrop-blur-xl border-b border-[var(--border)] px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2.5 sm:gap-4 shadow-sm">
-            {/* Left: Global Search Container (Single input, seamlessly expands on mobile when isSearchOpen is true) */}
-            <div
-              ref={searchContainerRef}
-              className="relative flex items-center gap-2 flex-1 max-w-xl min-w-0"
-            >
-              {/* Global Search Input with Dynamic Placeholder */}
-              <div className="relative flex-1 w-full min-w-[110px] sm:min-w-[160px]">
-                <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-faint)] pointer-events-none" />
+          <header className="sticky top-0 z-30 h-20 shrink-0 bg-[var(--bg-deep)]/75 backdrop-blur-xl border-b border-[var(--border)] px-4 sm:px-8 flex items-center justify-between gap-4">
+            {/* Left: Global Search (No side hamburger) */}
+            <div className="flex items-center gap-3 flex-1 max-w-lg">
+              {/* Global Search Input */}
+              <div className="relative w-full">
+                <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-[var(--text-faint)]" />
                 <input
                   type="text"
                   value={searchQuery}
@@ -1224,11 +1243,10 @@ export default function SuperAdminClient({
                     setIsSearchOpen(true);
                   }}
                   title="Filter by Name"
-                  className={`px-2.5 lg:px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                    searchFilterType === "name"
+                  className={`px-2.5 lg:px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${searchFilterType === "name"
                       ? "btn-gold shadow-md shadow-[var(--gold-glow)]"
                       : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
-                  }`}
+                    }`}
                 >
                   <Store className="w-3.5 h-3.5" />
                   <span className="hidden lg:inline">By Name</span>
@@ -1241,11 +1259,10 @@ export default function SuperAdminClient({
                     setIsSearchOpen(true);
                   }}
                   title="Filter by Location"
-                  className={`px-2.5 lg:px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                    searchFilterType === "location"
+                  className={`px-2.5 lg:px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${searchFilterType === "location"
                       ? "btn-gold shadow-md shadow-[var(--gold-glow)]"
                       : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
-                  }`}
+                    }`}
                 >
                   <MapPin className="w-3.5 h-3.5" />
                   <span className="hidden lg:inline">By Location</span>
@@ -1325,13 +1342,12 @@ export default function SuperAdminClient({
 
                           <div className="flex items-center gap-2 shrink-0">
                             <span
-                              className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                                String(rStatus).toLowerCase() === "active"
+                              className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${String(rStatus).toLowerCase() === "active"
                                   ? "bg-[#25d366]/15 text-[#25d366] border border-[#25d366]/30"
                                   : String(rStatus).toLowerCase() === "suspended"
-                                  ? "bg-[var(--orange)]/15 text-[var(--orange)] border border-[var(--orange)]/30"
-                                  : "bg-gray-500/15 text-gray-400 border border-gray-500/30"
-                              }`}
+                                    ? "bg-[var(--orange)]/15 text-[var(--orange)] border border-[var(--orange)]/30"
+                                    : "bg-gray-500/15 text-gray-400 border border-gray-500/30"
+                                }`}
                             >
                               {rStatus}
                             </span>
@@ -1483,7 +1499,7 @@ export default function SuperAdminClient({
           </header>
 
           {/* ===================== DASHBOARD BODY CONTENT ===================== */}
-          <main className="p-3.5 sm:p-6 lg:p-8 pb-44 sm:pb-40 md:pb-12 space-y-6 sm:space-y-8 max-w-[1400px] w-full min-w-0 mx-auto">
+          <main className="p-4 sm:p-8 pb-24 xl:pb-8 space-y-8 max-w-[1400px] w-full mx-auto">
             {activeNav === "Subscriptions & Plans" ? (
               <SubscriptionsPlansView showToast={showToast} initialMode={activePlanMode} />
             ) : activeNav === "Restaurants" ? (
@@ -1515,580 +1531,672 @@ export default function SuperAdminClient({
                     </p>
                   </div>
 
-              {/* Top Quick Actions */}
-              <div className="flex items-center gap-2.5">
-                <button
-                  onClick={handleRefresh}
-                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] hover:border-[var(--gold)] text-xs font-semibold text-[var(--text-lo)] hover:text-[var(--text-hi)] transition-all cursor-pointer"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-[var(--gold)]" : ""}`} />
-                  <span>Refresh</span>
-                </button>
-
-                <button
-                  onClick={() => showToast("Exporting Master Telemetry CSV...")}
-                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] hover:border-[var(--gold)] text-xs font-semibold text-[var(--text-lo)] hover:text-[var(--text-hi)] transition-all cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Export CSV</span>
-                </button>
-              </div>
-            </div>
-
-            {/* ===================== SECTION 1: 4 STAT CARDS ===================== */}
-            <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-              {/* Card 1: Total Registered Brands */}
-              <div className="glass-panel p-5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner">
-                    <Building2 className="w-5 h-5" />
-                  </div>
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] text-xs font-semibold border border-[var(--gold)]/30">
-                    <ArrowUpRight className="w-3 h-3" /> Registered Brands
-                  </span>
-                </div>
-                <div>
-                  <div className="text-3xl sm:text-4xl font-bold text-[var(--text-hi)] tracking-tight">
-                    {countBrands}
-                  </div>
-                  <p className="font-sans text-xs font-medium text-[var(--text-lo)] mt-1">
-                    Total Registered Brands
-                  </p>
-                </div>
-                <div className="mt-3 pt-2.5 border-t border-[var(--border)]/60 text-xs text-[var(--text-faint)] flex items-center justify-between">
-                  <span>Active: <strong className="text-[#25d366] font-semibold">{networkMetrics.activeBrands}</strong></span>
-                  <span>Deactive: <strong className="text-amber-400 font-semibold">{networkMetrics.deactivatedBrands}</strong></span>
-                </div>
-              </div>
-
-              {/* Card 2: Total Network Outlets / Physical Branches */}
-              <div className="glass-panel p-5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-[var(--orange-dim)] border border-[var(--orange)]/30 text-[var(--orange)] flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner">
-                    <Layers className="w-5 h-5" />
-                  </div>
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--orange-dim)] text-[var(--orange)] text-xs font-semibold border border-[var(--orange)]/30">
-                    <ArrowUpRight className="w-3 h-3" /> Network Scale
-                  </span>
-                </div>
-                <div>
-                  <div className="text-3xl sm:text-4xl font-bold text-[var(--text-hi)] tracking-tight">
-                    {countOutlets}
-                  </div>
-                  <p className="font-sans text-xs font-medium text-[var(--text-lo)] mt-1">
-                    Total Network Outlets
-                  </p>
-                </div>
-                <div className="mt-3 pt-2.5 border-t border-[var(--border)]/60 text-xs text-[var(--text-faint)] flex items-center justify-between">
-                  <span>Standalone: <strong className="text-[var(--text-hi)] font-semibold">{networkMetrics.standaloneOutlets}</strong></span>
-                  <span>Franchise: <strong className="text-[var(--gold)] font-semibold">{networkMetrics.franchiseOutlets}</strong></span>
-                </div>
-              </div>
-
-              {/* Card 3: Monthly Gross Merchandise Value (GMV) */}
-              <div className="glass-panel p-5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner">
-                    <TrendingUp className="w-5 h-5" />
-                  </div>
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] text-xs font-semibold border border-[var(--gold)]/30">
-                    <ArrowUpRight className="w-3 h-3" /> Live Volume
-                  </span>
-                </div>
-                <div>
-                  <div className="text-3xl sm:text-4xl font-bold text-[var(--text-hi)] tracking-tight">
-                    ${countGMV.toLocaleString()}
-                  </div>
-                  <p className="font-sans text-xs font-medium text-[var(--text-lo)] mt-1">
-                    Monthly Platform GMV
-                  </p>
-                </div>
-                <div className="mt-3 pt-2.5 border-t border-[var(--border)]/60 text-xs text-[var(--text-faint)] flex items-center justify-between">
-                  <span>Volume: <strong className="text-[var(--text-hi)] font-semibold">Live</strong></span>
-                  <span>Status: <strong className="text-[#25d366] font-semibold">Active</strong></span>
-                </div>
-              </div>
-
-              {/* Card 4: Pending Payouts / Vendor Settlements */}
-              <div className="glass-panel p-5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner">
-                    <Wallet className="w-5 h-5" />
-                  </div>
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] text-xs font-semibold border border-[var(--gold)]/30">
-                    <ArrowUpRight className="w-3 h-3" /> Settlement Queue
-                  </span>
-                </div>
-                <div>
-                  <div className="text-3xl sm:text-4xl font-bold text-[var(--text-hi)] tracking-tight">
-                    ${countPayouts.toLocaleString()}
-                  </div>
-                  <p className="font-sans text-xs font-medium text-[var(--text-lo)] mt-1">
-                    Pending Vendor Payouts
-                  </p>
-                </div>
-                <div className="mt-3 pt-2.5 border-t border-[var(--border)]/60 text-xs text-[var(--text-faint)] flex items-center justify-between">
-                  <span>Transfers: <strong className="text-[var(--text-hi)] font-semibold">{networkMetrics.pendingTransfersCount}</strong></span>
-                  <span>Clearing: <strong className="text-amber-400 font-semibold">48h Cycle</strong></span>
-                </div>
-              </div>
-            </section>
-
-            {/* ===================== SECTION 2: SIGNATURE "LIVE NETWORK MAP" ORBIT CARD ===================== */}
-            <section className="glass-panel rounded-3xl p-6 sm:p-9 border border-[var(--border-hi)] relative overflow-hidden">
-              {/* Radial ambient glow */}
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-[radial-gradient(circle_at_center,var(--gold-dim)_0%,transparent_70%)] pointer-events-none -z-0 opacity-40"></div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center relative z-10">
-                {/* Left (5 cols): Description & Legend */}
-                <div className="lg:col-span-5 space-y-6">
-                  <div>
-                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--gold)] text-xs font-semibold uppercase tracking-wider mb-2">
-                      <Activity className="w-3.5 h-3.5" /> Topology Telemetry
-                    </div>
-                    <h2 className="text-2xl sm:text-3xl font-bold text-[var(--text-hi)]">
-                      Live Network Topology
-                    </h2>
-                    <p className="text-xs sm:text-sm text-[var(--text-lo)] leading-relaxed mt-2">
-                      Global telemetry monitoring multi-tenant cloud hubs, payment settlement gateways, and regional sync nodes across all active restaurant networks.
-                    </p>
-                  </div>
-
-                  {/* 4 Status Types Legend */}
-                  <div className="grid grid-cols-2 gap-3 pt-2">
-                    <div className="p-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-[#25d366] shadow-[0_0_8px_#25d366]"></span>
-                        <span className="text-xs font-semibold text-[var(--text-hi)]">Healthy Hubs</span>
-                      </div>
-                      <span className="text-xs font-semibold text-[var(--text-lo)]">48 / 48</span>
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-[var(--gold)] shadow-[0_0_8px_var(--gold)]"></span>
-                        <span className="text-xs font-semibold text-[var(--text-hi)]">Sync Lag</span>
-                      </div>
-                      <span className="text-xs font-semibold text-[var(--text-lo)]">&lt; 12 ms</span>
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-[#00e8ff] shadow-[0_0_8px_#00e8ff]"></span>
-                        <span className="text-xs font-semibold text-[var(--text-hi)]">Standby Replicas</span>
-                      </div>
-                      <span className="text-xs font-semibold text-[var(--text-lo)]">6 Standby</span>
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-[var(--orange)] shadow-[0_0_8px_var(--orange)]"></span>
-                        <span className="text-xs font-semibold text-[var(--text-hi)]">Gateway Alerts</span>
-                      </div>
-                      <span className="text-xs font-semibold text-[#25d366]">0 Normal</span>
-                    </div>
-                  </div>
-
-                  {/* Telemetry Metrics */}
-                  <div className="p-4 rounded-2xl bg-[var(--bg-deep)]/80 border border-[var(--border)]/70 flex items-center justify-between text-xs">
-                    <div>
-                      <span className="text-[var(--text-faint)] block text-xs uppercase font-medium">POOL LATENCY</span>
-                      <span className="text-[var(--gold)] font-semibold text-sm">8 ms</span>
-                    </div>
-                    <div className="w-px h-8 bg-[var(--border)]"></div>
-                    <div>
-                      <span className="text-[var(--text-faint)] block text-xs uppercase font-medium">EDGE REPLICATION</span>
-                      <span className="text-[#25d366] font-semibold text-sm">99.99%</span>
-                    </div>
-                    <div className="w-px h-8 bg-[var(--border)]"></div>
-                    <div>
-                      <span className="text-[var(--text-faint)] block text-xs uppercase font-medium">ENCRYPTION</span>
-                      <span className="text-[var(--text-hi)] font-semibold text-sm">TLS 1.3 · AES-256</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right (7 cols): CSS 3-Ring Concentric Orbit Animation */}
-                <div className="lg:col-span-7 flex items-center justify-center min-h-[380px] sm:min-h-[440px] relative select-none">
-                  {/* Central Super Admin Hub */}
-                  <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#f5c85c] via-[#e3b13b] to-[#e04e17] p-0.5 shadow-[0_0_35px_var(--gold-glow)] z-20 flex items-center justify-center text-center">
-                    <div className="w-full h-full rounded-full bg-[var(--bg-deep)] flex flex-col items-center justify-center p-1.5">
-                      <span className="text-[9px] font-bold text-[var(--gold)] uppercase tracking-wider">GLOBAL</span>
-                      <span className="text-[11px] font-bold text-[var(--text-hi)] leading-tight">SUPER ADMIN</span>
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#25d366] mt-1 shadow-[0_0_6px_#25d366]"></span>
-                    </div>
-                  </div>
-
-                  {/* Ring 1 (Inner, 170px width) */}
-                  <div
-                    className="absolute w-[170px] h-[170px] rounded-full border border-dashed border-[var(--gold)]/40 animate-orbit-spin pointer-events-none"
-                    style={{ animationDuration: "35s" }}
-                  >
-                    {/* Node A: LHR Core Hub */}
-                    <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 pointer-events-auto">
-                      <div className="animate-orbit-spin-reverse flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[var(--gold)] shadow-lg text-xs font-semibold text-[var(--gold)] whitespace-nowrap" style={{ animationDuration: "35s" }}>
-                        <Database className="w-3 h-3 text-[var(--gold)]" />
-                        <span>LHR Core Hub</span>
-                      </div>
-                    </div>
-
-                    {/* Node B: KHI Edge Node */}
-                    <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 pointer-events-auto">
-                      <div className="animate-orbit-spin-reverse flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[#25d366] shadow-lg text-xs font-semibold text-[#25d366] whitespace-nowrap" style={{ animationDuration: "35s" }}>
-                        <Cloud className="w-3 h-3 text-[#25d366]" />
-                        <span>KHI Edge Node</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Ring 2 (Middle, 280px width - Reverse Spin) */}
-                  <div
-                    className="absolute w-[280px] h-[280px] rounded-full border border-dashed border-[var(--orange)]/30 animate-orbit-spin-reverse pointer-events-none"
-                    style={{ animationDuration: "50s" }}
-                  >
-                    {/* Node C: ISB Multi-Tenant DB */}
-                    <div className="absolute top-1/2 -left-4 -translate-y-1/2 pointer-events-auto">
-                      <div className="animate-orbit-spin flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[var(--border-hi)] shadow-lg text-xs font-semibold text-[var(--text-hi)] whitespace-nowrap" style={{ animationDuration: "50s" }}>
-                        <Server className="w-3 h-3 text-[var(--gold)]" />
-                        <span>ISB Multi-Tenant DB</span>
-                      </div>
-                    </div>
-
-                    {/* Node D: Regional Sync Hub */}
-                    <div className="absolute top-1/2 -right-4 -translate-y-1/2 pointer-events-auto">
-                      <div className="animate-orbit-spin flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[var(--border-hi)] shadow-lg text-xs font-semibold text-[var(--text-hi)] whitespace-nowrap" style={{ animationDuration: "50s" }}>
-                        <Globe className="w-3 h-3 text-[var(--orange)]" />
-                        <span>Regional Sync Hub</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Ring 3 (Outer, 380px width) */}
-                  <div
-                    className="absolute w-[360px] sm:w-[390px] h-[360px] sm:h-[390px] rounded-full border border-dashed border-[var(--gold)]/20 animate-orbit-spin pointer-events-none"
-                    style={{ animationDuration: "75s" }}
-                  >
-                    {/* Node E: Stripe / PayFast API */}
-                    <div className="absolute top-6 right-8 pointer-events-auto">
-                      <div className="animate-orbit-spin-reverse flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[#25d366] shadow-lg text-xs font-semibold text-[#25d366] whitespace-nowrap" style={{ animationDuration: "75s" }}>
-                        <Zap className="w-3 h-3 text-[#25d366]" />
-                        <span>Stripe / PayFast API</span>
-                      </div>
-                    </div>
-
-                    {/* Node F: JazzCash Settlement Rail */}
-                    <div className="absolute bottom-6 left-8 pointer-events-auto">
-                      <div className="animate-orbit-spin-reverse flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[var(--gold)] shadow-lg text-xs font-semibold text-[var(--gold)] whitespace-nowrap" style={{ animationDuration: "75s" }}>
-                        <CreditCard className="w-3 h-3 text-[var(--gold)]" />
-                        <span>JazzCash Gateway</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* ===================== SECTION 3: TWO-COLUMN (MAIN 65% / SIDEBAR 35%) ===================== */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-              {/* ===================== MAIN COLUMN (65%) ===================== */}
-              <div className="lg:col-span-8 space-y-8">
-                {/* 3A: Interactive Revenue Trend Card */}
-                <div className="glass-panel rounded-3xl p-6 sm:p-7 space-y-6">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <h3 className="font-bold text-xl text-[var(--text-hi)]">
-                        Revenue &amp; Order Trajectory
-                      </h3>
-                      <p className="text-xs text-[var(--text-lo)] mt-0.5">
-                        Gross transacted volume across all active franchise networks
-                      </p>
-                    </div>
-
-                    {/* Time-Range Segmented Control */}
-                    <div className="inline-flex items-center p-1 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-medium self-start sm:self-auto">
-                      {(["today", "7d", "30d"] as const).map((range) => (
-                        <button
-                          key={range}
-                          onClick={() => setRevenueRange(range)}
-                          className={`px-3 py-1 rounded-full transition-all cursor-pointer capitalize text-xs ${revenueRange === range
-                            ? "bg-[var(--gold)] text-[#342c14] font-semibold shadow-md"
-                            : "text-[var(--text-lo)] hover:text-[var(--text-hi)] font-medium"
-                            }`}
-                        >
-                          {range === "today" ? "Today" : range === "7d" ? "7 Days" : "30 Days"}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* SVG Area + Line Chart */}
-                  <div className="relative h-64 w-full pt-4">
-                    <svg className="w-full h-full overflow-visible" viewBox="0 0 700 200" preserveAspectRatio="none">
-                      <defs>
-                        <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#e3b13b" stopOpacity="0.45" />
-                          <stop offset="60%" stopColor="#e04e17" stopOpacity="0.15" />
-                          <stop offset="100%" stopColor="#140c0c" stopOpacity="0.0" />
-                        </linearGradient>
-                      </defs>
-
-                      {/* Gridlines */}
-                      <line x1="0" y1="40" x2="700" y2="40" stroke="rgba(247, 231, 190, 0.08)" strokeDasharray="4 4" />
-                      <line x1="0" y1="90" x2="700" y2="90" stroke="rgba(247, 231, 190, 0.08)" strokeDasharray="4 4" />
-                      <line x1="0" y1="140" x2="700" y2="140" stroke="rgba(247, 231, 190, 0.08)" strokeDasharray="4 4" />
-
-                      {/* Area Fill */}
-                      <path
-                        d="M 0 160 Q 110 130 220 90 T 440 70 T 580 40 T 700 25 L 700 190 L 0 190 Z"
-                        fill="url(#chartGradient)"
-                      />
-
-                      {/* Line Stroke */}
-                      <path
-                        d="M 0 160 Q 110 130 220 90 T 440 70 T 580 40 T 700 25"
-                        fill="none"
-                        stroke="#e3b13b"
-                        strokeWidth="3.5"
-                        strokeLinecap="round"
-                      />
-
-                      {/* Glowing Endpoint Dot */}
-                      <circle cx="700" cy="25" r="6" fill="#e3b13b" className="animate-pulse" />
-                      <circle cx="700" cy="25" r="12" fill="none" stroke="#e3b13b" strokeOpacity="0.4" />
-                    </svg>
-
-                    {/* Chart Tooltip Point Preview */}
-                    <div className="absolute top-2 right-4 bg-[var(--bg-deep)] border border-[var(--gold)] px-3 py-1.5 rounded-xl shadow-xl text-xs">
-                      <span className="text-[var(--text-faint)] block text-xs uppercase font-medium">CURRENT PEAK</span>
-                      <span className="text-[var(--gold)] font-semibold">$482,650</span>
-                    </div>
-                  </div>
-
-                  {/* Chart Bottom Legend Summary */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 border-t border-[var(--border)]/70 text-center">
-                    <div>
-                      <span className="text-xs text-[var(--text-faint)] uppercase block font-medium">This Week</span>
-                      <span className="text-sm font-semibold text-[var(--text-hi)]">$3,428,900</span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-[var(--text-faint)] uppercase block font-medium">Last Week</span>
-                      <span className="text-sm font-semibold text-[var(--text-lo)]">$2,904,100</span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-[var(--text-faint)] uppercase block font-medium">Growth</span>
-                      <span className="text-sm font-semibold text-[#25d366]">+18.07%</span>
-                    </div>
-                    <div>
-                      <span className="text-xs text-[var(--text-faint)] uppercase block font-medium">Total Bills</span>
-                      <span className="text-sm font-semibold text-[var(--gold)]">12,894</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3B: Top Performing Restaurants Table */}
-                <div className="glass-panel rounded-3xl p-6 sm:p-7 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="font-bold text-xl text-[var(--text-hi)]">
-                        Top Performing Branches
-                      </h3>
-                      <p className="text-xs text-[var(--text-lo)] mt-0.5">
-                        Highest order throughput and 5-star customer review scores
-                      </p>
-                    </div>
+                  {/* Top Quick Actions */}
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      onClick={handleRefresh}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] hover:border-[var(--gold)] text-xs font-semibold text-[var(--text-lo)] hover:text-[var(--text-hi)] transition-all cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-[var(--gold)]" : ""}`} />
+                      <span>Refresh</span>
+                    </button>
 
                     <button
-                      onClick={() => showToast("Viewing full 248 restaurants catalog")}
-                      className="text-xs text-[var(--gold)] font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer"
+                      onClick={() => showToast("Exporting Master Telemetry CSV...")}
+                      className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] hover:border-[var(--gold)] text-xs font-semibold text-[var(--text-lo)] hover:text-[var(--text-hi)] transition-all cursor-pointer"
                     >
-                      <span>View All</span>
-                      <ChevronRight className="w-3.5 h-3.5" />
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Export CSV</span>
                     </button>
                   </div>
+                </div>
 
-                  {/* Responsive Table */}
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs font-sans">
-                      <thead>
-                        <tr className="border-b border-[var(--border)] text-xs uppercase tracking-wider text-[var(--text-faint)]">
-                          <th className="pb-3 font-semibold">Restaurant</th>
-                          <th className="pb-3 font-semibold">City / Branch</th>
-                          <th className="pb-3 font-semibold text-right">Orders</th>
-                          <th className="pb-3 font-semibold text-right">Revenue</th>
-                          <th className="pb-3 font-semibold text-center">Rating</th>
-                          <th className="pb-3 font-semibold text-right">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[var(--border)]/40 font-medium">
-                        {topRestaurants.map((res, idx) => (
-                          <tr key={idx} className="group">
-                            {/* Logo + Name */}
-                            <td className="py-3.5 flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#f5c85c] to-[#e04e17] text-[#342c14] font-semibold text-xs flex items-center justify-center shadow-sm">
-                                {res.initials}
+                {/* ===================== SECTION 1: 4 STAT CARDS ===================== */}
+                <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                  {/* Card 1: Total Registered Brands */}
+                  <div className="glass-panel p-5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="w-10 h-10 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner">
+                        <Building2 className="w-5 h-5" />
+                      </div>
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] text-xs font-semibold border border-[var(--gold)]/30">
+                        <ArrowUpRight className="w-3 h-3" /> Registered Brands
+                      </span>
+                    </div>
+                    <div>
+                      <div className="text-3xl sm:text-4xl font-bold text-[var(--text-hi)] tracking-tight">
+                        {countBrands}
+                      </div>
+                      <p className="font-sans text-xs font-medium text-[var(--text-lo)] mt-1">
+                        Total Registered Brands
+                      </p>
+                    </div>
+                    <div className="mt-3 pt-2.5 border-t border-[var(--border)]/60 text-xs text-[var(--text-faint)] flex items-center justify-between">
+                      <span>Active: <strong className="text-[#25d366] font-semibold">{networkMetrics.activeBrands}</strong></span>
+                      <span>Deactive: <strong className="text-amber-400 font-semibold">{networkMetrics.deactivatedBrands}</strong></span>
+                    </div>
+                  </div>
+
+                  {/* Card 2: Total Network Outlets / Physical Branches */}
+                  <div className="glass-panel p-5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="w-10 h-10 rounded-xl bg-[var(--orange-dim)] border border-[var(--orange)]/30 text-[var(--orange)] flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner">
+                        <Layers className="w-5 h-5" />
+                      </div>
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--orange-dim)] text-[var(--orange)] text-xs font-semibold border border-[var(--orange)]/30">
+                        <ArrowUpRight className="w-3 h-3" /> Network Scale
+                      </span>
+                    </div>
+                    <div>
+                      <div className="text-3xl sm:text-4xl font-bold text-[var(--text-hi)] tracking-tight">
+                        {countOutlets}
+                      </div>
+                      <p className="font-sans text-xs font-medium text-[var(--text-lo)] mt-1">
+                        Total Network Outlets
+                      </p>
+                    </div>
+                    <div className="mt-3 pt-2.5 border-t border-[var(--border)]/60 text-xs text-[var(--text-faint)] flex items-center justify-between">
+                      <span>Standalone: <strong className="text-[var(--text-hi)] font-semibold">{networkMetrics.standaloneOutlets}</strong></span>
+                      <span>Franchise: <strong className="text-[var(--gold)] font-semibold">{networkMetrics.franchiseOutlets}</strong></span>
+                    </div>
+                  </div>
+
+                  {/* Card 3: Monthly Gross Merchandise Value (GMV) */}
+                  <div className="glass-panel p-5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="w-10 h-10 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner">
+                        <TrendingUp className="w-5 h-5" />
+                      </div>
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] text-xs font-semibold border border-[var(--gold)]/30">
+                        <ArrowUpRight className="w-3 h-3" /> Live Volume
+                      </span>
+                    </div>
+                    <div>
+                      <div className="text-3xl sm:text-4xl font-bold text-[var(--text-hi)] tracking-tight">
+                        ${countGMV.toLocaleString()}
+                      </div>
+                      <p className="font-sans text-xs font-medium text-[var(--text-lo)] mt-1">
+                        Monthly Platform GMV
+                      </p>
+                    </div>
+                    <div className="mt-3 pt-2.5 border-t border-[var(--border)]/60 text-xs text-[var(--text-faint)] flex items-center justify-between">
+                      <span>Volume: <strong className="text-[var(--text-hi)] font-semibold">Live</strong></span>
+                      <span>Status: <strong className="text-[#25d366] font-semibold">Active</strong></span>
+                    </div>
+                  </div>
+
+                  {/* Card 4: Pending Payouts / Vendor Settlements */}
+                  <div className="glass-panel p-5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="w-10 h-10 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] flex items-center justify-center group-hover:scale-110 transition-transform shadow-inner">
+                        <Wallet className="w-5 h-5" />
+                      </div>
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] text-xs font-semibold border border-[var(--gold)]/30">
+                        <ArrowUpRight className="w-3 h-3" /> Settlement Queue
+                      </span>
+                    </div>
+                    <div>
+                      <div className="text-3xl sm:text-4xl font-bold text-[var(--text-hi)] tracking-tight">
+                        ${countPayouts.toLocaleString()}
+                      </div>
+                      <p className="font-sans text-xs font-medium text-[var(--text-lo)] mt-1">
+                        Pending Vendor Payouts
+                      </p>
+                    </div>
+                    <div className="mt-3 pt-2.5 border-t border-[var(--border)]/60 text-xs text-[var(--text-faint)] flex items-center justify-between">
+                      <span>Transfers: <strong className="text-[var(--text-hi)] font-semibold">{networkMetrics.pendingTransfersCount}</strong></span>
+                      <span>Clearing: <strong className="text-amber-400 font-semibold">48h Cycle</strong></span>
+                    </div>
+                  </div>
+                </section>
+
+                {/* ===================== SECTION 2: SIGNATURE "LIVE NETWORK MAP" ORBIT CARD ===================== */}
+                <section className="glass-panel rounded-3xl p-6 sm:p-9 border border-[var(--border-hi)] relative overflow-hidden">
+                  {/* Radial ambient glow */}
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-[radial-gradient(circle_at_center,var(--gold-dim)_0%,transparent_70%)] pointer-events-none -z-0 opacity-40"></div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center relative z-10">
+                    {/* Left (5 cols): Description & Legend */}
+                    <div className="lg:col-span-5 space-y-6">
+                      <div>
+                        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--gold)] text-xs font-semibold uppercase tracking-wider mb-2">
+                          <Activity className="w-3.5 h-3.5" /> Topology Telemetry
+                        </div>
+                        <h2 className="text-2xl sm:text-3xl font-bold text-[var(--text-hi)]">
+                          Live Network Topology
+                        </h2>
+                        <p className="text-xs sm:text-sm text-[var(--text-lo)] leading-relaxed mt-2">
+                          Global telemetry monitoring multi-tenant cloud hubs, payment settlement gateways, and regional sync nodes across all active restaurant networks.
+                        </p>
+                      </div>
+
+                      {/* 4 Status Types Legend */}
+                      <div className="grid grid-cols-2 gap-3 pt-2">
+                        <div className="p-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-[#25d366] shadow-[0_0_8px_#25d366]"></span>
+                            <span className="text-xs font-semibold text-[var(--text-hi)]">Healthy Hubs</span>
+                          </div>
+                          <span className="text-xs font-semibold text-[var(--text-lo)]">48 / 48</span>
+                        </div>
+
+                        <div className="p-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-[var(--gold)] shadow-[0_0_8px_var(--gold)]"></span>
+                            <span className="text-xs font-semibold text-[var(--text-hi)]">Sync Lag</span>
+                          </div>
+                          <span className="text-xs font-semibold text-[var(--text-lo)]">&lt; 12 ms</span>
+                        </div>
+
+                        <div className="p-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-[#00e8ff] shadow-[0_0_8px_#00e8ff]"></span>
+                            <span className="text-xs font-semibold text-[var(--text-hi)]">Standby Replicas</span>
+                          </div>
+                          <span className="text-xs font-semibold text-[var(--text-lo)]">6 Standby</span>
+                        </div>
+
+                        <div className="p-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-full bg-[var(--orange)] shadow-[0_0_8px_var(--orange)]"></span>
+                            <span className="text-xs font-semibold text-[var(--text-hi)]">Gateway Alerts</span>
+                          </div>
+                          <span className="text-xs font-semibold text-[#25d366]">0 Normal</span>
+                        </div>
+                      </div>
+
+                      {/* Telemetry Metrics */}
+                      <div className="p-4 rounded-2xl bg-[var(--bg-deep)]/80 border border-[var(--border)]/70 flex items-center justify-between text-xs">
+                        <div>
+                          <span className="text-[var(--text-faint)] block text-xs uppercase font-medium">POOL LATENCY</span>
+                          <span className="text-[var(--gold)] font-semibold text-sm">8 ms</span>
+                        </div>
+                        <div className="w-px h-8 bg-[var(--border)]"></div>
+                        <div>
+                          <span className="text-[var(--text-faint)] block text-xs uppercase font-medium">EDGE REPLICATION</span>
+                          <span className="text-[#25d366] font-semibold text-sm">99.99%</span>
+                        </div>
+                        <div className="w-px h-8 bg-[var(--border)]"></div>
+                        <div>
+                          <span className="text-[var(--text-faint)] block text-xs uppercase font-medium">ENCRYPTION</span>
+                          <span className="text-[var(--text-hi)] font-semibold text-sm">TLS 1.3 · AES-256</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Right (7 cols): CSS 3-Ring Concentric Orbit Animation */}
+                    <div className="lg:col-span-7 flex items-center justify-center min-h-[380px] sm:min-h-[440px] relative select-none">
+                      {/* Central Super Admin Hub */}
+                      <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#f5c85c] via-[#e3b13b] to-[#e04e17] p-0.5 shadow-[0_0_35px_var(--gold-glow)] z-20 flex items-center justify-center text-center">
+                        <div className="w-full h-full rounded-full bg-[var(--bg-deep)] flex flex-col items-center justify-center p-1.5">
+                          <span className="text-[9px] font-bold text-[var(--gold)] uppercase tracking-wider">GLOBAL</span>
+                          <span className="text-[11px] font-bold text-[var(--text-hi)] leading-tight">SUPER ADMIN</span>
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#25d366] mt-1 shadow-[0_0_6px_#25d366]"></span>
+                        </div>
+                      </div>
+
+                      {/* Ring 1 (Inner, 170px width) */}
+                      <div
+                        className="absolute w-[170px] h-[170px] rounded-full border border-dashed border-[var(--gold)]/40 animate-orbit-spin pointer-events-none"
+                        style={{ animationDuration: "35s" }}
+                      >
+                        {/* Node A: LHR Core Hub */}
+                        <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 pointer-events-auto">
+                          <div className="animate-orbit-spin-reverse flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[var(--gold)] shadow-lg text-xs font-semibold text-[var(--gold)] whitespace-nowrap" style={{ animationDuration: "35s" }}>
+                            <Database className="w-3 h-3 text-[var(--gold)]" />
+                            <span>LHR Core Hub</span>
+                          </div>
+                        </div>
+
+                        {/* Node B: KHI Edge Node */}
+                        <div className="absolute -bottom-3.5 left-1/2 -translate-x-1/2 pointer-events-auto">
+                          <div className="animate-orbit-spin-reverse flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[#25d366] shadow-lg text-xs font-semibold text-[#25d366] whitespace-nowrap" style={{ animationDuration: "35s" }}>
+                            <Cloud className="w-3 h-3 text-[#25d366]" />
+                            <span>KHI Edge Node</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Ring 2 (Middle, 280px width - Reverse Spin) */}
+                      <div
+                        className="absolute w-[280px] h-[280px] rounded-full border border-dashed border-[var(--orange)]/30 animate-orbit-spin-reverse pointer-events-none"
+                        style={{ animationDuration: "50s" }}
+                      >
+                        {/* Node C: ISB Multi-Tenant DB */}
+                        <div className="absolute top-1/2 -left-4 -translate-y-1/2 pointer-events-auto">
+                          <div className="animate-orbit-spin flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[var(--border-hi)] shadow-lg text-xs font-semibold text-[var(--text-hi)] whitespace-nowrap" style={{ animationDuration: "50s" }}>
+                            <Server className="w-3 h-3 text-[var(--gold)]" />
+                            <span>ISB Multi-Tenant DB</span>
+                          </div>
+                        </div>
+
+                        {/* Node D: Regional Sync Hub */}
+                        <div className="absolute top-1/2 -right-4 -translate-y-1/2 pointer-events-auto">
+                          <div className="animate-orbit-spin flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[var(--border-hi)] shadow-lg text-xs font-semibold text-[var(--text-hi)] whitespace-nowrap" style={{ animationDuration: "50s" }}>
+                            <Globe className="w-3 h-3 text-[var(--orange)]" />
+                            <span>Regional Sync Hub</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Ring 3 (Outer, 380px width) */}
+                      <div
+                        className="absolute w-[360px] sm:w-[390px] h-[360px] sm:h-[390px] rounded-full border border-dashed border-[var(--gold)]/20 animate-orbit-spin pointer-events-none"
+                        style={{ animationDuration: "75s" }}
+                      >
+                        {/* Node E: Stripe / PayFast API */}
+                        <div className="absolute top-6 right-8 pointer-events-auto">
+                          <div className="animate-orbit-spin-reverse flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[#25d366] shadow-lg text-xs font-semibold text-[#25d366] whitespace-nowrap" style={{ animationDuration: "75s" }}>
+                            <Zap className="w-3 h-3 text-[#25d366]" />
+                            <span>Stripe / PayFast API</span>
+                          </div>
+                        </div>
+
+                        {/* Node F: JazzCash Settlement Rail */}
+                        <div className="absolute bottom-6 left-8 pointer-events-auto">
+                          <div className="animate-orbit-spin-reverse flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-deep)] border border-[var(--gold)] shadow-lg text-xs font-semibold text-[var(--gold)] whitespace-nowrap" style={{ animationDuration: "75s" }}>
+                            <CreditCard className="w-3 h-3 text-[var(--gold)]" />
+                            <span>JazzCash Gateway</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* ===================== SECTION 3: TWO-COLUMN (MAIN 65% / SIDEBAR 35%) ===================== */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                  {/* ===================== MAIN COLUMN (65%) ===================== */}
+                  <div className="lg:col-span-8 space-y-8">
+                    {/* 3A: Interactive Revenue Trend Card */}
+                    <div className="glass-panel rounded-3xl p-6 sm:p-7 space-y-6">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                          <h3 className="font-bold text-xl text-[var(--text-hi)]">
+                            Revenue &amp; Order Trajectory
+                          </h3>
+                          <p className="text-xs text-[var(--text-lo)] mt-0.5">
+                            Gross transacted volume across all active franchise networks
+                          </p>
+                        </div>
+
+                        {/* Time-Range Segmented Control */}
+                        <div className="inline-flex items-center p-1 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-medium self-start sm:self-auto">
+                          {(["today", "7d", "30d"] as const).map((range) => (
+                            <button
+                              key={range}
+                              onClick={() => setRevenueRange(range)}
+                              className={`px-3 py-1 rounded-full transition-all cursor-pointer capitalize text-xs ${revenueRange === range
+                                ? "bg-[var(--gold)] text-[#342c14] font-semibold shadow-md"
+                                : "text-[var(--text-lo)] hover:text-[var(--text-hi)] font-medium"
+                                }`}
+                            >
+                              {range === "today" ? "Today" : range === "7d" ? "7 Days" : "30 Days"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* SVG Area + Line Chart */}
+                      <div className="relative h-64 w-full pt-4">
+                        <svg className="w-full h-full overflow-visible" viewBox="0 0 700 200" preserveAspectRatio="none">
+                          <defs>
+                            <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#e3b13b" stopOpacity="0.45" />
+                              <stop offset="60%" stopColor="#e04e17" stopOpacity="0.15" />
+                              <stop offset="100%" stopColor="#140c0c" stopOpacity="0.0" />
+                            </linearGradient>
+                          </defs>
+
+                          {/* Gridlines */}
+                          <line x1="0" y1="40" x2="700" y2="40" stroke="rgba(247, 231, 190, 0.08)" strokeDasharray="4 4" />
+                          <line x1="0" y1="90" x2="700" y2="90" stroke="rgba(247, 231, 190, 0.08)" strokeDasharray="4 4" />
+                          <line x1="0" y1="140" x2="700" y2="140" stroke="rgba(247, 231, 190, 0.08)" strokeDasharray="4 4" />
+
+                          {/* Area Fill */}
+                          <path
+                            d="M 0 160 Q 110 130 220 90 T 440 70 T 580 40 T 700 25 L 700 190 L 0 190 Z"
+                            fill="url(#chartGradient)"
+                          />
+
+                          {/* Line Stroke */}
+                          <path
+                            d="M 0 160 Q 110 130 220 90 T 440 70 T 580 40 T 700 25"
+                            fill="none"
+                            stroke="#e3b13b"
+                            strokeWidth="3.5"
+                            strokeLinecap="round"
+                          />
+
+                          {/* Glowing Endpoint Dot */}
+                          <circle cx="700" cy="25" r="6" fill="#e3b13b" className="animate-pulse" />
+                          <circle cx="700" cy="25" r="12" fill="none" stroke="#e3b13b" strokeOpacity="0.4" />
+                        </svg>
+
+                        {/* Chart Tooltip Point Preview */}
+                        <div className="absolute top-2 right-4 bg-[var(--bg-deep)] border border-[var(--gold)] px-3 py-1.5 rounded-xl shadow-xl text-xs">
+                          <span className="text-[var(--text-faint)] block text-xs uppercase font-medium">CURRENT PEAK</span>
+                          <span className="text-[var(--gold)] font-semibold">$482,650</span>
+                        </div>
+                      </div>
+
+                      {/* Chart Bottom Legend Summary */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-4 border-t border-[var(--border)]/70 text-center">
+                        <div>
+                          <span className="text-xs text-[var(--text-faint)] uppercase block font-medium">This Week</span>
+                          <span className="text-sm font-semibold text-[var(--text-hi)]">$3,428,900</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-[var(--text-faint)] uppercase block font-medium">Last Week</span>
+                          <span className="text-sm font-semibold text-[var(--text-lo)]">$2,904,100</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-[var(--text-faint)] uppercase block font-medium">Growth</span>
+                          <span className="text-sm font-semibold text-[#25d366]">+18.07%</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-[var(--text-faint)] uppercase block font-medium">Total Bills</span>
+                          <span className="text-sm font-semibold text-[var(--gold)]">12,894</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 3B: Top Performing Restaurants Table */}
+                    <div className="glass-panel rounded-3xl p-6 sm:p-7 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="font-bold text-xl text-[var(--text-hi)]">
+                            Top Performing Branches
+                          </h3>
+                          <p className="text-xs text-[var(--text-lo)] mt-0.5">
+                            Highest order throughput and 5-star customer review scores
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={() => showToast("Viewing full 248 restaurants catalog")}
+                          className="text-xs text-[var(--gold)] font-semibold hover:underline inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>View All</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Responsive Table */}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs font-sans">
+                          <thead>
+                            <tr className="border-b border-[var(--border)] text-xs uppercase tracking-wider text-[var(--text-faint)]">
+                              <th className="pb-3 font-semibold">Restaurant</th>
+                              <th className="pb-3 font-semibold">City / Branch</th>
+                              <th className="pb-3 font-semibold text-right">Orders</th>
+                              <th className="pb-3 font-semibold text-right">Revenue</th>
+                              <th className="pb-3 font-semibold text-center">Rating</th>
+                              <th className="pb-3 font-semibold text-right">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[var(--border)]/40 font-medium">
+                            {topRestaurants.map((res, idx) => (
+                              <tr key={idx} className="group">
+                                {/* Logo + Name */}
+                                <td className="py-3.5 flex items-center gap-3">
+                                  <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#f5c85c] to-[#e04e17] text-[#342c14] font-semibold text-xs flex items-center justify-center shadow-sm">
+                                    {res.initials}
+                                  </div>
+                                  <span className="font-semibold text-[var(--text-hi)] group-hover:text-[var(--gold)] transition-colors">
+                                    {res.name}
+                                  </span>
+                                </td>
+
+                                {/* Branch */}
+                                <td className="py-3.5 text-[var(--text-lo)]">
+                                  {res.branch}
+                                </td>
+
+                                {/* Orders */}
+                                <td className="py-3.5 text-right font-semibold text-[var(--text-hi)]">
+                                  {res.orders}
+                                </td>
+
+                                {/* Revenue */}
+                                <td className="py-3.5 text-right font-semibold text-[var(--gold)]">
+                                  {res.revenue}
+                                </td>
+
+                                {/* Rating */}
+                                <td className="py-3.5 text-center">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--surface-hi)] text-[var(--text-hi)] text-xs font-medium">
+                                    <Star className="w-3 h-3 fill-[var(--gold)] text-[var(--gold)]" />
+                                    {res.rating}
+                                  </span>
+                                </td>
+
+                                {/* Status Pill */}
+                                <td className="py-3.5 text-right">
+                                  <span
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${res.status === "Active"
+                                      ? "bg-[#25d366]/15 text-[#25d366] border-[#25d366]/30"
+                                      : "bg-[var(--orange-dim)] text-[var(--orange)] border-[var(--orange)]/30"
+                                      }`}
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full ${res.status === "Active" ? "bg-[#25d366] animate-pulse" : "bg-[var(--orange)]"}`}></span>
+                                    {res.status}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ===================== SIDEBAR COLUMN (35%) ===================== */}
+                  <div className="lg:col-span-4 space-y-8">
+                    {/* 3C: Verifications & Seller Approvals (Retains Verified/Approved History) */}
+                    {(() => {
+                      const pendingCount = pendingVendors.filter((v) => v.status === "PENDING").length;
+                      const verifiedCount = pendingVendors.filter((v) => v.status === "VERIFIED").length;
+                      const filteredVendors = pendingVendors.filter((v) => {
+                        if (verificationFilter === "PENDING") return v.status === "PENDING";
+                        if (verificationFilter === "VERIFIED") return v.status === "VERIFIED";
+                        return true;
+                      });
+
+                      return (
+                        <div className="glass-panel rounded-3xl p-6 space-y-5">
+                          <div className="flex flex-col gap-3 pb-3 border-b border-[var(--border)]">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <ShieldCheck className="w-5 h-5 text-[var(--gold)]" />
+                                <h3 className="font-display font-extrabold text-base text-[var(--text-hi)]">
+                                  Verifications &amp; Seller Approvals
+                                </h3>
                               </div>
-                              <span className="font-semibold text-[var(--text-hi)] group-hover:text-[var(--gold)] transition-colors">
-                                {res.name}
-                              </span>
-                            </td>
+                              <div className="flex items-center gap-1.5">
+                                {pendingCount > 0 && (
+                                  <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/30">
+                                    {pendingCount} Pending
+                                  </span>
+                                )}
+                                <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#25d366]/15 text-[#25d366] border border-[#25d366]/30">
+                                  {verifiedCount} Verified
+                                </span>
+                              </div>
+                            </div>
 
-                            {/* Branch */}
-                            <td className="py-3.5 text-[var(--text-lo)]">
-                              {res.branch}
-                            </td>
-
-                            {/* Orders */}
-                            <td className="py-3.5 text-right font-semibold text-[var(--text-hi)]">
-                              {res.orders}
-                            </td>
-
-                            {/* Revenue */}
-                            <td className="py-3.5 text-right font-semibold text-[var(--gold)]">
-                              {res.revenue}
-                            </td>
-
-                            {/* Rating */}
-                            <td className="py-3.5 text-center">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[var(--surface-hi)] text-[var(--text-hi)] text-xs font-medium">
-                                <Star className="w-3 h-3 fill-[var(--gold)] text-[var(--gold)]" />
-                                {res.rating}
-                              </span>
-                            </td>
-
-                            {/* Status Pill */}
-                            <td className="py-3.5 text-right">
-                              <span
-                                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${res.status === "Active"
-                                  ? "bg-[#25d366]/15 text-[#25d366] border-[#25d366]/30"
-                                  : "bg-[var(--orange-dim)] text-[var(--orange)] border-[var(--orange)]/30"
+                            {/* Filter Tabs for Verification History */}
+                            <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-xs">
+                              <button
+                                type="button"
+                                onClick={() => setVerificationFilter("ALL")}
+                                className={`flex-1 py-1.5 px-2 rounded-lg font-mono text-[10.5px] font-semibold transition-all cursor-pointer text-center ${verificationFilter === "ALL"
+                                    ? "bg-[var(--surface-active)] text-[var(--gold)] border border-[var(--gold)]/30 shadow-sm"
+                                    : "text-[var(--text-faint)] hover:text-[var(--text-hi)]"
                                   }`}
                               >
-                                <span className={`w-1.5 h-1.5 rounded-full ${res.status === "Active" ? "bg-[#25d366] animate-pulse" : "bg-[var(--orange)]"}`}></span>
-                                {res.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-
-              {/* ===================== SIDEBAR COLUMN (35%) ===================== */}
-              <div className="lg:col-span-4 space-y-8">
-                {/* 3C: New Vendors Pending Approval */}
-                <div className="glass-panel rounded-3xl p-6 space-y-5">
-                  <div className="flex items-center justify-between pb-2 border-b border-[var(--border)]">
-                    <div className="flex items-center gap-2">
-                      <Store className="w-4 h-4 text-[var(--gold)]" />
-                      <h3 className="font-bold text-base text-[var(--text-hi)]">
-                        Pending Approvals
-                      </h3>
-                    </div>
-                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/30">
-                      {pendingVendors.length} New
-                    </span>
-                  </div>
-
-                  {pendingVendors.length === 0 ? (
-                    <div className="text-center py-6 text-xs text-[var(--text-lo)]">
-                      <CheckCircle2 className="w-8 h-8 text-[#25d366] mx-auto mb-2 opacity-80" />
-                      All onboarding queue cleared!
-                    </div>
-                  ) : (
-                    <div className="space-y-3.5">
-                      {pendingVendors.map((vendor) => (
-                        <div
-                          key={vendor.id}
-                          className="p-3.5 rounded-2xl bg-[var(--surface-hi)] border border-[var(--border)] space-y-3 transition-all"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2.5">
-                              <div className={`w-8 h-8 rounded-xl bg-gradient-to-br ${vendor.color} text-[#342c14] font-semibold text-xs flex items-center justify-center`}>
-                                {vendor.initials}
-                              </div>
-                              <div>
-                                <h4 className="font-semibold text-xs text-[var(--text-hi)]">
-                                  {vendor.name}
-                                </h4>
-                                <p className="text-xs text-[var(--text-faint)]">
-                                  {vendor.city}
-                                </p>
-                              </div>
-                            </div>
-                            <span className="text-xs text-[var(--text-faint)]">
-                              {vendor.submitted}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center justify-between pt-1">
-                            <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--bg-deep)] text-[var(--gold)] border border-[var(--border)] font-medium">
-                              {vendor.category}
-                            </span>
-
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                onClick={() => handleApproveVendor(vendor.id, vendor.name)}
-                                className="px-3 py-1 rounded-lg bg-[#25d366]/20 hover:bg-[#25d366] text-[#25d366] hover:text-[#0b1f13] text-xs font-semibold transition-all cursor-pointer"
-                              >
-                                Approve
+                                All ({pendingVendors.length})
                               </button>
                               <button
-                                onClick={() => handleRejectVendor(vendor.id, vendor.name)}
-                                className="px-2 py-1 rounded-lg bg-[var(--orange-dim)] hover:bg-[#ff4d4f] text-[var(--orange)] hover:text-white text-xs font-semibold transition-all cursor-pointer"
+                                type="button"
+                                onClick={() => setVerificationFilter("PENDING")}
+                                className={`flex-1 py-1.5 px-2 rounded-lg font-mono text-[10.5px] font-semibold transition-all cursor-pointer text-center ${verificationFilter === "PENDING"
+                                    ? "bg-[var(--surface-active)] text-[var(--gold)] border border-[var(--gold)]/30 shadow-sm"
+                                    : "text-[var(--text-faint)] hover:text-[var(--text-hi)]"
+                                  }`}
                               >
-                                Reject
+                                Pending ({pendingCount})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setVerificationFilter("VERIFIED")}
+                                className={`flex-1 py-1.5 px-2 rounded-lg font-mono text-[10.5px] font-semibold transition-all cursor-pointer text-center ${verificationFilter === "VERIFIED"
+                                    ? "bg-[var(--surface-active)] text-[#25d366] border border-[#25d366]/30 shadow-sm"
+                                    : "text-[var(--text-faint)] hover:text-[var(--text-hi)]"
+                                  }`}
+                              >
+                                Verified ({verifiedCount})
                               </button>
                             </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
 
-                {/* 3D: Live Activity Feed */}
-                <div className="glass-panel rounded-3xl p-6 space-y-5">
-                  <div className="flex items-center justify-between pb-2 border-b border-[var(--border)]">
-                    <div className="flex items-center gap-2">
-                      <Activity className="w-4 h-4 text-[#25d366]" />
-                      <h3 className="font-bold text-base text-[var(--text-hi)]">
-                        Live Activity
-                      </h3>
-                    </div>
-                    <span className="w-2 h-2 rounded-full bg-[#25d366] animate-ping"></span>
-                  </div>
+                          {filteredVendors.length === 0 ? (
+                            <div className="text-center py-6 text-xs text-[var(--text-lo)] font-mono space-y-1">
+                              <CheckCircle2 className="w-8 h-8 text-[#25d366] mx-auto mb-2 opacity-80" />
+                              <p>No {verificationFilter.toLowerCase()} verification records found.</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              {filteredVendors.map((vendor) => (
+                                <div
+                                  key={vendor.id}
+                                  className="p-3.5 rounded-2xl bg-[var(--surface-hi)] border border-[var(--border)] space-y-3 transition-all hover:border-[var(--border-strong)]"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex items-center gap-2.5">
+                                      <div
+                                        className={`w-8 h-8 rounded-xl bg-gradient-to-br ${vendor.color} text-[#342c14] font-bold text-xs flex items-center justify-center shrink-0 shadow-sm`}
+                                      >
+                                        {vendor.initials}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <h4 className="font-bold text-xs text-[var(--text-hi)] truncate">
+                                            {vendor.name}
+                                          </h4>
+                                          {vendor.status === "VERIFIED" ? (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#25d366]/15 text-[#25d366] border border-[#25d366]/30 text-[9.5px] font-mono font-bold">
+                                              <CheckCircle2 className="w-3 h-3 text-[#25d366]" />
+                                              Verified
+                                            </span>
+                                          ) : vendor.status === "REJECTED" ? (
+                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-500/15 text-red-400 border border-red-500/30 text-[9.5px] font-mono font-bold">
+                                              <AlertTriangle className="w-3 h-3" />
+                                              Rejected
+                                            </span>
+                                          ) : (
+                                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[9.5px] font-mono font-semibold">
+                                              Pending Review
+                                            </span>
+                                          )}
+                                        </div>
+                                        <p className="text-[10px] text-[var(--text-faint)] truncate">
+                                          {vendor.city} {vendor.sellerType ? `· ${vendor.sellerType}` : ""}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <span className="font-mono text-[9.5px] text-[var(--text-faint)] shrink-0">
+                                      {vendor.status === "VERIFIED" ? (vendor.verifiedAt || "Verified") : vendor.submitted}
+                                    </span>
+                                  </div>
 
-                  <div className="space-y-4">
-                    {liveEvents.map((evt) => (
-                      <div key={evt.id} className="flex items-start gap-3 text-xs">
-                        <span className={`w-2 h-2 rounded-full ${evt.color} mt-1.5 shrink-0 shadow-sm`}></span>
-                        <div className="flex-1 space-y-0.5">
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold text-[var(--text-hi)]">{evt.title}</span>
-                            <span className="text-xs text-[var(--text-faint)]">{evt.time}</span>
-                          </div>
-                          <p className="text-xs text-[var(--text-lo)] leading-tight">{evt.desc}</p>
+                                  <div className="flex items-center justify-between pt-1">
+                                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-[var(--bg-deep)] text-[var(--gold)] border border-[var(--border)]">
+                                      {vendor.category}
+                                    </span>
+
+                                    {vendor.status === "PENDING" ? (
+                                      <div className="flex items-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleApproveVendor(vendor.id, vendor.name)}
+                                          className="px-3 py-1.5 rounded-lg bg-[#25d366]/20 hover:bg-[#25d366] text-[#25d366] hover:text-[#0b1f13] text-[11px] font-bold font-mono transition-all cursor-pointer flex items-center gap-1 shadow-sm active:scale-95"
+                                        >
+                                          <CheckCircle2 className="w-3.5 h-3.5" />
+                                          Approve &amp; Verify Seller
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRejectVendor(vendor.id, vendor.name)}
+                                          className="px-2.5 py-1.5 rounded-lg bg-[var(--orange-dim)] hover:bg-[var(--orange)] text-[var(--orange)] hover:text-white text-[11px] font-bold font-mono transition-all cursor-pointer active:scale-95"
+                                        >
+                                          Reject
+                                        </button>
+                                      </div>
+                                    ) : vendor.status === "VERIFIED" ? (
+                                      <div className="flex items-center gap-1 text-[10.5px] text-[#25d366] font-mono font-semibold">
+                                        <Check className="w-3.5 h-3.5" />
+                                        <span>Verified &amp; Active</span>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleApproveVendor(vendor.id, vendor.name)}
+                                        className="text-[10.5px] font-mono text-[var(--gold)] hover:underline cursor-pointer"
+                                      >
+                                        Re-approve
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
+                      );
+                    })()}
+
+                    {/* 3D: Live Activity Feed */}
+                    <div className="glass-panel rounded-3xl p-6 space-y-5">
+                      <div className="flex items-center justify-between pb-2 border-b border-[var(--border)]">
+                        <div className="flex items-center gap-2">
+                          <Activity className="w-4 h-4 text-[#25d366]" />
+                          <h3 className="font-bold text-base text-[var(--text-hi)]">
+                            Live Activity
+                          </h3>
+                        </div>
+                        <span className="w-2 h-2 rounded-full bg-[#25d366] animate-ping"></span>
                       </div>
-                    ))}
-                  </div>
 
-                  <div className="pt-2">
-                    <button
-                      onClick={() => showToast("Opening full audit event logger")}
-                      className="w-full py-2.5 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-semibold text-[var(--text-lo)] hover:text-[var(--gold)] hover:border-[var(--gold)] transition-all text-center cursor-pointer"
-                    >
-                      Open Full Event Log &rarr;
-                    </button>
+                      <div className="space-y-4">
+                        {liveEvents.map((evt) => (
+                          <div key={evt.id} className="flex items-start gap-3 text-xs">
+                            <span className={`w-2 h-2 rounded-full ${evt.color} mt-1.5 shrink-0 shadow-sm`}></span>
+                            <div className="flex-1 space-y-0.5">
+                              <div className="flex items-center justify-between">
+                                <span className="font-semibold text-[var(--text-hi)]">{evt.title}</span>
+                                <span className="text-xs text-[var(--text-faint)]">{evt.time}</span>
+                              </div>
+                              <p className="text-xs text-[var(--text-lo)] leading-tight">{evt.desc}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="pt-2">
+                        <button
+                          onClick={() => showToast("Opening full audit event logger")}
+                          className="w-full py-2.5 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-semibold text-[var(--text-lo)] hover:text-[var(--gold)] hover:border-[var(--gold)] transition-all text-center cursor-pointer"
+                        >
+                          Open Full Event Log &rarr;
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-        )}
-      </main>
+            )}
+          </main>
         </div>
       </div>
 
@@ -2117,11 +2225,10 @@ export default function SuperAdminClient({
             handleNavClick("Dashboard");
             setMobileSidebarOpen(false);
           }}
-          className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-[360px]:gap-1 py-1 rounded-xl font-semibold transition-all cursor-pointer select-none ${
-            activeNav === "Dashboard"
+          className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-[360px]:gap-1 py-1 rounded-xl font-semibold transition-all cursor-pointer select-none ${activeNav === "Dashboard"
               ? "text-[var(--gold)] font-bold"
               : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
-          }`}
+            }`}
         >
           <div className={`p-1 min-[360px]:p-1.5 rounded-xl transition-all ${activeNav === "Dashboard" ? "bg-[var(--gold-dim)] text-[var(--gold)] scale-110 shadow-sm shadow-[var(--gold-glow)]" : ""}`}>
             <LayoutDashboard className="w-4 h-4 min-[360px]:w-5 min-[360px]:h-5" />
@@ -2138,11 +2245,10 @@ export default function SuperAdminClient({
             handleNavClick("Restaurants");
             setMobileSidebarOpen(false);
           }}
-          className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-[360px]:gap-1 py-1 rounded-xl font-semibold transition-all cursor-pointer select-none ${
-            activeNav === "Restaurants"
+          className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-[360px]:gap-1 py-1 rounded-xl font-semibold transition-all cursor-pointer select-none ${activeNav === "Restaurants"
               ? "text-[var(--gold)] font-bold"
               : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
-          }`}
+            }`}
         >
           <div className={`p-1 min-[360px]:p-1.5 rounded-xl transition-all ${activeNav === "Restaurants" ? "bg-[var(--gold-dim)] text-[var(--gold)] scale-110 shadow-sm shadow-[var(--gold-glow)]" : ""}`}>
             <Store className="w-4 h-4 min-[360px]:w-5 min-[360px]:h-5" />
@@ -2156,11 +2262,10 @@ export default function SuperAdminClient({
         <button
           type="button"
           onClick={() => setMobileSidebarOpen((prev) => !prev)}
-          className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-[360px]:gap-1 py-1 rounded-xl font-semibold transition-all cursor-pointer select-none ${
-            mobileSidebarOpen || (activeNav !== "Dashboard" && activeNav !== "Restaurants")
+          className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-[360px]:gap-1 py-1 rounded-xl font-semibold transition-all cursor-pointer select-none ${mobileSidebarOpen || (activeNav !== "Dashboard" && activeNav !== "Restaurants")
               ? "text-[var(--gold)] font-bold"
               : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
-          }`}
+            }`}
         >
           <div className={`p-1 min-[360px]:p-1.5 rounded-xl transition-all ${mobileSidebarOpen || (activeNav !== "Dashboard" && activeNav !== "Restaurants") ? "bg-[var(--gold-dim)] text-[var(--gold)] scale-110 shadow-sm shadow-[var(--gold-glow)]" : ""}`}>
             <Menu className="w-4 h-4 min-[360px]:w-5 min-[360px]:h-5" />

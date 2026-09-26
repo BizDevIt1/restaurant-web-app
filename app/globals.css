@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
-:root {
+:root,
+html.dark,
+[data-theme="dark"] {
   color-scheme: dark;
   --bg: #342c14;
   --bg-deep: #140c0c;
@@ -23,12 +25,15 @@
   --red-dim: rgba(255, 77, 79, 0.16);
   --text-hi: #f7f0dd;
   --text-lo: #c1b295;
+  --text-muted: #c1b295;
   --text-faint: #8d8067;
   --radius: 18px;
   --radius-pill: 20px;
   --max-width: 1200px;
 }
 
+html.light,
+html:not(.dark) [data-theme="light"],
 [data-theme="light"] {
   color-scheme: light;
   --bg: #f8f6f0;
@@ -52,13 +57,17 @@
   --red-dim: rgba(220, 38, 38, 0.14);
   --text-hi: #342c14;
   --text-lo: #5c4e26;
+  --text-muted: #5c4e26;
   --text-faint: #8a7c55;
 }
 
 select {
   color-scheme: dark;
+  max-width: 100%;
+  text-overflow: ellipsis;
 }
 
+html.light select,
 [data-theme="light"] select {
   color-scheme: light;
 }
@@ -66,6 +75,7 @@ select {
 select option {
   background-color: var(--bg-deep);
   color: var(--text-hi);
+  max-width: 100%;
 }
 
 /* Base Body Ambient Background */
@@ -81,7 +91,21 @@ body {
   overflow-x: hidden;
 }
 
-h1, h2, h3, h4, h5, h6 {
+html.light body,
+[data-theme="light"] body {
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(ellipse 65% 55% at 10% 0%, rgba(184, 133, 25, 0.08) 0%, transparent 70%),
+    radial-gradient(ellipse 65% 55% at 90% 12%, rgba(199, 62, 14, 0.06) 0%, transparent 65%),
+    radial-gradient(ellipse 80% 60% at 50% 100%, rgba(237, 232, 220, 0.9) 0%, transparent 100%);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   font-family: var(--font-display), sans-serif;
   letter-spacing: -0.02em;
 }
@@ -186,6 +210,7 @@ h1, h2, h3, h4, h5, h6 {
   from {
     transform: rotate(0deg);
   }
+
   to {
     transform: rotate(360deg);
   }
@@ -195,6 +220,7 @@ h1, h2, h3, h4, h5, h6 {
   from {
     transform: rotate(360deg);
   }
+
   to {
     transform: rotate(0deg);
   }
@@ -213,6 +239,7 @@ h1, h2, h3, h4, h5, h6 {
   0% {
     transform: translateX(0%);
   }
+
   100% {
     transform: translateX(-50%);
   }
@@ -234,10 +261,12 @@ h1, h2, h3, h4, h5, h6 {
     transform: scale(0.95);
     box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.6);
   }
+
   70% {
     transform: scale(1);
     box-shadow: 0 0 0 14px rgba(37, 211, 102, 0);
   }
+
   100% {
     transform: scale(0.95);
     box-shadow: 0 0 0 0 rgba(37, 211, 102, 0);
@@ -249,10 +278,13 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 @keyframes live-dot {
-  0%, 100% {
+
+  0%,
+  100% {
     opacity: 1;
     transform: scale(1);
   }
+
   50% {
     opacity: 0.4;
     transform: scale(0.85);
@@ -269,10 +301,12 @@ h1, h2, h3, h4, h5, h6 {
     opacity: 1;
     transform: translateY(0);
   }
+
   50% {
     opacity: 0.9;
     transform: translateY(8px);
   }
+
   100% {
     opacity: 0;
     transform: translateY(14px);
@@ -321,24 +355,29 @@ h1, h2, h3, h4, h5, h6 {
     opacity: 1;
     transform: translate(0, 0) skew(0deg);
   }
+
   20% {
     opacity: 0.9;
     transform: translate(-3px, 1px) skew(-1.5deg);
     filter: drop-shadow(-2px 0 0 rgba(227, 177, 59, 0.6));
   }
+
   40% {
     opacity: 0.8;
     transform: translate(3px, -1px) skew(1.5deg);
     filter: drop-shadow(2px 0 0 rgba(224, 78, 23, 0.6));
   }
+
   60% {
     opacity: 0.6;
     transform: translate(-2px, -1px) skew(-0.5deg);
   }
+
   80% {
     opacity: 0.3;
     transform: translate(1px, 2px) skew(0.5deg);
   }
+
   100% {
     opacity: 0;
     transform: translate(0, 4px);
@@ -350,20 +389,24 @@ h1, h2, h3, h4, h5, h6 {
     opacity: 0;
     transform: translate(0, -4px);
   }
+
   20% {
     opacity: 0.7;
     transform: translate(-3px, 1px) skew(1.5deg);
     filter: drop-shadow(-2px 0 0 rgba(227, 177, 59, 0.7));
   }
+
   50% {
     opacity: 0.9;
     transform: translate(2px, -1px) skew(-1deg);
     filter: drop-shadow(2px 0 0 rgba(224, 78, 23, 0.7));
   }
+
   80% {
     opacity: 1;
     transform: translate(-1px, 0) skew(0.5deg);
   }
+
   100% {
     opacity: 1;
     transform: translate(0, 0) skew(0deg);
@@ -372,11 +415,14 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 @keyframes glitch-slice-top {
-  0%, 100% {
+
+  0%,
+  100% {
     clip-path: polygon(0 18%, 100% 18%, 100% 48%, 0 48%);
     transform: translate(-2.5px, 0);
     opacity: 0.75;
   }
+
   50% {
     clip-path: polygon(0 10%, 100% 10%, 100% 38%, 0 38%);
     transform: translate(2.5px, -1px);
@@ -385,11 +431,14 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 @keyframes glitch-slice-bottom {
-  0%, 100% {
+
+  0%,
+  100% {
     clip-path: polygon(0 58%, 100% 58%, 100% 88%, 0 88%);
     transform: translate(2.5px, 0);
     opacity: 0.75;
   }
+
   50% {
     clip-path: polygon(0 68%, 100% 68%, 100% 95%, 0 95%);
     transform: translate(-2.5px, 1px);
@@ -426,6 +475,7 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Prefers Reduced Motion (Global rule) */
 @media (prefers-reduced-motion: reduce) {
+
   *,
   *::before,
   *::after {
@@ -434,12 +484,12 @@ h1, h2, h3, h4, h5, h6 {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-  
+
   .reveal-init {
     opacity: 1 !important;
     transform: none !important;
   }
-  
+
   .animate-orbit-spin,
   .animate-orbit-spin-reverse,
   .animate-marquee,
@@ -458,7 +508,9 @@ h1, h2, h3, h4, h5, h6 {
   0% {
     transform: translateX(-160%) skewX(-25deg);
   }
-  25%, 100% {
+
+  25%,
+  100% {
     transform: translateX(260%) skewX(-25deg);
   }
 }
@@ -483,4 +535,29 @@ h1, h2, h3, h4, h5, h6 {
 /* Smooth theme transition */
 html {
   transition: background-color 0.4s ease, color 0.4s ease;
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(227, 177, 59, 0.25);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(227, 177, 59, 0.5);
+}
+
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(227, 177, 59, 0.25) transparent;
 }

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Manrope, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { SplashProvider } from "../components/SplashScreen";
+import { CustomAlertProvider } from "./components/CustomAlertModal";
 
 const manrope = Manrope({
   variable: "--font-display",
@@ -71,9 +72,11 @@ export default function RootLayout({
         <link rel="shortcut icon" href="/favicon.png" type="image/png" />
         <link rel="apple-touch-icon" href="/favicon.png" />
       </head>
-      <body className="min-h-screen text-[var(--text-hi)] bg-[var(--bg)] font-[family-name:var(--font-body)] antialiased selection:bg-[var(--gold)] selection:text-[var(--bg-deep)]">
+      <body className="min-h-screen text-[var(--text-hi)] bg-[var(--bg)] font-[family-name:var(--font-body)] antialiased selection:bg-[var(--gold)] selection:text-[var(--bg-deep)] overflow-x-hidden">
         <SplashProvider defaultDuration={1200} autoPlayOnMount={true}>
-          {children}
+          <CustomAlertProvider>
+            {children}
+          </CustomAlertProvider>
         </SplashProvider>
       </body>
     </html>

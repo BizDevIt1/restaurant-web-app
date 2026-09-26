@@ -2,10 +2,19 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 
-// Initialize Supabase client with secret key for full DB & Auth Admin access
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://lcukmzldwsnkkfcogaug.supabase.co";
-const supabaseKey = process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || "";
-const supabase = createClient(supabaseUrl, supabaseKey);
+function getSupabaseClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://lcukmzldwsnkkfcogaug.supabase.co";
+  const supabaseKey = process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!supabaseUrl || !supabaseKey) {
+    return null;
+  }
+  try {
+    return createClient(supabaseUrl, supabaseKey);
+  } catch (err) {
+    console.error("Failed to initialize Supabase client in restaurants route:", err);
+    return null;
+  }
+}
 
 // Initialize Resend Client
 const resendApiKey = process.env.RESEND_API_KEY;
@@ -129,13 +138,22 @@ export const revalidate = 0;
 
 export async function GET() {
   try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return NextResponse.json({
+        restaurants: [],
+        notice: "Supabase credentials not configured in .env.local.",
+      });
+    }
+
     const { data, error } = await supabase
       .from("restaurants")
       .select("*")
       .order("id", { ascending: false });
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 });
+      console.warn("Supabase query error for restaurants:", error.message);
+      return NextResponse.json({ restaurants: [], error: error.message }, { status: 200 });
     }
 
     return NextResponse.json(
@@ -148,13 +166,26 @@ export async function GET() {
     );
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : "Failed to fetch restaurants";
-    return NextResponse.json({ error: errorMsg }, { status: 500 });
+    return NextResponse.json({ restaurants: [], error: errorMsg }, { status: 200 });
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return NextResponse.json(
+        { error: "Supabase is not configured. Please add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY to .env.local" },
+        { status: 503 }
+      );
+    }
+
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
+    }
     const {
       brand_name,
       city,
@@ -168,8 +199,24 @@ export async function POST(request: Request) {
       initial_status,
       branches,
       enabled_modules,
+      restaurant_type,
+      business_type,
       logo_url,
+      logoUrl,
     } = body;
+    const finalLogoUrl = logo_url || logoUrl || null;
+
+    // Determine franchise vs standalone
+    const isExplicitFranchise =
+      restaurant_type === "FRANCHISE" ||
+      restaurant_type === "franchise" ||
+      business_type === "franchise";
+
+    const branchesRaw = Array.isArray(branches) ? branches : branches ? [branches] : [];
+    const hasFranchiseBranch = branchesRaw.some(
+      (b: any) => typeof b === "object" && (b.type === "franchise" || b.type === "FRANCHISE")
+    );
+    const isFranchise = isExplicitFranchise || hasFranchiseBranch || branchesRaw.length > 1;
 
     // 1. Mandatory Validations
     const trimmedBrand = String(brand_name || "").trim();
@@ -193,99 +240,126 @@ export async function POST(request: Request) {
     let isExistingUser = false;
 
     try {
-      const initialPass = trimmedPassword || "AdminPass123!";
+      // Check if user already exists in Supabase Auth
+      const { data: usersData } = await supabase.auth.admin.listUsers();
+      const existingUser = usersData?.users?.find(
+        (u) => u.email?.toLowerCase() === trimmedEmail.toLowerCase()
+      );
 
-      // Fast attempt: Create user directly
-      const { data: newUserData, error: createError } = await supabase.auth.admin.createUser({
-        email: trimmedEmail,
-        password: initialPass,
-        email_confirm: true,
-        user_metadata: {
-          full_name: trimmedContact || trimmedBrand,
-          brand_name: trimmedBrand,
-          role: "restaurant_admin",
-        },
-      });
+      const userRoleMetadata = isFranchise ? "franchise_owner" : "restaurant_admin";
 
-      if (!createError && newUserData?.user?.id) {
-        owner_id = newUserData.user.id;
-        console.log(`[Supabase Auth] New restaurant admin created! User ID: ${owner_id}`);
-      } else {
-        // User already exists or createUser returned notice
+      if (existingUser) {
+        owner_id = existingUser.id;
         isExistingUser = true;
-        console.log(`[Supabase Auth] Existing user notice for ${trimmedEmail}:`, createError?.message);
+        console.log(`[Supabase Auth] Existing user found for ${trimmedEmail}:`, existingUser.id);
 
-        // Fast lookup for owner_id from restaurants table
-        const { data: existingRest } = await supabase
-          .from("restaurants")
-          .select("owner_id")
-          .eq("owner_email", trimmedEmail)
-          .not("owner_id", "is", null)
-          .limit(1)
-          .maybeSingle();
-
-        if (existingRest?.owner_id) {
-          owner_id = existingRest.owner_id;
+        // Update password & metadata for existing user if password was provided
+        const updatePayload: {
+          password?: string;
+          email_confirm?: boolean;
+          user_metadata: Record<string, any>;
+        } = {
+          email_confirm: true,
+          user_metadata: {
+            full_name: trimmedContact || trimmedBrand,
+            brand_name: trimmedBrand,
+            role: userRoleMetadata,
+            restaurant_type: isFranchise ? "FRANCHISE" : "STANDALONE",
+          },
+        };
+        if (trimmedPassword) {
+          updatePayload.password = trimmedPassword;
         }
+        await supabase.auth.admin.updateUserById(existingUser.id, updatePayload);
 
-        // Generate recovery link for invite url
+        // Generate recovery link if needed for email
         const { data: recoveryData } = await supabase.auth.admin.generateLink({
           type: "recovery",
           email: trimmedEmail,
           options: { redirectTo: redirectUrl },
         });
-
         if (recoveryData?.properties?.action_link) {
           inviteUrl = recoveryData.properties.action_link;
-          if (!owner_id && recoveryData.user?.id) {
-            owner_id = recoveryData.user.id;
-          }
         }
+      } else {
+        // Create new user directly with password and email_confirm: true
+        const initialPass = trimmedPassword || "AdminPass123!";
+        const { data: newUserData, error: createError } = await supabase.auth.admin.createUser({
+          email: trimmedEmail,
+          password: initialPass,
+          email_confirm: true,
+          user_metadata: {
+            full_name: trimmedContact || trimmedBrand,
+            brand_name: trimmedBrand,
+            role: userRoleMetadata,
+            restaurant_type: isFranchise ? "FRANCHISE" : "STANDALONE",
+          },
+        });
 
-        // If we identified owner_id, update password & metadata
-        if (owner_id) {
-          const updatePayload: {
-            password?: string;
-            email_confirm?: boolean;
-            user_metadata: Record<string, any>;
-          } = {
-            email_confirm: true,
-            user_metadata: {
-              full_name: trimmedContact || trimmedBrand,
-              brand_name: trimmedBrand,
-              role: "restaurant_admin",
+        if (createError) {
+          console.error("[Supabase CreateUser Error]:", createError);
+          // Fallback to generateLink if createUser had a glitch
+          const { data: inviteLinkData } = await supabase.auth.admin.generateLink({
+            type: "invite",
+            email: trimmedEmail,
+            options: {
+              data: {
+                full_name: trimmedContact || trimmedBrand,
+                brand_name: trimmedBrand,
+                role: "restaurant_admin",
+              },
+              redirectTo: redirectUrl,
             },
-          };
-          if (trimmedPassword) {
-            updatePayload.password = trimmedPassword;
+          });
+          if (inviteLinkData?.properties?.action_link) {
+            owner_id = inviteLinkData.user?.id || null;
+            inviteUrl = inviteLinkData.properties.action_link;
           }
-          await supabase.auth.admin.updateUserById(owner_id, updatePayload);
+        } else if (newUserData?.user?.id) {
+          owner_id = newUserData.user.id;
+          console.log(`[Supabase Auth] New restaurant admin created with direct password! User ID: ${owner_id}`);
         }
       }
     } catch (authErr: unknown) {
       console.error("[Supabase Auth Link Exception]:", authErr);
     }
 
-    // 3. Database Insertion with JSONB arrays and owner_id (Primary Priority)
-    let branchesArray: any[] = [];
+    // 3. Database Insertion with JSONB arrays and owner_id
+    let rawBranchesList: any[] = [];
     if (typeof branches === "string") {
       try {
         const parsed = JSON.parse(branches);
-        branchesArray = Array.isArray(parsed) ? parsed : [parsed];
+        rawBranchesList = Array.isArray(parsed) ? parsed : [parsed];
       } catch {
-        branchesArray = branches ? [{ name: branches, address: "" }] : [];
+        rawBranchesList = branches ? [{ name: branches, address: "" }] : [];
       }
     } else if (Array.isArray(branches)) {
-      branchesArray = branches;
+      rawBranchesList = branches;
     } else if (branches) {
-      branchesArray = [branches];
+      rawBranchesList = [branches];
     }
+
+    const branchesArray = rawBranchesList.map((b: any, idx: number) => {
+      if (typeof b === "object" && b !== null) {
+        return {
+          ...b,
+          type: isFranchise ? "franchise" : (b.type || "standalone"),
+          city: b.city || String(city || "Lahore").trim(),
+        };
+      }
+      return {
+        name: String(b),
+        type: isFranchise ? "franchise" : "standalone",
+        city: String(city || "Lahore").trim(),
+        address: String(hq_address || city || "").trim(),
+      };
+    });
 
     const modulesArray = Array.isArray(enabled_modules)
       ? enabled_modules
       : enabled_modules
-      ? [enabled_modules]
-      : [];
+        ? [enabled_modules]
+        : [];
 
     const payload = {
       brand_name: trimmedBrand,
@@ -300,7 +374,7 @@ export async function POST(request: Request) {
       branches: branchesArray,
       enabled_modules: modulesArray,
       owner_id: owner_id,
-      logo_url: logo_url ? String(logo_url).trim() : null,
+      logo_url: finalLogoUrl ? String(finalLogoUrl).trim() : null,
     };
 
     const { data, error: dbError } = await supabase
@@ -370,23 +444,22 @@ export async function POST(request: Request) {
 
 export async function PUT(request: Request) {
   try {
-    const body = await request.json();
-    const {
-      id,
-      initial_status,
-      brand_name,
-      city,
-      cuisine,
-      assigned_plan,
-      phone,
-      hq_address,
-      contact_person,
-      owner_email,
-      owner_password,
-      branches,
-      enabled_modules,
-      logo_url,
-    } = body;
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return NextResponse.json(
+        { error: "Supabase is not configured. Please add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY to .env.local" },
+        { status: 503 }
+      );
+    }
+
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
+    }
+
+    const { id, initial_status, brand_name, city, cuisine, assigned_plan, phone, branches, enabled_modules } = body;
 
     const numericId = typeof id === "number" ? id : parseInt(String(id).replace(/[^0-9]/g, ""), 10);
 
@@ -395,67 +468,14 @@ export async function PUT(request: Request) {
     }
 
     const payload: Record<string, any> = {};
-    if (initial_status !== undefined) payload.initial_status = String(initial_status).trim();
-    if (brand_name !== undefined) payload.brand_name = String(brand_name).trim();
-    if (city !== undefined) payload.city = String(city).trim();
-    if (cuisine !== undefined) payload.cuisine = String(cuisine).trim();
-    if (assigned_plan !== undefined) payload.assigned_plan = String(assigned_plan).trim();
-    if (phone !== undefined) payload.phone = String(phone).trim();
-    if (hq_address !== undefined) payload.hq_address = String(hq_address).trim();
-    if (contact_person !== undefined) payload.contact_person = String(contact_person).trim();
-    if (owner_email !== undefined) payload.owner_email = String(owner_email).trim();
-
-    if (branches !== undefined) {
-      if (typeof branches === "string") {
-        try {
-          const parsed = JSON.parse(branches);
-          payload.branches = Array.isArray(parsed) ? parsed : [parsed];
-        } catch {
-          payload.branches = branches ? [{ name: branches, address: "" }] : [];
-        }
-      } else {
-        payload.branches = Array.isArray(branches) ? branches : [branches];
-      }
-    }
-    if (enabled_modules !== undefined) {
-      payload.enabled_modules = Array.isArray(enabled_modules) ? enabled_modules : [enabled_modules];
-    }
-    if (logo_url !== undefined) {
-      payload.logo_url = logo_url ? String(logo_url).trim() : null;
-    }
-
-    // If owner_password is provided in update, update Supabase Auth User password
-    if (owner_password && String(owner_password).trim().length >= 6) {
-      const trimmedPass = String(owner_password).trim();
-      try {
-        const { data: currentRest } = await supabase
-          .from("restaurants")
-          .select("owner_id, owner_email")
-          .eq("id", numericId)
-          .single();
-
-        let authUserId = currentRest?.owner_id;
-        const targetEmail = owner_email || currentRest?.owner_email;
-
-        if (!authUserId && targetEmail) {
-          const { data: recoveryData } = await supabase.auth.admin.generateLink({
-            type: "recovery",
-            email: targetEmail,
-          });
-          if (recoveryData?.user?.id) {
-            authUserId = recoveryData.user.id;
-          }
-        }
-
-        if (authUserId) {
-          await supabase.auth.admin.updateUserById(authUserId, {
-            password: trimmedPass,
-          });
-        }
-      } catch (authErr) {
-        console.warn("[Auth Password Update Warning]:", authErr);
-      }
-    }
+    if (initial_status !== undefined) payload.initial_status = initial_status;
+    if (brand_name !== undefined) payload.brand_name = brand_name;
+    if (city !== undefined) payload.city = city;
+    if (cuisine !== undefined) payload.cuisine = cuisine;
+    if (assigned_plan !== undefined) payload.assigned_plan = assigned_plan;
+    if (phone !== undefined) payload.phone = phone;
+    if (branches !== undefined) payload.branches = branches;
+    if (enabled_modules !== undefined) payload.enabled_modules = enabled_modules;
 
     const { data, error } = await supabase
       .from("restaurants")
@@ -477,6 +497,14 @@ export async function PUT(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return NextResponse.json(
+        { error: "Supabase is not configured. Please add NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY to .env.local" },
+        { status: 503 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
 

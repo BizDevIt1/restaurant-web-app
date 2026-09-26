@@ -51,7 +51,7 @@ interface PlanTierItem {
 
 function parsePlanInterval(intervalStr?: string) {
   const raw = String(intervalStr || "Monthly").trim();
-  
+
   // Extract discount percentage e.g. "Annual (Save 20%)", "20%", "Annual (25% OFF)"
   const discountMatch = raw.match(/(\d+)\s*%/);
   const discountPercent = discountMatch ? parseInt(discountMatch[1], 10) : (raw.toLowerCase().includes("annual") ? 17 : 17);
@@ -141,8 +141,8 @@ function mapDbPlanToUi(dbPlan: any, customSymbol?: string): PlanTierItem {
   const featArr = Array.isArray(dbPlan.features)
     ? dbPlan.features
     : typeof dbPlan.features === "string" && dbPlan.features.trim()
-    ? dbPlan.features.split("\n").filter((f: string) => f.trim())
-    : [
+      ? dbPlan.features.split("\n").filter((f: string) => f.trim())
+      : [
         model === "per_branch" ? "Per-Branch Scaled Access" : "Full Platform License",
         "Omnibites Cloud POS",
         "High-Speed Billing Terminal",
@@ -165,14 +165,14 @@ function mapDbPlanToUi(dbPlan: any, customSymbol?: string): PlanTierItem {
     period: customDays
       ? `/ ${customDays} days`
       : model === "per_branch"
-      ? "/ branch / month"
-      : "/ month",
+        ? "/ branch / month"
+        : "/ month",
     rawInterval: raw,
     annualPrice: customDays
       ? `Billed every ${customDays} Days`
       : isAnnual
-      ? `Billed annually (Save ${discountPercent}%)`
-      : `Billed Monthly`,
+        ? `Billed annually (Save ${discountPercent}%)`
+        : `Billed Monthly`,
     discountPercent,
     customDuration: customDays ? `${customDays} Days` : undefined,
     subscribers: 0,
@@ -199,7 +199,7 @@ export default function SubscriptionsPlansView({
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingPlans, setIsLoadingPlans] = useState(true);
   const [isBillingDropdownOpen, setIsBillingDropdownOpen] = useState(false);
-  
+
   // Annual discount modal state
   const [isDiscountModalOpen, setIsDiscountModalOpen] = useState(false);
   const [annualDiscount, setAnnualDiscount] = useState("");
@@ -268,8 +268,8 @@ export default function SubscriptionsPlansView({
   const getPlansFromLocalStorage = (): PlanTierItem[] | null => {
     try {
       if (typeof window !== "undefined") {
-        const cached = localStorage.getItem(CACHE_KEY);
-        if (cached) {
+        const cached = sessionStorage.getItem(CACHE_KEY);
+        if (cached && cached.trim()) {
           return JSON.parse(cached);
         }
       }
@@ -291,20 +291,13 @@ export default function SubscriptionsPlansView({
     async function loadPlans(forceLoading = false) {
       if (forceLoading) setIsLoadingPlans(true);
       try {
-        const res = await fetch(`/api/super-admin/plans?t=${Date.now()}`, {
-          cache: "no-store",
-          headers: {
-            "Pragma": "no-cache",
-            "Cache-Control": "no-cache",
-          },
-        });
-        if (res.ok) {
-          const json = await res.json();
-          if (json && Array.isArray(json.plans) && json.plans.length > 0) {
-            const dbTiers = json.plans.map(mapDbPlanToUi);
-            setTierPlans(dbTiers);
-            savePlansToLocalStorage(dbTiers);
-          }
+        const res = await fetch("/api/super-admin/plans");
+        const text = await res.text();
+        const json = text ? JSON.parse(text) : null;
+        if (json && json.plans) {
+          const dbTiers = json.plans.map(mapDbPlanToUi);
+          setTierPlans(dbTiers);
+          savePlansToLocalStorage(dbTiers);
         }
       } catch (err) {
         console.warn("Failed to load plans from server:", err);
@@ -530,7 +523,9 @@ export default function SubscriptionsPlansView({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: numericId }),
       });
-      const data = await res.json();
+      const text = await res.text();
+      const data = text ? JSON.parse(text) : {};
+
       if (!res.ok || data.error) {
         throw new Error(data.error || "Failed to delete plan from database");
       }
@@ -625,9 +620,11 @@ export default function SubscriptionsPlansView({
         body: JSON.stringify(payload),
       });
 
-      const result = await response.json();
-      if (!response.ok || !result.plan) {
-        throw new Error(result.error || "Unable to save plan in database");
+      const text = await response.text();
+      const result = text ? JSON.parse(text) : {};
+
+      if (!response.ok || result.error) {
+        throw new Error(result.error || "Failed to save to Supabase");
       }
       const savedDbPlan = result.plan;
 
@@ -764,18 +761,16 @@ export default function SubscriptionsPlansView({
                 <button
                   type="button"
                   onClick={() => setNewPlan({ ...newPlan, pricingModel: "flat" })}
-                  className={`flex items-start gap-3 p-4 rounded-2xl text-left transition-all cursor-pointer border ${
-                    newPlan.pricingModel === "flat"
+                  className={`flex items-start gap-3 p-4 rounded-2xl text-left transition-all cursor-pointer border ${newPlan.pricingModel === "flat"
                       ? "bg-[var(--gold-dim)]/50 border-[var(--gold)] shadow-lg shadow-[var(--gold-glow)]"
                       : "bg-[var(--surface-hi)] border-[var(--border)] hover:border-[var(--gold)]/50 hover:bg-[var(--surface)] text-[var(--text-lo)]"
-                  }`}
+                    }`}
                 >
                   <div
-                    className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                      newPlan.pricingModel === "flat"
+                    className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${newPlan.pricingModel === "flat"
                         ? "bg-gradient-to-br from-[#f5c85c] to-[#e3b13b] text-[#342c14] shadow-md shadow-[var(--gold-glow)]"
                         : "bg-[var(--bg-deep)] text-[var(--text-lo)] border border-[var(--border)]"
-                    }`}
+                      }`}
                   >
                     <Layers className="w-4 h-4" />
                   </div>
@@ -800,18 +795,16 @@ export default function SubscriptionsPlansView({
                 <button
                   type="button"
                   onClick={() => setNewPlan({ ...newPlan, pricingModel: "per_branch" })}
-                  className={`flex items-start gap-3 p-4 rounded-2xl text-left transition-all cursor-pointer border ${
-                    newPlan.pricingModel === "per_branch"
+                  className={`flex items-start gap-3 p-4 rounded-2xl text-left transition-all cursor-pointer border ${newPlan.pricingModel === "per_branch"
                       ? "bg-[var(--gold-dim)]/50 border-[var(--gold)] shadow-lg shadow-[var(--gold-glow)]"
                       : "bg-[var(--surface-hi)] border-[var(--border)] hover:border-[var(--gold)]/50 hover:bg-[var(--surface)] text-[var(--text-lo)]"
-                  }`}
+                    }`}
                 >
                   <div
-                    className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                      newPlan.pricingModel === "per_branch"
+                    className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${newPlan.pricingModel === "per_branch"
                         ? "bg-gradient-to-br from-[#f5c85c] to-[#e3b13b] text-[#342c14] shadow-md shadow-[var(--gold-glow)]"
                         : "bg-[var(--bg-deep)] text-[var(--text-lo)] border border-[var(--border)]"
-                    }`}
+                      }`}
                   >
                     <Building2 className="w-4 h-4" />
                   </div>
@@ -856,9 +849,8 @@ export default function SubscriptionsPlansView({
                     value={newPlan.price}
                     onChange={(e) => setNewPlan({ ...newPlan, price: e.target.value.replace(/^[^\d]*/, "") })}
                     placeholder="0"
-                    className={`w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)] rounded-xl pr-4 py-2.5 text-sm font-semibold text-[var(--text-hi)] placeholder-[var(--text-faint)] focus:outline-none transition-all ${
-                      symbol.length > 2 ? (symbol.endsWith(".") ? "pl-[38px]" : "pl-[42px]") : symbol.length === 2 ? "pl-[32px]" : "pl-[26px]"
-                    }`}
+                    className={`w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)] rounded-xl pr-4 py-2.5 text-sm font-semibold text-[var(--text-hi)] placeholder-[var(--text-faint)] focus:outline-none transition-all ${symbol.length > 2 ? (symbol.endsWith(".") ? "pl-[38px]" : "pl-[42px]") : symbol.length === 2 ? "pl-[32px]" : "pl-[26px]"
+                      }`}
                   />
                 </div>
                 <span className="text-[10.5px] text-[var(--text-lo)] block">
@@ -896,9 +888,8 @@ export default function SubscriptionsPlansView({
                         : newPlan.billing}
                     </span>
                     <ChevronDown
-                      className={`w-4 h-4 text-[var(--text-lo)] transition-transform duration-200 ${
-                        isBillingDropdownOpen ? "rotate-180 text-[var(--gold)]" : ""
-                      }`}
+                      className={`w-4 h-4 text-[var(--text-lo)] transition-transform duration-200 ${isBillingDropdownOpen ? "rotate-180 text-[var(--gold)]" : ""
+                        }`}
                     />
                   </button>
 
@@ -910,11 +901,10 @@ export default function SubscriptionsPlansView({
                           setNewPlan({ ...newPlan, billing: "Monthly" });
                           setIsBillingDropdownOpen(false);
                         }}
-                        className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${
-                          newPlan.billing === "Monthly"
+                        className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${newPlan.billing === "Monthly"
                             ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
                             : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
-                        }`}
+                          }`}
                       >
                         <span>Monthly</span>
                         {newPlan.billing === "Monthly" && <Check className="w-3.5 h-3.5" />}
@@ -927,11 +917,10 @@ export default function SubscriptionsPlansView({
                           setTempDiscount(annualDiscount || "");
                           setIsDiscountModalOpen(true);
                         }}
-                        className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${
-                          newPlan.billing === "Annual" || newPlan.billing.startsWith("Annual")
+                        className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${newPlan.billing === "Annual" || newPlan.billing.startsWith("Annual")
                             ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
                             : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
-                        }`}
+                          }`}
                       >
                         <div className="flex items-center gap-1.5">
                           <span>Annual</span>
@@ -1037,11 +1026,10 @@ export default function SubscriptionsPlansView({
                         key={sugg}
                         type="button"
                         onClick={() => handleAddFeature(sugg)}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer border ${
-                          isAdded
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all cursor-pointer border ${isAdded
                             ? "bg-[var(--gold-dim)] text-[var(--gold)] border-[var(--gold)]/40 font-bold opacity-60 cursor-default"
                             : "bg-[var(--surface-hi)] text-[var(--text-lo)] border-[var(--border)] hover:border-[var(--gold)] hover:text-[var(--text-hi)]"
-                        }`}
+                          }`}
                         disabled={isAdded}
                       >
                         {isAdded ? `✓ ${sugg}` : `+ ${sugg}`}
@@ -1061,11 +1049,10 @@ export default function SubscriptionsPlansView({
                 className="hidden"
               />
               <div
-                className={`w-6 h-6 rounded-xl flex items-center justify-center border transition-all ${
-                  newPlan.isFeatured
+                className={`w-6 h-6 rounded-xl flex items-center justify-center border transition-all ${newPlan.isFeatured
                     ? "bg-gradient-to-br from-[#f5c85c] to-[#e3b13b] border-[var(--gold)] text-[#342c14] shadow-md shadow-[var(--gold-glow)]"
                     : "border-[var(--border-hi)] bg-[var(--bg-deep)] text-[var(--text-faint)] group-hover:border-[var(--gold)]"
-                }`}
+                  }`}
               >
                 <Star className={`w-4 h-4 ${newPlan.isFeatured ? "fill-[#342c14]" : ""}`} />
               </div>
@@ -1185,11 +1172,10 @@ export default function SubscriptionsPlansView({
                         key={pct}
                         type="button"
                         onClick={() => setTempDiscount(pct)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
-                          tempDiscount === pct
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${tempDiscount === pct
                             ? "btn-gold shadow-sm border-white/30"
                             : "bg-[var(--surface-hi)] text-[var(--text-lo)] border-[var(--border)] hover:border-[var(--gold)] hover:text-[var(--text-hi)]"
-                        }`}
+                          }`}
                       >
                         {pct}%
                       </button>
@@ -1296,11 +1282,10 @@ export default function SubscriptionsPlansView({
                         key={days}
                         type="button"
                         onClick={() => setTempCustomDays(days)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
-                          tempCustomDays === days
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${tempCustomDays === days
                             ? "btn-gold shadow-sm border-white/30"
                             : "bg-[var(--surface-hi)] text-[var(--text-lo)] border-[var(--border)] hover:border-[var(--gold)] hover:text-[var(--text-hi)]"
-                        }`}
+                          }`}
                       >
                         {days} Days
                       </button>
@@ -1402,22 +1387,20 @@ export default function SubscriptionsPlansView({
         </div>
       ) : (
         <div
-          className={`w-full ${
-            tierPlans.length === 1
+          className={`w-full ${tierPlans.length === 1
               ? "max-w-md"
               : tierPlans.length === 2
-              ? "grid grid-cols-1 md:grid-cols-2 max-w-4xl gap-6 sm:gap-8 items-stretch"
-              : "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 items-stretch"
-          }`}
+                ? "grid grid-cols-1 md:grid-cols-2 max-w-4xl gap-6 sm:gap-8 items-stretch"
+                : "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8 items-stretch"
+            }`}
         >
           {tierPlans.map((tier) => (
             <div
               key={tier.id}
-              className={`rounded-3xl p-6 sm:p-8 flex flex-col justify-between transition-all duration-300 relative min-w-0 ${
-                tier.isFeatured
+              className={`rounded-3xl p-6 sm:p-8 flex flex-col justify-between transition-all duration-300 relative min-w-0 ${tier.isFeatured
                   ? "bg-[var(--bg-soft)] border-2 border-[var(--gold)] shadow-2xl shadow-[var(--gold-glow)]"
                   : "glass-panel border border-[var(--border)] hover:border-[var(--gold)]/60"
-              }`}
+                }`}
             >
               {/* Featured Badge */}
               {tier.isFeatured && (
@@ -1453,8 +1436,8 @@ export default function SubscriptionsPlansView({
                       {tier.customDuration
                         ? `/ ${tier.customDuration.toLowerCase()}`
                         : tier.pricingModel === "per_branch"
-                        ? "/ branch / month"
-                        : "/ month"}
+                          ? "/ branch / month"
+                          : "/ month"}
                     </span>
                   </div>
                   {tier.customDuration ? (

@@ -35,7 +35,7 @@ interface PlanItem {
 
 function parsePlanInterval(intervalStr?: string) {
   const raw = String(intervalStr || "Monthly").trim();
-  
+
   // Extract discount percentage e.g. "Annual (Save 20%)", "20%", "Annual (25% OFF)"
   const discountMatch = raw.match(/(\d+)\s*%/);
   const discountPercent = discountMatch ? parseInt(discountMatch[1], 10) : (raw.toLowerCase().includes("annual") ? 17 : 17);
@@ -99,7 +99,7 @@ function parsePlanModelAndTagline(dbPlan: {
 function mapSupabasePlanToPricingTier(dbPlan: any, customSymbol?: string): PlanItem {
   const numPrice = Number(dbPlan.rawPrice !== undefined ? dbPlan.rawPrice : (dbPlan.price || 0));
   const formattedMonthly = formatCurrencyPrice(numPrice, customSymbol);
-  
+
   const rawInterval = String(dbPlan.rawInterval || dbPlan.interval || "Monthly").trim();
   const { raw, discountPercent, customDays } = parsePlanInterval(rawInterval);
 
@@ -122,8 +122,8 @@ function mapSupabasePlanToPricingTier(dbPlan: any, customSymbol?: string): PlanI
   const featArr = Array.isArray(dbPlan.features)
     ? dbPlan.features
     : typeof dbPlan.features === "string" && dbPlan.features.trim()
-    ? dbPlan.features.split("\n").filter((f: string) => f.trim())
-    : [
+      ? dbPlan.features.split("\n").filter((f: string) => f.trim())
+      : [
         model === "per_branch" ? "Per-Branch Scaled Access" : "Full Platform License",
         "Omnibites Cloud POS",
         "High-Speed Billing Terminal",
@@ -166,8 +166,8 @@ export default function PricingSection() {
     // 1. Instant check in persistent localStorage with normalization
     try {
       if (typeof window !== "undefined") {
-        const cached = localStorage.getItem(CACHE_KEY);
-        if (cached) {
+        const cached = sessionStorage.getItem(CACHE_KEY);
+        if (cached && cached.trim()) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
             const normalized = parsed.map((p) => mapSupabasePlanToPricingTier(p));
@@ -184,25 +184,21 @@ export default function PricingSection() {
     async function loadLivePlans(forceLoading = false) {
       if (forceLoading) setIsLoading(true);
       try {
-        const res = await fetch(`/api/super-admin/plans?t=${Date.now()}`, {
-          cache: "no-store",
-          headers: {
-            "Pragma": "no-cache",
-            "Cache-Control": "no-cache",
-          },
-        });
-        if (res.ok) {
-          const json = await res.json();
-          if (json && Array.isArray(json.plans) && json.plans.length > 0) {
-            const mapped = json.plans.map((p: any) => mapSupabasePlanToPricingTier(p));
-            setPlans(mapped);
-            try {
-              if (typeof window !== "undefined") {
-                localStorage.setItem(CACHE_KEY, JSON.stringify(mapped));
-              }
-            } catch (e) {
-              console.warn("Pricing cache write error:", e);
+        const res = await fetch("/api/super-admin/plans");
+        if (!res.ok) {
+          throw new Error(`HTTP error ${res.status}`);
+        }
+        const text = await res.text();
+        const data = text ? JSON.parse(text) : null;
+        if (data && data.plans && data.plans.length > 0) {
+          const mapped = data.plans.map(mapSupabasePlanToPricingTier);
+          setPlans(mapped);
+          try {
+            if (typeof window !== "undefined") {
+              sessionStorage.setItem(CACHE_KEY, JSON.stringify(mapped));
             }
+          } catch (e) {
+            console.warn("Pricing cache write error:", e);
           }
         }
       } catch (err) {
@@ -252,7 +248,7 @@ export default function PricingSection() {
               setPlans(parsed.map((p: any) => mapSupabasePlanToPricingTier(p)));
               setIsLoading(false);
             }
-          } catch {}
+          } catch { }
         }
         loadLivePlans(false);
       }
@@ -323,9 +319,8 @@ export default function PricingSection() {
           {/* Monthly / Annual Toggle */}
           <div className="flex items-center justify-center gap-4 pt-4">
             <span
-              className={`text-sm font-semibold cursor-pointer ${
-                !isAnnual ? "text-[var(--text-hi)]" : "text-[var(--text-faint)]"
-              }`}
+              className={`text-sm font-semibold cursor-pointer ${!isAnnual ? "text-[var(--text-hi)]" : "text-[var(--text-faint)]"
+                }`}
               onClick={() => setIsAnnual(false)}
             >
               Monthly Billing
@@ -337,17 +332,15 @@ export default function PricingSection() {
               aria-label="Toggle annual pricing"
             >
               <div
-                className={`w-6 h-6 rounded-full bg-[var(--gold)] shadow-md transition-transform duration-300 ${
-                  isAnnual ? "translate-x-6 bg-gradient-to-r from-[var(--gold)] to-[var(--orange)]" : "translate-x-0"
-                }`}
+                className={`w-6 h-6 rounded-full bg-[var(--gold)] shadow-md transition-transform duration-300 ${isAnnual ? "translate-x-6 bg-gradient-to-r from-[var(--gold)] to-[var(--orange)]" : "translate-x-0"
+                  }`}
               ></div>
             </button>
 
             <div className="flex items-center gap-2">
               <span
-                className={`text-sm font-semibold cursor-pointer ${
-                  isAnnual ? "text-[var(--text-hi)]" : "text-[var(--text-faint)]"
-                }`}
+                className={`text-sm font-semibold cursor-pointer ${isAnnual ? "text-[var(--text-hi)]" : "text-[var(--text-faint)]"
+                  }`}
                 onClick={() => setIsAnnual(true)}
               >
                 Annual Billing
@@ -381,22 +374,20 @@ export default function PricingSection() {
           </div>
         ) : (
           <div
-            className={`w-full ${
-              plans.length === 1
+            className={`w-full ${plans.length === 1
                 ? "max-w-md mx-auto"
                 : plans.length === 2
-                ? "grid grid-cols-1 md:grid-cols-2 max-w-4xl mx-auto gap-6 sm:gap-8 items-stretch"
-                : "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 max-w-[1240px] mx-auto gap-6 sm:gap-8 items-stretch"
-            }`}
+                  ? "grid grid-cols-1 md:grid-cols-2 max-w-4xl mx-auto gap-6 sm:gap-8 items-stretch"
+                  : "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 max-w-[1240px] mx-auto gap-6 sm:gap-8 items-stretch"
+              }`}
           >
             {plans.map((tier) => (
               <div
                 key={tier.id}
-                className={`rounded-3xl p-6 sm:p-8 flex flex-col justify-between transition-all duration-300 relative ${
-                  tier.isFeatured
+                className={`rounded-3xl p-6 sm:p-8 flex flex-col justify-between transition-all duration-300 relative ${tier.isFeatured
                     ? "bg-[var(--bg-soft)] border-2 border-[var(--gold)] shadow-2xl shadow-[var(--gold-glow)] scale-[1.02] lg:-translate-y-1.5 z-10"
                     : "glass-panel border border-[var(--border)] hover:border-[var(--gold)]/60"
-                }`}
+                  }`}
               >
                 {/* Featured Badge */}
                 {tier.isFeatured && (
@@ -429,15 +420,15 @@ export default function PricingSection() {
                         {tier.customDuration
                           ? formatPrice(tier.rawPrice)
                           : isAnnual
-                          ? formatPrice(Math.round(tier.rawPrice * Math.max(0, (100 - tier.discountPercent) / 100)))
-                          : formatPrice(tier.rawPrice)}
+                            ? formatPrice(Math.round(tier.rawPrice * Math.max(0, (100 - tier.discountPercent) / 100)))
+                            : formatPrice(tier.rawPrice)}
                       </span>
                       <span className="font-mono text-xs text-[var(--text-faint)]">
                         {tier.customDuration
                           ? `/ ${tier.customDuration.toLowerCase()}`
                           : tier.pricingModel === "per_branch"
-                          ? "/ branch / month"
-                          : "/ month"}
+                            ? "/ branch / month"
+                            : "/ month"}
                       </span>
                     </div>
                     {tier.customDuration ? (
@@ -473,11 +464,10 @@ export default function PricingSection() {
                 <button
                   type="button"
                   onClick={() => handlePlanSelect(tier)}
-                  className={`w-full py-3.5 px-4 text-xs sm:text-sm font-bold text-center rounded-xl transition-all block cursor-pointer shadow-md ${
-                    tier.isFeatured
+                  className={`w-full py-3.5 px-4 text-xs sm:text-sm font-bold text-center rounded-xl transition-all block cursor-pointer shadow-md ${tier.isFeatured
                       ? "btn-gold shadow-lg shadow-[var(--gold-glow)] hover:scale-[1.02] active:scale-[0.98]"
                       : "bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--text-hi)] hover:border-[var(--gold)] hover:text-[var(--gold)] hover:bg-[var(--gold-dim)]/20"
-                  }`}
+                    }`}
                 >
                   {tier.ctaText || "Get Started"}
                 </button>

@@ -9,6 +9,9 @@ import Navbar from "../components/Navbar";
 import WhatsAppFloat from "../components/WhatsAppFloat";
 import { useSplash } from "../components/SplashScreen";
 
+import { authenticateLocalAccount, setActiveUserSession } from "../../lib/tenantStore";
+import { AuthenticatedUser, UserRole } from "../admin/types";
+
 export default function LoginPage() {
   const router = useRouter();
   const { triggerSplash, hideSplash, isVisible: isSplashVisible } = useSplash();
@@ -17,6 +20,7 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
   // Forgot password state
   const [showForgotModal, setShowForgotModal] = useState(false);
@@ -28,10 +32,84 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setInfoMessage(null);
 
     // Trigger splash screen to cover authentication process
-    triggerSplash(3000);
+    triggerSplash(2500);
 
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedPassword = password;
+    const redirectTarget =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("redirect") || "/admin"
+        : "/admin";
+
+    // 1. Check if user is an operational staff member in Supabase (Cashier, Chef, Rider, Branch Manager)
+    try {
+      const supabase = createClient();
+      const { data: staffData } = await supabase
+        .from("staff_members")
+        .select("*, restaurants(*)")
+        .eq("email", trimmedEmail)
+        .maybeSingle();
+
+      if (staffData) {
+        if (staffData.password_hash === trimmedPassword || staffData.password_hash === password) {
+          hideSplash();
+          if (staffData.status !== "active") {
+            setErrorMessage("This staff account is currently suspended or inactive. Contact branch manager.");
+          } else {
+            // Staff members are strictly restricted from the Web Admin Dashboard.
+            // Stay right on login page and show message without redirecting or wiping admin session.
+            setErrorMessage("Staff member accounts cannot log in to the web admin portal. Please access via your dedicated terminal.");
+          }
+          setTimeout(() => setErrorMessage(null), 4000);
+          return;
+        } else {
+          hideSplash();
+          setErrorMessage("Incorrect password for staff account. Please try again.");
+          setTimeout(() => setErrorMessage(null), 3200);
+          return;
+        }
+      }
+    } catch (staffErr) {
+      console.warn("[Staff Auth Lookup Exception]:", staffErr);
+    }
+
+    // 1b. Check local staff storage in case of offline/locally added staff
+    try {
+      const { getStoredStaff } = await import("../../lib/tenantStore");
+      const localStaffList = getStoredStaff("27", []);
+      const matchedLocalStaff = localStaffList.find(
+        (s: any) => s.email && s.email.toLowerCase().trim() === trimmedEmail
+      );
+      if (matchedLocalStaff) {
+        if (matchedLocalStaff.password === trimmedPassword || matchedLocalStaff.password === password) {
+          hideSplash();
+          setErrorMessage("Staff member accounts cannot log in to the web admin portal. Please access via your dedicated terminal.");
+          setTimeout(() => setErrorMessage(null), 4000);
+          return;
+        } else {
+          hideSplash();
+          setErrorMessage("Incorrect password for staff account. Please try again.");
+          setTimeout(() => setErrorMessage(null), 3200);
+          return;
+        }
+      }
+    } catch { }
+
+    // 2. Check local tenant store (Branch Admins created by Franchiser or seeded personas)
+    const localUser = authenticateLocalAccount(trimmedEmail, trimmedPassword);
+    if (localUser) {
+      localUser.userType = "ADMIN";
+      localUser.terminalAccess = "FULL_ADMIN";
+      setActiveUserSession(localUser);
+      router.push(redirectTarget);
+      router.refresh();
+      return;
+    }
+
+    // 3. Supabase Auth for Super Admin or Restaurants registered in DB
     try {
       const supabase = createClient();
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -40,10 +118,21 @@ export default function LoginPage() {
       });
 
       if (error) {
+        // If Supabase sign-in failed, check if account was provisioned in local storage
+        const fallbackLocal = authenticateLocalAccount(trimmedEmail, trimmedPassword);
+        if (fallbackLocal) {
+          fallbackLocal.userType = "ADMIN";
+          fallbackLocal.terminalAccess = "FULL_ADMIN";
+          setActiveUserSession(fallbackLocal);
+          router.push(redirectTarget);
+          router.refresh();
+          return;
+        }
+
         hideSplash();
         const displayMsg =
           error.message.toLowerCase().includes("invalid login credentials") ||
-          error.message.toLowerCase().includes("invalid credentials")
+            error.message.toLowerCase().includes("invalid credentials")
             ? "Incorrect email or password. Please try again."
             : error.message;
         setErrorMessage(displayMsg);
@@ -54,56 +143,378 @@ export default function LoginPage() {
       }
 
       if (data?.session || data?.user) {
-        if (typeof window !== "undefined") {
-          try {
-            localStorage.setItem("sa_admin_current_password", password);
-          } catch {}
-        }
+        // -------------------------------------------------------------------------
+        // A. STRICT DATABASE & METADATA ROLE CHECK: IS THIS A SUPER ADMIN?
+        // -------------------------------------------------------------------------
+        let isSuperAdmin = false;
+
+        // 1. Check profiles table in Supabase (Primary Source of Truth for Super Admin)
         try {
-          await supabase.auth.updateUser({
-            data: { current_password: password },
-          });
-        } catch {}
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("role, email")
+            .or(`id.eq.${data.user.id},email.eq.${trimmedEmail}`)
+            .maybeSingle();
 
-        const userRole = data.user?.user_metadata?.role;
-        const userEmail = email.trim().toLowerCase();
-
-        if (userRole === "restaurant_admin") {
-          router.push("/admin");
-        } else if (userRole === "super_admin") {
-          router.push("/super-admin/dashboard");
-        } else {
-          try {
-            const { data: restData } = await supabase
-              .from("restaurants")
-              .select("id, owner_email")
-              .eq("owner_email", userEmail)
-              .limit(1)
-              .maybeSingle();
-
-            if (restData) {
-              router.push("/admin");
-            } else {
-              router.push("/super-admin/dashboard");
-            }
-          } catch {
-            router.push("/admin");
+          if (
+            profileData?.role?.toLowerCase() === "super_admin" ||
+            profileData?.role?.toLowerCase() === "superadmin"
+          ) {
+            isSuperAdmin = true;
           }
+        } catch (profileErr) {
+          console.warn("[Profiles Role Check Notice]:", profileErr);
         }
-        router.refresh();
+
+        // 2. Check Supabase Auth User Metadata & App Metadata
+        const rawUserMetaRole = String(data.user?.user_metadata?.role || "").toLowerCase().trim();
+        const rawAppMetaRole = String(data.user?.app_metadata?.role || "").toLowerCase().trim();
+        if (
+          rawUserMetaRole === "super_admin" ||
+          rawUserMetaRole === "superadmin" ||
+          rawAppMetaRole === "super_admin" ||
+          rawAppMetaRole === "superadmin" ||
+          data.user?.user_metadata?.is_super_admin === true
+        ) {
+          isSuperAdmin = true;
+        }
+
+        // 3. Fallback check for platform master account
+        if (trimmedEmail === "bizdevit.dm@gmail.com") {
+          isSuperAdmin = true;
+        }
+
+        if (isSuperAdmin) {
+          // Open Super Admin Dashboard
+          router.push("/super-admin/dashboard");
+          router.refresh();
+          return;
+        }
+
+        // -------------------------------------------------------------------------
+        // B. BRANCH ADMIN CHECK (Staff / Manager assigned to a specific branch)
+        // -------------------------------------------------------------------------
+        if (rawUserMetaRole === "branch_admin") {
+          const branchName = data.user?.user_metadata?.branch_name || "Branch Outlet";
+          const orgId = data.user?.user_metadata?.organization_id || "27";
+          const fullName = data.user?.user_metadata?.full_name || "Branch Manager";
+
+          const authUser: AuthenticatedUser = {
+            id: String(data.user.id),
+            email: trimmedEmail,
+            name: fullName,
+            role: "BRANCH_ADMIN",
+            userType: "ADMIN",
+            terminalAccess: "FULL_ADMIN",
+            restaurantName: branchName,
+            branchName: branchName,
+            branchId: `br_${data.user.id}`,
+            assignedFeatures: ["POS", "KITCHEN", "MENU", "STAFF", "RIDER", "ANALYTICS"],
+            organizationId: String(orgId),
+            restaurantId: String(orgId),
+          };
+
+          setActiveUserSession(authUser);
+          router.push(redirectTarget);
+          router.refresh();
+          return;
+        }
+
+        // -------------------------------------------------------------------------
+        // C. RESTAURANT ADMIN OR FRANCHISER (FRANCHISE OWNER) CHECK
+        // -------------------------------------------------------------------------
+        try {
+          // Check if explicit franchiser intent from metadata, role, or email
+          const isExplicitFranchise =
+            rawUserMetaRole === "franchise_owner" ||
+            rawUserMetaRole === "franchiser" ||
+            rawUserMetaRole === "frenchiser" ||
+            data.user?.user_metadata?.restaurant_type === "FRANCHISE" ||
+            trimmedEmail.includes("frenchise") ||
+            trimmedEmail.includes("franchise") ||
+            String(data.user?.user_metadata?.brand_name || "").toLowerCase().includes("frenchise") ||
+            String(data.user?.user_metadata?.brand_name || "").toLowerCase().includes("franchise");
+
+          // 1. Query Supabase restaurants table (by owner_email OR owner_id)
+          const { data: restData } = await supabase
+            .from("restaurants")
+            .select("*")
+            .or(`owner_email.eq.${trimmedEmail},owner_id.eq.${data.user.id}`)
+            .limit(1)
+            .maybeSingle();
+
+          // 2. If not found in Supabase table directly, search local storage
+          const {
+            getStoredRestaurants,
+            saveStoredRestaurant,
+            getStoredFranchiseBranches,
+            saveFranchiseBranches,
+          } = await import("../../lib/tenantStore");
+
+          let targetRest = restData;
+          if (!targetRest && typeof window !== "undefined") {
+            const localList = getStoredRestaurants();
+            targetRest = localList.find(
+              (r: any) =>
+                (r.owner_email && r.owner_email.toLowerCase() === trimmedEmail) ||
+                (r.email && r.email.toLowerCase() === trimmedEmail) ||
+                (r.owner_id && String(r.owner_id) === String(data.user.id))
+            );
+          }
+
+          // 3. Resilient Provisioning: If no restaurant record exists yet for this authenticated user,
+          // dynamically initialize their profile using their auth metadata so they can access their dashboard!
+          if (!targetRest) {
+            const userBrand =
+              data.user?.user_metadata?.brand_name ||
+              data.user?.user_metadata?.restaurant_name ||
+              (isExplicitFranchise ? "Omnibites Franchise" : "My Restaurant");
+            const userContact =
+              data.user?.user_metadata?.full_name ||
+              data.user?.user_metadata?.contact_person ||
+              (isExplicitFranchise ? "Franchise Owner" : "Restaurant Admin");
+            const userCity = data.user?.user_metadata?.city || "Lahore";
+            const userCuisine = data.user?.user_metadata?.cuisine || "Fine Dining";
+            const userPhone = data.user?.user_metadata?.phone || "+92 300 0000000";
+
+            const defaultBranches = isExplicitFranchise
+              ? [
+                {
+                  id: `br_${data.user.id}_1`,
+                  name: `${userBrand} (Main Branch)`,
+                  code: "BR-01",
+                  city: userCity,
+                  address: "Main Commercial Area",
+                  phone: userPhone,
+                  managerName: userContact,
+                  managerEmail: trimmedEmail,
+                  assignedFeatures: ["POS", "KITCHEN", "MENU", "STAFF", "RIDER", "ANALYTICS"],
+                  status: "ACTIVE",
+                  todaySales: 0,
+                  activeOrders: 0,
+                  organizationId: String(data.user.id),
+                },
+                {
+                  id: `br_${data.user.id}_2`,
+                  name: `${userBrand} (Outlet 2)`,
+                  code: "BR-02",
+                  city: userCity,
+                  address: "Commercial Center",
+                  phone: userPhone,
+                  managerName: "Branch Manager",
+                  managerEmail: `branch2.${trimmedEmail}`,
+                  assignedFeatures: ["POS", "KITCHEN", "MENU", "STAFF", "RIDER", "ANALYTICS"],
+                  status: "ACTIVE",
+                  todaySales: 0,
+                  activeOrders: 0,
+                  organizationId: String(data.user.id),
+                },
+              ]
+              : [`${userBrand} (Main Branch)`];
+
+            targetRest = {
+              id: data.user.id,
+              owner_id: data.user.id,
+              brand_name: userBrand,
+              contact_person: userContact,
+              owner_email: trimmedEmail,
+              city: userCity,
+              cuisine: userCuisine,
+              phone: userPhone,
+              hq_address: "Main Commercial Facility",
+              assigned_plan: "Enterprise Plus",
+              initial_status: "Active",
+              branches: defaultBranches,
+              enabled_modules: [
+                "pos_terminal",
+                "kds_system",
+                "rider_app",
+                "inventory_stock",
+                "menu",
+                "staff",
+                "analytics",
+                "settings",
+                "branches",
+              ],
+            };
+
+            // Save to localStorage
+            saveStoredRestaurant(targetRest);
+
+            // Attempt to insert to Supabase restaurants table in the background
+            supabase
+              .from("restaurants")
+              .insert([{
+                brand_name: userBrand,
+                contact_person: userContact,
+                owner_email: trimmedEmail,
+                city: userCity,
+                cuisine: userCuisine,
+                phone: userPhone,
+                hq_address: "Main Commercial Facility",
+                assigned_plan: "Enterprise Plus",
+                initial_status: "Active",
+                branches: defaultBranches,
+                enabled_modules: [
+                  "pos_terminal",
+                  "kds_system",
+                  "rider_app",
+                  "inventory_stock",
+                ],
+                owner_id: data.user.id,
+              }])
+              .then(
+                ({ error: insertErr }) => {
+                  if (insertErr) console.warn("[Auto-provision restaurant notice]:", insertErr.message);
+                },
+                () => { }
+              );
+          }
+
+          // 4. Determine if franchise based on database record & metadata
+          const branchesRaw = Array.isArray(targetRest.branches)
+            ? targetRest.branches
+            : targetRest.branches
+              ? [targetRest.branches]
+              : [];
+
+          const hasFranchiseBranch = branchesRaw.some(
+            (b: any) =>
+              typeof b === "object" && (b.type === "franchise" || b.type === "FRANCHISE")
+          );
+
+          const isFranchise =
+            isExplicitFranchise ||
+            hasFranchiseBranch ||
+            targetRest.restaurant_type === "FRANCHISE" ||
+            targetRest.business_type === "franchise" ||
+            targetRest.restaurantType === "FRANCHISE" ||
+            branchesRaw.length > 1;
+
+          const mappedRole: UserRole = isFranchise ? "FRANCHISE_OWNER" : "STANDALONE_ADMIN";
+
+          // Normalize feature modules helper
+          const normalizeModules = (modules: any): string[] => {
+            if (!Array.isArray(modules) || modules.length === 0) {
+              return ["POS", "KITCHEN", "MENU", "STAFF", "RIDER", "ANALYTICS"];
+            }
+            const mapping: Record<string, string> = {
+              pos_terminal: "POS",
+              kds_system: "KITCHEN",
+              rider_app: "RIDER",
+              inventory_stock: "MENU",
+              menu: "MENU",
+              staff: "STAFF",
+              analytics: "ANALYTICS",
+              settings: "SETTINGS",
+              branches: "BRANCHES",
+            };
+            return modules.map((m: string) => {
+              const lower = String(m).toLowerCase().trim();
+              return mapping[lower] || m.toUpperCase();
+            });
+          };
+
+          let parsedBranches: any[] = [];
+          if (isFranchise) {
+            const storedDynamic = getStoredFranchiseBranches(String(targetRest.id));
+            const sourceBranches =
+              storedDynamic.length > 0
+                ? storedDynamic
+                : branchesRaw.length > 0
+                  ? branchesRaw
+                  : [targetRest.hq_address || targetRest.city || "Main Outlet"];
+
+            parsedBranches = sourceBranches.map((bName: any, idx: number) => {
+              const bTitle = typeof bName === "string" ? bName : bName.name || `Outlet ${idx + 1}`;
+              const bCity = typeof bName === "object" && bName.city ? bName.city : targetRest.city || "";
+              const bAddress =
+                typeof bName === "object" && bName.address
+                  ? bName.address
+                  : targetRest.hq_address || targetRest.city || "";
+              const bPhone = typeof bName === "object" && bName.phone ? bName.phone : targetRest.phone || "";
+
+              return {
+                id: typeof bName === "object" && bName.id ? bName.id : `branch_${targetRest.id}_${idx}`,
+                name: bTitle,
+                code:
+                  typeof bName === "object" && bName.code
+                    ? bName.code
+                    : `${(bCity || "BR").substring(0, 3).toUpperCase()}-${String(idx + 1).padStart(2, "0")}`,
+                city: bCity,
+                address: bAddress,
+                phone: bPhone,
+                managerName:
+                  typeof bName === "object" && bName.managerName
+                    ? bName.managerName
+                    : targetRest.contact_person || "Branch Manager",
+                managerEmail:
+                  typeof bName === "object" && bName.managerEmail
+                    ? bName.managerEmail
+                    : targetRest.owner_email || trimmedEmail,
+                assignedFeatures:
+                  typeof bName === "object" && bName.assignedFeatures
+                    ? bName.assignedFeatures
+                    : normalizeModules(targetRest.enabled_modules),
+                status: "ACTIVE",
+                todaySales: 0,
+                activeOrders: 0,
+                organizationId: String(targetRest.id),
+              };
+            });
+          }
+
+          const authUser: AuthenticatedUser = {
+            id: String(data.user.id || targetRest.id),
+            email: targetRest.owner_email || trimmedEmail,
+            name:
+              targetRest.contact_person ||
+              targetRest.brand_name ||
+              (isFranchise ? "Franchise Owner" : "Restaurant Admin"),
+            role: mappedRole,
+            userType: "ADMIN",
+            terminalAccess: "FULL_ADMIN",
+            restaurantName:
+              targetRest.brand_name || (isFranchise ? "Omnibites Franchise" : "Restaurant"),
+            city: targetRest.city || "",
+            address: targetRest.hq_address || "",
+            phone: targetRest.phone || "",
+            cuisine: targetRest.cuisine || "Fine Dining",
+            branchId: !isFranchise ? `br_${targetRest.id}` : undefined,
+            branchName: !isFranchise ? (targetRest.hq_address || targetRest.brand_name) : undefined,
+            branches: isFranchise ? parsedBranches : undefined,
+            assignedFeatures: normalizeModules(targetRest.enabled_modules),
+            restaurantType: isFranchise ? "FRANCHISE" : "STANDALONE",
+            branchesCount: isFranchise ? parsedBranches.length : 1,
+            organizationId: String(targetRest.id),
+            restaurantId: String(targetRest.id),
+          };
+
+          setActiveUserSession(authUser);
+          if (isFranchise && parsedBranches.length > 0) {
+            saveFranchiseBranches(parsedBranches, String(targetRest.id));
+          }
+
+          // Route to the dashboard
+          router.push(redirectTarget);
+          router.refresh();
+          return;
+        } catch (fetchErr) {
+          console.error("[Login Hydration Error]:", fetchErr);
+          hideSplash();
+          setErrorMessage("Failed to load restaurant profile. Please try again.");
+          setTimeout(() => {
+            setErrorMessage(null);
+          }, 3500);
+          return;
+        }
       } else {
         hideSplash();
       }
     } catch (err: unknown) {
       hideSplash();
-      let message = "An unexpected error occurred. Please try again.";
-      if (err instanceof Error) {
-        if (err.message.includes("Failed to fetch") || err.name === "TypeError") {
-          message = "Unable to reach the server. Please check your internet connection or verify your Supabase project status.";
-        } else {
-          message = err.message;
-        }
-      }
+      const message =
+        err instanceof Error ? err.message : "An unexpected error occurred. Please try again.";
       setErrorMessage(message);
       setTimeout(() => {
         setErrorMessage(null);
@@ -147,8 +558,8 @@ export default function LoginPage() {
         err instanceof Error && (err.message.includes("Failed to fetch") || err.name === "TypeError")
           ? "Unable to reach the server. Please check your connection."
           : err instanceof Error
-          ? err.message
-          : "Failed to send reset link.";
+            ? err.message
+            : "Failed to send reset link.";
       setForgotError(message);
     } finally {
       setForgotLoading(false);
@@ -165,6 +576,15 @@ export default function LoginPage() {
         <div className="fixed top-[88px] right-6 sm:right-8 z-50 flex items-center px-4 py-2 rounded-full bg-[#ef4444]/15 backdrop-blur-2xl border border-[#ef4444]/40 text-[#ef4444] shadow-xl shadow-black/40 animate-in fade-in slide-in-from-top-3 duration-300 pointer-events-none select-none">
           <span className="text-xs sm:text-sm font-semibold tracking-tight">
             {errorMessage}
+          </span>
+        </div>
+      )}
+
+      {/* Floating Info Tooltip on Staff Kiosk Redirection */}
+      {infoMessage && (
+        <div className="fixed top-[88px] right-6 sm:right-8 z-50 flex items-center px-4 py-2.5 rounded-full bg-[var(--gold)]/15 backdrop-blur-2xl border border-[var(--gold)]/40 text-[var(--gold)] shadow-xl shadow-black/40 animate-in fade-in slide-in-from-top-3 duration-300 pointer-events-none select-none">
+          <span className="text-xs sm:text-sm font-semibold tracking-tight">
+            {infoMessage}
           </span>
         </div>
       )}

@@ -330,7 +330,8 @@ export default function RestaurantsView({
         headers: { "Cache-Control": "no-cache" },
       });
       if (res.ok) {
-        const data = await res.json();
+        const text = await res.text();
+        const data = text ? JSON.parse(text) : {};
         if (data.restaurants && Array.isArray(data.restaurants)) {
           const mapped = data.restaurants.map(mapSupabaseRestaurant);
           setRestaurants(mapped);
@@ -404,7 +405,7 @@ export default function RestaurantsView({
   useEffect(() => {
     try {
       const cached = sessionStorage.getItem("subscription_plans");
-      if (cached) {
+      if (cached && cached.trim()) {
         const parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
           const names = parsed.map((p: any) => p.name || p.title).filter(Boolean);
@@ -431,7 +432,8 @@ export default function RestaurantsView({
 
         const res = await fetch("/api/super-admin/plans");
         if (res.ok) {
-          const data = await res.json();
+          const text = await res.text();
+          const data = text ? JSON.parse(text) : {};
           if (data.plans && Array.isArray(data.plans) && data.plans.length > 0) {
             const names = data.plans.map((p: any) => p.name).filter(Boolean);
             if (names.length > 0) {
@@ -459,7 +461,7 @@ export default function RestaurantsView({
             }
           }
         };
-      } catch {}
+      } catch { }
     }
 
     const handleCustom = (e: Event) => {
@@ -543,6 +545,7 @@ export default function RestaurantsView({
     confirmPassword: "",
     status: "" as RestaurantStatus | "",
     logoUrl: "",
+    businessType: "standalone" as "franchise" | "standalone",
   });
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showAdminPassword, setShowAdminPassword] = useState(false);
@@ -685,6 +688,7 @@ export default function RestaurantsView({
       confirmPassword: "",
       status: item.status || "Active",
       logoUrl: item.logoUrl || "",
+      businessType: item.outletType === "multi" || item.isMultiBranch ? "franchise" : "standalone",
     });
 
     const branches: BranchItem[] = item.branches && item.branches.length > 0
@@ -813,6 +817,7 @@ export default function RestaurantsView({
       confirmPassword: "",
       status: "",
       logoUrl: "",
+      businessType: "standalone",
     });
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -1088,6 +1093,7 @@ export default function RestaurantsView({
         confirmPassword: "",
         status: "",
         logoUrl: "",
+        businessType: "standalone",
       });
       setShowCurrentPassword(false);
       setShowAdminPassword(false);
@@ -1300,6 +1306,67 @@ export default function RestaurantsView({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {/* Restaurant Scale & Hierarchy Type (Franchise vs Standalone) */}
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="font-bold text-[var(--text-hi)] uppercase font-mono text-[10.5px] flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-[var(--gold)]" />
+                    <span>Restaurant Hierarchy &amp; Business Model <span className="text-[var(--gold)]">*</span></span>
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setFormState({ ...formState, businessType: "franchise" })}
+                      className={`p-3.5 rounded-2xl border text-left cursor-pointer transition-all flex items-start gap-3 ${formState.businessType === "franchise"
+                          ? "bg-[var(--gold-dim)] border-[var(--gold)] shadow-md shadow-[var(--gold-glow)]/15"
+                          : "bg-[var(--surface-hi)] border-[var(--border)] hover:border-[var(--gold)]/40 text-[var(--text-lo)]"
+                        }`}
+                    >
+                      <div className={`p-2 rounded-xl shrink-0 ${formState.businessType === "franchise" ? "bg-[var(--gold)] text-black" : "bg-[var(--surface)] text-[var(--gold)]"}`}>
+                        <Building2 className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-[var(--text-hi)]">
+                            Franchise (Multi-Branch HQ)
+                          </span>
+                          {formState.businessType === "franchise" && (
+                            <span className="px-1.5 py-0.2 rounded bg-[var(--gold)] text-black text-[9px] font-mono font-black uppercase">Active</span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-[var(--text-lo)] mt-0.5 leading-relaxed">
+                          Multi-branch network with central HQ controls, dynamic branch provisioning, and delegatable outlets.
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFormState({ ...formState, businessType: "standalone" })}
+                      className={`p-3.5 rounded-2xl border text-left cursor-pointer transition-all flex items-start gap-3 ${formState.businessType === "standalone"
+                          ? "bg-[var(--gold-dim)] border-[var(--gold)] shadow-md shadow-[var(--gold-glow)]/15"
+                          : "bg-[var(--surface-hi)] border-[var(--border)] hover:border-[var(--gold)]/40 text-[var(--text-lo)]"
+                        }`}
+                    >
+                      <div className={`p-2 rounded-xl shrink-0 ${formState.businessType === "standalone" ? "bg-[var(--gold)] text-black" : "bg-[var(--surface)] text-[var(--gold)]"}`}>
+                        <Store className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-[var(--text-hi)]">
+                            Standalone (Single Outlet)
+                          </span>
+                          {formState.businessType === "standalone" && (
+                            <span className="px-1.5 py-0.2 rounded bg-[var(--gold)] text-black text-[9px] font-mono font-black uppercase">Active</span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-[var(--text-lo)] mt-0.5 leading-relaxed">
+                          Independent single-outlet restaurant with dedicated POS counter, KDS, and direct billing.
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
                 {/* Brand Name */}
                 <div className="space-y-1.5 md:col-span-2">
                   <label className="font-semibold text-[var(--text-hi)] uppercase text-xs">
@@ -1385,8 +1452,8 @@ export default function RestaurantsView({
                                   setIsCityDropdownOpen(false);
                                 }}
                                 className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${formState.city === cityName
-                                    ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
-                                    : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
+                                  ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
+                                  : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
                                   }`}
                               >
                                 <span>{cityName}</span>
@@ -1435,8 +1502,8 @@ export default function RestaurantsView({
                               setIsCategoryDropdownOpen(false);
                             }}
                             className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${formState.category === cat
-                                ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
-                                : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
+                              ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
+                              : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
                               }`}
                           >
                             <span>{cat}</span>
@@ -1562,8 +1629,8 @@ export default function RestaurantsView({
                         }
                       }}
                       className={`border-2 border-dashed rounded-2xl p-5 text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-2 group ${isUploadingLogo
-                          ? "border-[var(--gold)] bg-[var(--gold-dim)]/40 animate-pulse pointer-events-none"
-                          : "border-[var(--border-hi)] hover:border-[var(--gold)]/70 bg-[var(--surface-hi)]/40 hover:bg-[var(--surface-hi)]"
+                        ? "border-[var(--gold)] bg-[var(--gold-dim)]/40 animate-pulse pointer-events-none"
+                        : "border-[var(--border-hi)] hover:border-[var(--gold)]/70 bg-[var(--surface-hi)]/40 hover:bg-[var(--surface-hi)]"
                         }`}
                     >
                       <div className="w-11 h-11 rounded-2xl bg-[var(--gold-dim)] text-[var(--gold)] flex items-center justify-center border border-[var(--gold)]/30 group-hover:scale-110 transition-transform">
@@ -1801,13 +1868,12 @@ export default function RestaurantsView({
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <ShieldCheck
-                            className={`w-4 h-4 ${
-                              isPasswordTouched && !allRestPasswordRulesValid
+                            className={`w-4 h-4 ${isPasswordTouched && !allRestPasswordRulesValid
                                 ? "text-[#ef4444] [data-theme=light]_&:text-[#dc2626]"
                                 : allRestPasswordRulesValid
-                                ? "text-[#25d366] [data-theme=light]_&:text-[#15803d]"
-                                : "text-[var(--gold)]"
-                            }`}
+                                  ? "text-[#25d366] [data-theme=light]_&:text-[#15803d]"
+                                  : "text-[var(--gold)]"
+                              }`}
                           />
                           <span className="text-xs font-bold uppercase tracking-wider text-[var(--text-hi)]">
                             Password Requirements
@@ -1835,22 +1901,20 @@ export default function RestaurantsView({
                           const isError = isPasswordTouched && !isValid;
                           return (
                             <div
-                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${
-                                isValid
+                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${isValid
                                   ? "bg-[#25d366]/15 [data-theme=light]_&:bg-[#16a34a]/10 border-[#25d366]/40 [data-theme=light]_&:border-[#16a34a]/40 text-[#25d366] [data-theme=light]_&:text-[#15803d] font-semibold"
                                   : isError
-                                  ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
-                                  : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
-                              }`}
+                                    ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
+                                    : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
+                                }`}
                             >
                               <div
-                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${
-                                  isValid
+                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${isValid
                                     ? "bg-[#25d366] [data-theme=light]_&:bg-[#16a34a] border-[#25d366] [data-theme=light]_&:border-[#16a34a] text-[#0a0806] [data-theme=light]_&:text-white shadow-sm"
                                     : isError
-                                    ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
-                                    : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
-                                }`}
+                                      ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
+                                      : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
+                                  }`}
                               >
                                 {isValid ? <Check className="w-3 h-3 stroke-[3]" /> : isError ? <X className="w-3 h-3 stroke-[3]" /> : null}
                               </div>
@@ -1865,22 +1929,20 @@ export default function RestaurantsView({
                           const isError = isPasswordTouched && !isValid;
                           return (
                             <div
-                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${
-                                isValid
+                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${isValid
                                   ? "bg-[#25d366]/15 [data-theme=light]_&:bg-[#16a34a]/10 border-[#25d366]/40 [data-theme=light]_&:border-[#16a34a]/40 text-[#25d366] [data-theme=light]_&:text-[#15803d] font-semibold"
                                   : isError
-                                  ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
-                                  : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
-                              }`}
+                                    ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
+                                    : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
+                                }`}
                             >
                               <div
-                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${
-                                  isValid
+                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${isValid
                                     ? "bg-[#25d366] [data-theme=light]_&:bg-[#16a34a] border-[#25d366] [data-theme=light]_&:border-[#16a34a] text-[#0a0806] [data-theme=light]_&:text-white shadow-sm"
                                     : isError
-                                    ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
-                                    : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
-                                }`}
+                                      ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
+                                      : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
+                                  }`}
                               >
                                 {isValid ? <Check className="w-3 h-3 stroke-[3]" /> : isError ? <X className="w-3 h-3 stroke-[3]" /> : null}
                               </div>
@@ -1895,22 +1957,20 @@ export default function RestaurantsView({
                           const isError = isPasswordTouched && !isValid;
                           return (
                             <div
-                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${
-                                isValid
+                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${isValid
                                   ? "bg-[#25d366]/15 [data-theme=light]_&:bg-[#16a34a]/10 border-[#25d366]/40 [data-theme=light]_&:border-[#16a34a]/40 text-[#25d366] [data-theme=light]_&:text-[#15803d] font-semibold"
                                   : isError
-                                  ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
-                                  : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
-                              }`}
+                                    ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
+                                    : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
+                                }`}
                             >
                               <div
-                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${
-                                  isValid
+                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${isValid
                                     ? "bg-[#25d366] [data-theme=light]_&:bg-[#16a34a] border-[#25d366] [data-theme=light]_&:border-[#16a34a] text-[#0a0806] [data-theme=light]_&:text-white shadow-sm"
                                     : isError
-                                    ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
-                                    : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
-                                }`}
+                                      ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
+                                      : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
+                                  }`}
                               >
                                 {isValid ? <Check className="w-3 h-3 stroke-[3]" /> : isError ? <X className="w-3 h-3 stroke-[3]" /> : null}
                               </div>
@@ -1925,22 +1985,20 @@ export default function RestaurantsView({
                           const isError = isPasswordTouched && !isValid;
                           return (
                             <div
-                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${
-                                isValid
+                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${isValid
                                   ? "bg-[#25d366]/15 [data-theme=light]_&:bg-[#16a34a]/10 border-[#25d366]/40 [data-theme=light]_&:border-[#16a34a]/40 text-[#25d366] [data-theme=light]_&:text-[#15803d] font-semibold"
                                   : isError
-                                  ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
-                                  : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
-                              }`}
+                                    ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
+                                    : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
+                                }`}
                             >
                               <div
-                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${
-                                  isValid
+                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${isValid
                                     ? "bg-[#25d366] [data-theme=light]_&:bg-[#16a34a] border-[#25d366] [data-theme=light]_&:border-[#16a34a] text-[#0a0806] [data-theme=light]_&:text-white shadow-sm"
                                     : isError
-                                    ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
-                                    : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
-                                }`}
+                                      ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
+                                      : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
+                                  }`}
                               >
                                 {isValid ? <Check className="w-3 h-3 stroke-[3]" /> : isError ? <X className="w-3 h-3 stroke-[3]" /> : null}
                               </div>
@@ -1955,22 +2013,20 @@ export default function RestaurantsView({
                           const isError = isPasswordTouched && !isValid;
                           return (
                             <div
-                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${
-                                isValid
+                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${isValid
                                   ? "bg-[#25d366]/15 [data-theme=light]_&:bg-[#16a34a]/10 border-[#25d366]/40 [data-theme=light]_&:border-[#16a34a]/40 text-[#25d366] [data-theme=light]_&:text-[#15803d] font-semibold"
                                   : isError
-                                  ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
-                                  : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
-                              }`}
+                                    ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
+                                    : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
+                                }`}
                             >
                               <div
-                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${
-                                  isValid
+                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${isValid
                                     ? "bg-[#25d366] [data-theme=light]_&:bg-[#16a34a] border-[#25d366] [data-theme=light]_&:border-[#16a34a] text-[#0a0806] [data-theme=light]_&:text-white shadow-sm"
                                     : isError
-                                    ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
-                                    : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
-                                }`}
+                                      ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
+                                      : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
+                                  }`}
                               >
                                 {isValid ? <Check className="w-3 h-3 stroke-[3]" /> : isError ? <X className="w-3 h-3 stroke-[3]" /> : null}
                               </div>
@@ -1985,22 +2041,20 @@ export default function RestaurantsView({
                           const isError = isPasswordTouched && !isValid;
                           return (
                             <div
-                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${
-                                isValid
+                              className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs transition-all duration-200 ${isValid
                                   ? "bg-[#25d366]/15 [data-theme=light]_&:bg-[#16a34a]/10 border-[#25d366]/40 [data-theme=light]_&:border-[#16a34a]/40 text-[#25d366] [data-theme=light]_&:text-[#15803d] font-semibold"
                                   : isError
-                                  ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
-                                  : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
-                              }`}
+                                    ? "bg-[#ef4444]/15 [data-theme=light]_&:bg-[#ef4444]/10 border-[#ef4444]/40 [data-theme=light]_&:border-[#ef4444]/40 text-[#ef4444] [data-theme=light]_&:text-[#dc2626] font-semibold"
+                                    : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)]"
+                                }`}
                             >
                               <div
-                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${
-                                  isValid
+                                className={`w-4 h-4 rounded-md flex items-center justify-center shrink-0 border transition-all ${isValid
                                     ? "bg-[#25d366] [data-theme=light]_&:bg-[#16a34a] border-[#25d366] [data-theme=light]_&:border-[#16a34a] text-[#0a0806] [data-theme=light]_&:text-white shadow-sm"
                                     : isError
-                                    ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
-                                    : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
-                                }`}
+                                      ? "bg-[#ef4444] border-[#ef4444] text-white shadow-sm"
+                                      : "border-[var(--border-hi)] bg-[var(--bg-deep)]/40"
+                                  }`}
                               >
                                 {isValid ? <Check className="w-3 h-3 stroke-[3]" /> : isError ? <X className="w-3 h-3 stroke-[3]" /> : null}
                               </div>
@@ -2060,8 +2114,8 @@ export default function RestaurantsView({
                               setIsPlanDropdownOpen(false);
                             }}
                             className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${formState.planTier === tier
-                                ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
-                                : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
+                              ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
+                              : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
                               }`}
                           >
                             <span className="font-semibold">{tier}</span>
@@ -2122,8 +2176,8 @@ export default function RestaurantsView({
                             setIsStatusDropdownOpen(false);
                           }}
                           className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${formState.status === "Active"
-                              ? "bg-[#25d366]/15 text-[#25d366] font-bold"
-                              : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
+                            ? "bg-[#25d366]/15 text-[#25d366] font-bold"
+                            : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
                             }`}
                         >
                           <div className="flex items-center gap-2">
@@ -2140,8 +2194,8 @@ export default function RestaurantsView({
                             setIsStatusDropdownOpen(false);
                           }}
                           className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${formState.status === "Deactivated"
-                              ? "bg-amber-500/15 text-amber-400 font-bold"
-                              : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
+                            ? "bg-amber-500/15 text-amber-400 font-bold"
+                            : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
                             }`}
                         >
                           <div className="flex items-center gap-2">
@@ -2158,8 +2212,8 @@ export default function RestaurantsView({
                             setIsStatusDropdownOpen(false);
                           }}
                           className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${formState.status === "Suspended"
-                              ? "bg-red-500/15 text-red-400 font-bold"
-                              : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
+                            ? "bg-red-500/15 text-red-400 font-bold"
+                            : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
                             }`}
                         >
                           <div className="flex items-center gap-2">
@@ -2176,8 +2230,8 @@ export default function RestaurantsView({
                             setIsStatusDropdownOpen(false);
                           }}
                           className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${formState.status === "Pending"
-                              ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
-                              : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
+                            ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
+                            : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
                             }`}
                         >
                           <div className="flex items-center gap-2">
@@ -2215,8 +2269,8 @@ export default function RestaurantsView({
                         setFormState((prev) => ({ ...prev, outlets: "1" }));
                       }}
                       className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-all duration-150 flex items-center gap-1.5 ${outletMode === "standalone"
-                          ? "bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/50 shadow-sm font-bold"
-                          : "text-[var(--text-lo)] hover:text-[var(--text-hi)] border border-transparent"
+                        ? "bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/50 shadow-sm font-bold"
+                        : "text-[var(--text-lo)] hover:text-[var(--text-hi)] border border-transparent"
                         }`}
                     >
                       <Store className="w-3.5 h-3.5" />
@@ -2233,8 +2287,8 @@ export default function RestaurantsView({
                         }));
                       }}
                       className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-all duration-150 flex items-center gap-1.5 ${outletMode === "multi"
-                          ? "bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/50 shadow-sm font-bold"
-                          : "text-[var(--text-lo)] hover:text-[var(--text-hi)] border border-transparent"
+                        ? "bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/50 shadow-sm font-bold"
+                        : "text-[var(--text-lo)] hover:text-[var(--text-hi)] border border-transparent"
                         }`}
                     >
                       <Building2 className="w-3.5 h-3.5" />
@@ -2242,8 +2296,8 @@ export default function RestaurantsView({
                       {branchesList.length > 0 && (
                         <span
                           className={`px-1.5 py-0.5 text-xs rounded-full font-bold ${outletMode === "multi"
-                              ? "bg-[var(--gold)] text-[#342c14]"
-                              : "bg-[var(--gold-dim)] text-[var(--gold)]"
+                            ? "bg-[var(--gold)] text-[#342c14]"
+                            : "bg-[var(--gold-dim)] text-[var(--gold)]"
                             }`}
                         >
                           {branchesList.length}
@@ -2485,14 +2539,14 @@ export default function RestaurantsView({
                       key={addon.id}
                       onClick={() => toggleAddOn(addon.id)}
                       className={`flex items-start gap-3 p-3.5 rounded-2xl border transition-all cursor-pointer select-none ${isChecked
-                          ? "bg-[var(--gold-dim)] border-[var(--gold)]/60 text-[var(--text-hi)] shadow-sm"
-                          : "bg-[var(--surface-hi)]/60 border-[var(--border)] text-[var(--text-lo)] hover:border-[var(--gold)]/40 hover:text-[var(--text-hi)]"
+                        ? "bg-[var(--gold-dim)] border-[var(--gold)]/60 text-[var(--text-hi)] shadow-sm"
+                        : "bg-[var(--surface-hi)]/60 border-[var(--border)] text-[var(--text-lo)] hover:border-[var(--gold)]/40 hover:text-[var(--text-hi)]"
                         }`}
                     >
                       <div
                         className={`w-4 h-4 rounded-md mt-0.5 flex items-center justify-center border transition-all shrink-0 ${isChecked
-                            ? "bg-[var(--gold)] border-[var(--gold)] text-[#342c14]"
-                            : "border-[var(--border-hi)] bg-[var(--bg-deep)]"
+                          ? "bg-[var(--gold)] border-[var(--gold)] text-[#342c14]"
+                          : "border-[var(--border-hi)] bg-[var(--bg-deep)]"
                           }`}
                       >
                         {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
@@ -2660,8 +2714,8 @@ export default function RestaurantsView({
                     key={st}
                     onClick={() => setStatusFilter(st)}
                     className={`px-2.5 sm:px-3 py-1 rounded-full transition-all cursor-pointer text-xs font-bold shrink-0 ${statusFilter === st
-                        ? "btn-gold shadow-md shadow-[var(--gold-glow)]"
-                        : "text-[var(--text-lo)] hover:text-[var(--text-hi)] font-medium"
+                      ? "btn-gold shadow-md shadow-[var(--gold-glow)]"
+                      : "text-[var(--text-lo)] hover:text-[var(--text-hi)] font-medium"
                       }`}
                   >
                     {st === "all" ? `All (${restaurants.length})` : st}
@@ -2712,8 +2766,8 @@ export default function RestaurantsView({
                         setIsFilterCityDropdownOpen(false);
                       }}
                       className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${cityFilter === "all"
-                          ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
-                          : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
+                        ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
+                        : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
                         }`}
                     >
                       <div className="flex items-center gap-2">
@@ -2732,8 +2786,8 @@ export default function RestaurantsView({
                           setIsFilterCityDropdownOpen(false);
                         }}
                         className={`w-full px-3 py-2 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${cityFilter === cityName
-                            ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
-                            : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
+                          ? "bg-[var(--gold-dim)] text-[var(--gold)] font-bold"
+                          : "text-[var(--text-hi)] hover:bg-[var(--surface-hi)] hover:text-[var(--gold)]"
                           }`}
                       >
                         <span>{cityName}</span>
@@ -2831,11 +2885,11 @@ export default function RestaurantsView({
                 {/* Key Metrics / Badges Row */}
                 <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-[var(--border)]/40 text-xs">
                   {rest.outlet_type === "multi" ||
-                  rest.outletType === "multi" ||
-                  rest.is_multi_branch ||
-                  rest.isMultiBranch ||
-                  rest.outlets > 1 ||
-                  (rest.branches && rest.branches.length > 1) ? (
+                    rest.outletType === "multi" ||
+                    rest.is_multi_branch ||
+                    rest.isMultiBranch ||
+                    rest.outlets > 1 ||
+                    (rest.branches && rest.branches.length > 1) ? (
                     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-[var(--gold-dim)] border border-[var(--gold)]/40 text-[var(--gold)]">
                       <Building2 className="w-3 h-3 text-[var(--gold)]" />
                       <span>{rest.branches && rest.branches.length > 1 ? `${rest.branches.length} Outlets` : `${rest.outlets || 1} Outlets`}</span>
@@ -2863,11 +2917,10 @@ export default function RestaurantsView({
                     onClick={() =>
                       handleUpdateStatus(rest.id, rest.status === "Deactivated" ? "Active" : "Deactivated")
                     }
-                    className={`inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border select-none cursor-pointer transition-all hover:scale-[1.02] active:scale-95 ${
-                      rest.status === "Deactivated"
+                    className={`inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border select-none cursor-pointer transition-all hover:scale-[1.02] active:scale-95 ${rest.status === "Deactivated"
                         ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30"
                         : "bg-[#25d366]/10 hover:bg-[#25d366]/20 text-[#25d366] border-[#25d366]/30"
-                    }`}
+                      }`}
                   >
                     {rest.status === "Deactivated" ? (
                       <>
@@ -2887,11 +2940,10 @@ export default function RestaurantsView({
                     onClick={() =>
                       handleUpdateStatus(rest.id, rest.status === "Suspended" ? "Active" : "Suspended")
                     }
-                    className={`inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border select-none cursor-pointer transition-all hover:scale-[1.02] active:scale-95 ${
-                      rest.status === "Suspended"
+                    className={`inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border select-none cursor-pointer transition-all hover:scale-[1.02] active:scale-95 ${rest.status === "Suspended"
                         ? "bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border-emerald-500/35 font-semibold"
                         : "bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/25"
-                    }`}
+                      }`}
                   >
                     {rest.status === "Suspended" ? (
                       <>
@@ -3036,8 +3088,8 @@ export default function RestaurantsView({
                             handleUpdateStatus(rest.id, rest.status === "Deactivated" ? "Active" : "Deactivated")
                           }
                           className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border select-none cursor-pointer transition-all hover:scale-105 active:scale-95 w-28 ${rest.status === "Deactivated"
-                              ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30 hover:border-amber-500/60"
-                              : "bg-[#25d366]/10 hover:bg-[#25d366]/20 text-[#25d366] border-[#25d366]/30 hover:border-[#25d366]/60"
+                            ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30 hover:border-amber-500/60"
+                            : "bg-[#25d366]/10 hover:bg-[#25d366]/20 text-[#25d366] border-[#25d366]/30 hover:border-[#25d366]/60"
                             }`}
                         >
                           {rest.status === "Deactivated" ? (
@@ -3060,8 +3112,8 @@ export default function RestaurantsView({
                             handleUpdateStatus(rest.id, rest.status === "Suspended" ? "Active" : "Suspended")
                           }
                           className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border select-none cursor-pointer transition-all hover:scale-105 active:scale-95 w-28 ${rest.status === "Suspended"
-                              ? "bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border-emerald-500/35 hover:border-emerald-500/60 font-semibold"
-                              : "bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/25 hover:border-red-500/50"
+                            ? "bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border-emerald-500/35 hover:border-emerald-500/60 font-semibold"
+                            : "bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/25 hover:border-red-500/50"
                             }`}
                         >
                           {rest.status === "Suspended" ? (
