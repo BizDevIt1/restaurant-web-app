@@ -1,9 +1,32 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, Suspense } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import {
+  Sparkles,
+  Store,
+  Menu as MenuIcon,
+  LayoutDashboard,
+  UtensilsCrossed,
+  ChefHat,
+  ShoppingBag,
+  Package,
+  TrendingUp,
+  Sliders,
+  Sun,
+  Moon,
+  LogOut,
+  MapPin,
+  Flame,
+  X,
+  Bell,
+  Plus,
+  Users,
+  Clock,
+  ChevronRight,
+} from "lucide-react";
 import {
   getStoredMenu,
   saveStoredMenu,
@@ -18,6 +41,7 @@ import {
   saveStoredTables,
   playKitchenBuzzer,
   clearUserSession,
+  getActiveUserSession,
 } from "../../lib/tenantStore";
 import { createClient } from "../../lib/supabase";
 import { getValidTenantContext } from "../../lib/tenantResolver";
@@ -38,6 +62,26 @@ import {
   TableStatus,
 } from "./types";
 
+import AdminSidebar from "./components/AdminSidebar";
+import AdminHeader from "./components/AdminHeader";
+import AdminBottomDock from "./components/AdminBottomDock";
+import AdminMenuDrawer from "./components/AdminMenuDrawer";
+import OverviewView from "./components/views/OverviewView";
+import BranchesView from "./components/views/BranchesView";
+import PosView from "./components/views/PosView";
+import StaffView from "./components/views/StaffView";
+import KdsView from "./components/views/KdsView";
+import RiderDispatchView from "./components/views/RiderDispatchView";
+import MenuView from "./components/views/MenuView";
+import InventoryView from "./components/views/InventoryView";
+import ProcurementView from "./components/views/ProcurementView";
+import ExpensesView from "./components/views/ExpensesView";
+import TableView from "./components/views/TableView";
+import AnalyticsView from "./components/views/AnalyticsView";
+import SettingsView from "./components/views/SettingsView";
+import SubscriptionView from "./components/views/SubscriptionView";
+import ProfileView from "./components/views/ProfileView";
+
 export default function AdminDashboardClient({
   initialCollapsed = false,
   initialSlug = [],
@@ -55,6 +99,14 @@ export default function AdminDashboardClient({
 
     async function verifyAuth() {
       try {
+        const localSession = getActiveUserSession();
+        if (localSession) {
+          if (!isMounted) return;
+          setIsAuthenticated(true);
+          setIsLoading(false);
+          return;
+        }
+
         const {
           data: { user },
           error,
@@ -62,17 +114,23 @@ export default function AdminDashboardClient({
 
         if (!isMounted) return;
 
-        if (error || !user) {
-          clearUserSession();
-          router.replace("/login?redirect=/admin");
+        if (user && !error) {
+          setIsAuthenticated(true);
+          setIsLoading(false);
           return;
         }
 
-        setIsAuthenticated(true);
-      } catch (err) {
-        if (!isMounted) return;
         clearUserSession();
         router.replace("/login?redirect=/admin");
+      } catch (err) {
+        if (!isMounted) return;
+        const localSession = getActiveUserSession();
+        if (localSession) {
+          setIsAuthenticated(true);
+        } else {
+          clearUserSession();
+          router.replace("/login?redirect=/admin");
+        }
       } finally {
         if (isMounted) {
           setIsLoading(false);
@@ -85,9 +143,12 @@ export default function AdminDashboardClient({
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_OUT" || !session) {
-        clearUserSession();
-        router.replace("/login?redirect=/admin");
+      if (event === "SIGNED_OUT") {
+        const localSession = getActiveUserSession();
+        if (!localSession) {
+          clearUserSession();
+          router.replace("/login?redirect=/admin");
+        }
       }
     });
 
@@ -407,6 +468,12 @@ function AdminDashboardContent({
   const [isMenuDrawerOpen, setIsMenuDrawerOpen] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3200);
+  };
+  const [branchStatus, setBranchStatus] = useState<"open" | "rush" | "paused">("open");
+  const [selectedCategory, setSelectedCategory] = useState<string>("all");
 
   // POS & Operational State (Initialized clean without dummy mock arrays, backed by SWR cache)
   const [menuItems, setMenuItems] = useState<MenuItem[]>(() => {
@@ -431,6 +498,57 @@ function AdminDashboardContent({
   const [orders, setOrders] = useState<OrderRecord[]>(() => {
     return getStoredOrders(currentOrgId);
   });
+
+  const todayGrossSales = orders.reduce((acc, curr) => acc + (curr.total || 0), 0) || 164850;
+  const activeFloorOrders = orders.filter((o) => o.status === "in_progress" || o.status === "seated" || o.status === "pending").length || 14;
+  const avgCookTime = 13.4;
+
+  const handleAddDish = (newDish: MenuItem) => {
+    setMenuItems((prev) => {
+      const updated = [newDish, ...prev];
+      saveStoredMenu(currentOrgId, updated);
+      return updated;
+    });
+    showToast(`Added ${newDish.name} to menu`);
+  };
+
+  const handleUpdateDish = (updatedDish: MenuItem) => {
+    setMenuItems((prev) => {
+      const updated = prev.map((item) => (item.id === updatedDish.id ? updatedDish : item));
+      saveStoredMenu(currentOrgId, updated);
+      return updated;
+    });
+    showToast(`Updated ${updatedDish.name}`);
+  };
+
+  const handleDeleteDish = (dishId: string) => {
+    setMenuItems((prev) => {
+      const updated = prev.filter((item) => item.id !== dishId);
+      saveStoredMenu(currentOrgId, updated);
+      return updated;
+    });
+    showToast("Dish removed from menu");
+  };
+
+  const handleToggleStock = (itemId: string) => {
+    setMenuItems((prev) => {
+      const updated = prev.map((item) => {
+        if (item.id === itemId) {
+          const nextStatus: "in_stock" | "low_stock" | "out_of_stock" =
+            item.stockStatus === "in_stock"
+              ? "low_stock"
+              : item.stockStatus === "low_stock"
+              ? "out_of_stock"
+              : "in_stock";
+          return { ...item, stockStatus: nextStatus };
+        }
+        return item;
+      });
+      saveStoredMenu(currentOrgId, updated);
+      return updated;
+    });
+    showToast("Stock status updated in real-time");
+  };
 
   // Live Branch Operational Settings from Supabase / SWR Cache
   const [taxRatePercent, setTaxRatePercent] = useState<number>(() => cachedBranchSettings?.taxRatePercent || 16.0);
@@ -1472,8 +1590,10 @@ function AdminDashboardContent({
           };
         }
         return t;
-      })
-    );
+      });
+      saveStoredKdsTickets(currentOrgId, updated);
+      return updated;
+    });
     showToast(`Kitchen status updated for ${ticketId}`);
   };
 
@@ -1494,482 +1614,141 @@ function AdminDashboardContent({
       )}
 
       {/* ===================== SIDEBAR ===================== */}
-      <aside
-        className={`bg-[var(--bg-deep)] border-r border-[var(--border)] shrink-0 transition-all duration-300 flex flex-col justify-between z-40 fixed lg:static inset-y-0 left-0 ${isSidebarCollapsed ? "w-20" : "w-64"
-          }`}
-      >
-        {/* Brand Header */}
-        <div>
-          <div className="h-20 flex items-center justify-between px-5 border-b border-[var(--border)]">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#f5c85c] via-[#e3b13b] to-[#e04e17] flex items-center justify-center text-[#342c14] font-black text-base shadow-lg shadow-[var(--gold-glow)] shrink-0">
-                <Store className="w-5 h-5 stroke-[2.5]" />
-              </div>
-              {!isSidebarCollapsed && (
-                <div className="min-w-0">
-                  <h2 className="font-display font-extrabold text-sm text-[var(--text-hi)] leading-tight truncate">
-                    Omnibites <span className="text-[var(--gold)]">POS</span>
-                  </h2>
-                  <p className="text-[10.5px] font-mono text-[var(--text-faint)] truncate flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#25d366] animate-pulse" />
-                    Gulberg Main Outlet
-                  </p>
-                </div>
-              )}
-            </div>
+      <AdminSidebar
+        activeTab={activeTab}
+        setActiveTab={handleTabChange}
+        isCollapsed={isSidebarCollapsed}
+        setIsCollapsed={setIsSidebarCollapsed}
+        counts={{
+          kdsTickets: kdsTickets.length,
+          activeRiders: deliveries.filter(
+            (d) => d.status === "on_route" || d.status === "assigned" || d.status === "picked_up"
+          ).length,
+          staffTotal: staffList.length,
+          branchesTotal: branches.length,
+          menuAlerts: menuItems.filter((i) => i.stockStatus !== "in_stock").length,
+        }}
+        theme={theme}
+        toggleTheme={toggleTheme}
+        permittedNavItems={
+          user
+            ? getPermittedNavigation(user.role, user.assignedFeatures || [], user.terminalAccess)
+            : undefined
+        }
+      />
 
-            <button
-              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-              className="p-1.5 rounded-xl hover:bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-[var(--text-hi)] transition-colors cursor-pointer hidden lg:flex"
-              title="Toggle sidebar"
-            >
-              <MenuIcon className="w-4 h-4" />
-            </button>
-          </div>
-
-          {/* Navigation Links */}
-          <nav className="p-3 space-y-1.5">
-            {[
-              { id: "overview", label: "Dashboard", icon: LayoutDashboard, badge: null },
-              { id: "pos", label: "POS & Billing", icon: UtensilsCrossed, badge: "Live" },
-              { id: "kds", label: "Kitchen Display (KDS)", icon: ChefHat, badge: String(kdsTickets.length) },
-              { id: "orders", label: "Live Orders Stream", icon: ShoppingBag, badge: "14" },
-              { id: "menu", label: "Menu & 86'd Stock", icon: Package, badge: null },
-              { id: "analytics", label: "Daily Sales Report", icon: TrendingUp, badge: null },
-              { id: "settings", label: "Branch Settings", icon: Sliders, badge: null },
-            ].map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id as any)}
-                  className={`w-full flex items-center gap-3.5 px-3.5 py-3 rounded-2xl text-xs font-bold transition-all cursor-pointer select-none group relative ${isActive
-                    ? "bg-[var(--gold-dim)] text-[var(--gold)] shadow-sm border border-[var(--gold)]/30 font-extrabold"
-                    : "text-[var(--text-lo)] hover:bg-[var(--surface-hi)] hover:text-[var(--text-hi)] border border-transparent"
-                    }`}
-                  title={item.label}
-                >
-                  <Icon
-                    className={`w-4 h-4 shrink-0 transition-transform group-hover:scale-110 ${isActive ? "text-[var(--gold)]" : "text-[var(--text-faint)]"
-                      }`}
-                  />
-                  {!isSidebarCollapsed && (
-                    <div className="flex items-center justify-between w-full min-w-0">
-                      <span className="truncate">{item.label}</span>
-                      {item.badge && (
-                        <span
-                          className={`text-[9.5px] font-mono px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${isActive
-                            ? "bg-[var(--gold)] text-[#342c14]"
-                            : "bg-[var(--surface-hi)] text-[var(--text-faint)] group-hover:text-[var(--text-hi)]"
-                            }`}
-                        >
-                          {item.badge}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  {isActive && (
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-6 bg-[var(--gold)] rounded-r-full shadow-[0_0_10px_var(--gold)]" />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
-        </div>
-
-        {/* Sidebar Footer Terminal Details */}
-        <div className="p-4 border-t border-[var(--border)] space-y-3">
-          {!isSidebarCollapsed && (
-            <div className="p-3 rounded-2xl bg-[var(--surface)] border border-[var(--border)] text-[11px] font-mono text-[var(--text-lo)] space-y-1">
-              <div className="flex items-center justify-between text-[10px] text-[var(--text-faint)]">
-                <span>TERMINAL ID</span>
-                <span className="text-[var(--gold)] font-bold">POS-01</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span>SHIFT CASHIER</span>
-                <span className="font-bold text-[var(--text-hi)]">Tariq (Admin)</span>
-              </div>
-            </div>
-          )}
-
-          <div className="flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="p-2.5 rounded-xl bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-[var(--text-hi)] border border-[var(--border)] hover:border-[var(--gold)]/40 transition-colors cursor-pointer"
-              title={`Switch to ${theme === "dark" ? "Light" : "Dark"} Mode`}
-            >
-              {theme === "dark" ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-blue-400" />}
-            </button>
-
-            {!isSidebarCollapsed && (
-              <Link
-                href="/super-admin/dashboard"
-                className="flex-1 px-3 py-2.5 rounded-xl bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/30 text-xs font-semibold font-mono flex items-center justify-center gap-1.5 transition-colors"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Exit Portal</span>
-              </Link>
-            )}
-          </div>
-        </div>
-      </aside>
 
       {/* ===================== MAIN CONTENT AREA ===================== */}
       <main className="flex-1 min-w-0 flex flex-col h-screen overflow-y-auto">
         {/* Top Navbar */}
-        <header className="h-20 bg-[var(--bg-deep)]/80 backdrop-blur-xl border-b border-[var(--border)] px-5 sm:px-8 flex items-center justify-between gap-4 sticky top-0 z-30 shrink-0">
-          {/* Branch Identity & Live Status Toggle */}
-          <div className="flex items-center gap-3 min-w-0">
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="font-display font-black text-base sm:text-lg text-[var(--text-hi)] truncate">
-                  Gulberg Main Branch
-                </h1>
-                <span className="hidden sm:inline-block px-2.5 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] font-mono text-[10px] font-bold uppercase border border-[var(--gold)]/30">
-                  Outlet #104
-                </span>
-              </div>
-              <p className="text-[11px] text-[var(--text-lo)] font-mono flex items-center gap-1.5">
-                <MapPin className="w-3 h-3 text-[var(--gold)]" />
-                MM Alam Road, Block B2, Lahore
-              </p>
-            </div>
-          </div>
+        <AdminHeader
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          theme={theme}
+          toggleTheme={toggleTheme}
+          notifications={notifications}
+          markNotificationsAsRead={() => setNotifications([])}
+          onNewOrderClick={() => handleTabChange("pos")}
+          onLogout={() => {
+            logout();
+            router.push("/login");
+          }}
+          onNavigateProfile={() => handleTabChange("profile")}
+          onOpenMobileMenu={() => setIsMenuDrawerOpen(true)}
+        />
 
-          {/* Quick Actions & Status Mode */}
-          <div className="flex items-center gap-3">
-            {/* Live Outlet Operating Status Switcher */}
-            <div className="flex items-center bg-[var(--surface-hi)] p-1 rounded-2xl border border-[var(--border)]">
-              <button
-                onClick={() => {
-                  setBranchStatus("open");
-                  showToast("Branch status set to: OPEN (Accepting all orders)");
-                }}
-                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold font-mono transition-all cursor-pointer flex items-center gap-1.5 ${branchStatus === "open"
-                  ? "bg-[#25d366]/20 text-[#25d366] border border-[#25d366]/40 shadow-sm"
-                  : "text-[var(--text-faint)] hover:text-[var(--text-hi)]"
-                  }`}
-              >
-                <span className="w-2 h-2 rounded-full bg-[#25d366] animate-pulse" />
-                <span className="hidden sm:inline">Open</span>
-              </button>
 
-              <button
-                onClick={() => {
-                  setBranchStatus("rush");
-                  showToast("Branch status set to: HIGH RUSH (+15m prep time)");
-                }}
-                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold font-mono transition-all cursor-pointer flex items-center gap-1.5 ${branchStatus === "rush"
-                  ? "bg-amber-500/20 text-amber-400 border border-amber-500/40 shadow-sm"
-                  : "text-[var(--text-faint)] hover:text-[var(--text-hi)]"
-                  }`}
-              >
-                <Flame className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Rush Hour</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  setBranchStatus("paused");
-                  showToast("Branch status set to: PAUSED");
-                }}
-                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold font-mono transition-all cursor-pointer flex items-center gap-1.5 ${branchStatus === "paused"
-                  ? "bg-red-500/20 text-red-400 border border-red-500/40 shadow-sm"
-                  : "text-[var(--text-faint)] hover:text-[var(--text-hi)]"
-                  }`}
-              >
-                <X className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Paused</span>
-              </button>
-            </div>
-
-            {/* Notification Bell */}
-            <button
-              onClick={() => showToast("3 Kitchen KOT items pending delivery pickup")}
-              className="p-2.5 rounded-2xl bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--text-hi)] hover:border-[var(--gold)]/40 transition-colors cursor-pointer relative"
-              title="Notifications"
-            >
-              <Bell className="w-4 h-4" />
-              <span className="w-2 h-2 rounded-full bg-[var(--orange)] absolute top-2 right-2 ring-2 ring-[var(--bg-deep)]" />
-            </button>
-
-            {/* Quick POS Trigger */}
-            <button
-              onClick={() => setActiveTab("pos")}
-              className="btn-gold px-4 py-2 text-xs font-bold cursor-pointer inline-flex items-center gap-1.5"
-            >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">New Bill (POS)</span>
-            </button>
-          </div>
-        </header>
-
-        {/* ===================== TAB 1: OVERVIEW DASHBOARD ===================== */}
-        {activeTab === "overview" && (
-          <div className="p-5 sm:p-8 space-y-7 animate-in fade-in duration-200">
-            {/* 1. Metric KPI Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
-              {/* Today's Sales */}
-              <div className="p-5 rounded-3xl bg-[var(--bg-deep)] border border-[var(--border)] shadow-xl relative overflow-hidden space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-[var(--text-faint)] font-bold">
-                    Today's Gross Sales
-                  </span>
-                  <div className="w-9 h-9 rounded-2xl bg-[var(--gold-dim)] text-[var(--gold)] flex items-center justify-center">
-                    <TrendingUp className="w-4 h-4" />
-                  </div>
-                </div>
-                <div>
-                  <h3 className="font-display font-extrabold text-2xl sm:text-3xl text-[var(--gold)] font-mono tracking-tight">
-                    Rs {todayGrossSales.toLocaleString()}
-                  </h3>
-                  <p className="text-[11px] text-[#25d366] font-mono font-semibold mt-1 flex items-center gap-1">
-                    <span>↑ +18.4%</span>
-                    <span className="text-[var(--text-faint)]">vs yesterday</span>
-                  </p>
-                </div>
-              </div>
-
-              {/* Active Floor & Delivery Orders */}
-              <div className="p-5 rounded-3xl bg-[var(--bg-deep)] border border-[var(--border)] shadow-xl relative overflow-hidden space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-[var(--text-faint)] font-bold">
-                    Live Active Orders
-                  </span>
-                  <div className="w-9 h-9 rounded-2xl bg-[var(--orange-dim)] text-[var(--orange)] flex items-center justify-center">
-                    <UtensilsCrossed className="w-4 h-4" />
-                  </div>
-                </div>
-                <div>
-                  <h3 className="font-display font-extrabold text-2xl sm:text-3xl text-[var(--text-hi)] font-mono tracking-tight">
-                    {activeFloorOrders} <span className="text-xs text-[var(--text-lo)] font-normal">in progress</span>
-                  </h3>
-                  <p className="text-[11px] text-[var(--text-lo)] font-mono mt-1">
-                    6 in Kitchen · 8 Seated
-                  </p>
-                </div>
-              </div>
-
-              {/* Table Occupancy Rate */}
-              <div className="p-5 rounded-3xl bg-[var(--bg-deep)] border border-[var(--border)] shadow-xl relative overflow-hidden space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-[var(--text-faint)] font-bold">
-                    Table Seating Capacity
-                  </span>
-                  <div className="w-9 h-9 rounded-2xl bg-[#25d366]/15 text-[#25d366] flex items-center justify-center">
-                    <Users className="w-4 h-4" />
-                  </div>
-                </div>
-                <div>
-                  <h3 className="font-display font-extrabold text-2xl sm:text-3xl text-[var(--text-hi)] font-mono tracking-tight">
-                    75% <span className="text-xs text-[var(--text-lo)] font-normal">(6/8 Tables)</span>
-                  </h3>
-                  <div className="w-full bg-[var(--surface-hi)] h-1.5 rounded-full overflow-hidden mt-2">
-                    <div className="bg-gradient-to-r from-[#e3b13b] to-[#25d366] h-full w-3/4 rounded-full" />
-                  </div>
-                </div>
-              </div>
-
-              {/* Avg Kitchen Prep Time */}
-              <div className="p-5 rounded-3xl bg-[var(--bg-deep)] border border-[var(--border)] shadow-xl relative overflow-hidden space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-[var(--text-faint)] font-bold">
-                    Avg Cooking Speed
-                  </span>
-                  <div className="w-9 h-9 rounded-2xl bg-blue-500/15 text-blue-400 flex items-center justify-center">
-                    <Clock className="w-4 h-4" />
-                  </div>
-                </div>
-                <div>
-                  <h3 className="font-display font-extrabold text-2xl sm:text-3xl text-[var(--text-hi)] font-mono tracking-tight">
-                    {avgCookTime} <span className="text-xs text-[var(--text-lo)] font-normal">mins</span>
-                  </h3>
-                  <p className="text-[11px] text-[#25d366] font-mono font-semibold mt-1">
-                    ✓ Optimal kitchen velocity
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* 2. Middle Row: Hourly Sales Chart + Live Floor Map */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Hourly Sales Activity */}
-              <div className="lg:col-span-2 p-6 rounded-3xl bg-[var(--bg-deep)] border border-[var(--border)] shadow-xl space-y-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-display font-extrabold text-base text-[var(--text-hi)]">
-                      Today's Hourly Revenue Velocity
-                    </h3>
-                    <p className="text-xs text-[var(--text-lo)] font-mono">Peak hours: 1:00 PM (Lunch) &amp; 9:00 PM (Dinner)</p>
-                  </div>
-                  <span className="text-xs font-mono font-bold text-[var(--gold)]">
-                    PKR (Thousands)
-                  </span>
-                </div>
-
-                {/* Pure CSS/SVG Warm Luxury Bars */}
-                <div className="h-48 flex items-end justify-between gap-2 sm:gap-3 pt-6 border-b border-[var(--border)] pb-2">
-                  {[
-                    { hour: "12 PM", val: 18, peak: false },
-                    { hour: "1 PM", val: 38, peak: true },
-                    { hour: "2 PM", val: 28, peak: false },
-                    { hour: "3 PM", val: 14, peak: false },
-                    { hour: "4 PM", val: 8, peak: false },
-                    { hour: "5 PM", val: 12, peak: false },
-                    { hour: "6 PM", val: 22, peak: false },
-                    { hour: "7 PM", val: 34, peak: false },
-                    { hour: "8 PM", val: 42, peak: true },
-                    { hour: "9 PM", val: 48, peak: true },
-                    { hour: "10 PM", val: 32, peak: false },
-                  ].map((bar, idx) => (
-                    <div key={idx} className="flex-1 flex flex-col items-center gap-2 group h-full justify-end">
-                      <span className="text-[10px] font-mono font-bold text-[var(--gold)] opacity-0 group-hover:opacity-100 transition-opacity">
-                        {bar.val}k
-                      </span>
-                      <div
-                        style={{ height: `${(bar.val / 50) * 100}%` }}
-                        className={`w-full rounded-t-xl transition-all duration-300 group-hover:brightness-125 ${bar.peak
-                          ? "bg-gradient-to-t from-[#e04e17] via-[#e3b13b] to-[#f5c85c] shadow-[0_0_12px_var(--gold-glow)]"
-                          : "bg-[var(--gold-dim)] border border-[var(--gold)]/30 hover:bg-[var(--gold)]/40"
-                          }`}
-                      />
-                      <span className="text-[10px] font-mono text-[var(--text-faint)] group-hover:text-[var(--text-hi)]">
-                        {bar.hour}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Table Floor Matrix */}
-              <div className="p-6 rounded-3xl bg-[var(--bg-deep)] border border-[var(--border)] shadow-xl space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-display font-extrabold text-base text-[var(--text-hi)]">
-                    Live Floor Matrix
-                  </h3>
-                  <span className="text-[10.5px] font-mono text-[#25d366] font-bold">
-                    6 Seated
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  {tables.map((tbl) => (
-                    <div
-                      key={tbl.id}
-                      onClick={() => {
-                        setSelectedTable(tbl.id);
-                        setActiveTab("pos");
-                        showToast(`Opened POS ticket for ${tbl.label}`);
-                      }}
-                      className={`p-3 rounded-2xl border transition-all cursor-pointer group ${tbl.status === "seated"
-                        ? "bg-[var(--gold-dim)]/50 border-[var(--gold)]/50 hover:border-[var(--gold)] shadow-sm"
-                        : tbl.status === "billing"
-                          ? "bg-amber-500/10 border-amber-500/40 hover:border-amber-400"
-                          : "bg-[var(--surface-hi)]/40 border-[var(--border)] hover:border-[var(--border-hi)]"
-                        }`}
-                    >
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-bold text-[var(--text-hi)] font-mono">
-                          {tbl.label.split(" ")[0]}
-                        </span>
-                        <span
-                          className={`w-2 h-2 rounded-full ${tbl.status === "seated"
-                            ? "bg-[#25d366] shadow-[0_0_6px_#25d366]"
-                            : tbl.status === "billing"
-                              ? "bg-amber-400 shadow-[0_0_6px_#f59e0b]"
-                              : "bg-[var(--text-faint)]"
-                            }`}
-                        />
-                      </div>
-                      <div className="mt-2 text-[10px] font-mono text-[var(--text-lo)] flex items-center justify-between">
-                        <span>{tbl.capacity} Seats</span>
-                        {tbl.activeAmount ? (
-                          <span className="text-[var(--gold)] font-bold">
-                            Rs {tbl.activeAmount.toLocaleString()}
-                          </span>
-                        ) : (
-                          <span className="text-[#25d366]">Available</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* 3. Live Active KDS / Order Stream Snippet */}
-            <div className="p-6 rounded-3xl bg-[var(--bg-deep)] border border-[var(--border)] shadow-xl space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <ChefHat className="w-5 h-5 text-[var(--gold)]" />
-                  <h3 className="font-display font-extrabold text-base text-[var(--text-hi)]">
-                    Active Kitchen Orders (KDS Queue)
-                  </h3>
-                </div>
-                <button
-                  onClick={() => setActiveTab("kds")}
-                  className="text-xs font-mono font-bold text-[var(--gold)] hover:underline flex items-center gap-1 cursor-pointer"
-                >
-                  <span>Open Full Screen KDS</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {kdsTickets.map((ticket) => (
-                  <div
-                    key={ticket.id}
-                    className="p-4 rounded-2xl bg-[var(--surface-hi)] border border-[var(--border)] space-y-3 relative overflow-hidden"
-                  >
-                    <div className="flex items-center justify-between pb-2 border-b border-[var(--border)]">
-                      <div>
-                        <span className="text-xs font-bold text-[var(--text-hi)] font-mono block">
-                          {ticket.id}
-                        </span>
-                        <span className="text-[10px] text-[var(--gold)] font-semibold font-mono">
-                          {ticket.tableOrChannel}
-                        </span>
-                      </div>
-                      <span
-                        className={`px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold ${ticket.status === "ready"
-                          ? "bg-[#25d366]/20 text-[#25d366]"
-                          : ticket.elapsedMinutes > 15
-                            ? "bg-red-500/20 text-red-400 animate-pulse"
-                            : "bg-[var(--gold-dim)] text-[var(--gold)]"
-                          }`}
-                      >
-                        ⏱ {ticket.elapsedMinutes}m
-                      </span>
-                    </div>
-
-                    <div className="space-y-1.5 text-xs text-[var(--text-hi)] min-h-[60px]">
-                      {ticket.items.slice(0, 3).map((it, i) => (
-                        <div key={i} className="flex items-center justify-between text-[11px]">
-                          <span className="truncate">{it.name}</span>
-                          <span className="font-bold text-[var(--gold)] font-mono ml-2">x{it.qty}</span>
-                        </div>
-                      ))}
-                      {ticket.items.length > 3 && (
-                        <span className="text-[10px] text-[var(--text-faint)] font-mono">
-                          +{ticket.items.length - 3} more items...
-                        </span>
-                      )}
-                    </div>
-
-                    <button
-                      onClick={() => handleAdvanceKds(ticket.id)}
-                      className="w-full btn-gold py-2 text-[11px] font-bold cursor-pointer rounded-xl flex items-center justify-center gap-1.5"
-                    >
-                      {ticket.status === "ready" ? "Mark Picked Up" : "Advance KOT"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
+        {/* ===================== MODULAR VIEW MOUNTS ===================== */}
+        {mountedTabs.has("overview") && user && (
+          <div
+            key="view-overview"
+            className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "overview" ? "" : "hidden"}`}
+            style={{ display: activeTab === "overview" ? undefined : "none" }}
+          >
+            <OverviewView
+              user={user}
+              tables={tables}
+              setSelectedTable={setSelectedTable}
+              kdsTickets={kdsTickets}
+              handleAdvanceKds={handleAdvanceKds}
+              setActiveTab={handleTabChange}
+              showToast={showToast}
+              orders={orders}
+              todayGrossSales={todayGrossSales}
+              activeFloorOrders={activeFloorOrders}
+              avgCookTime={avgCookTime}
+            />
           </div>
         )}
+
+        {mountedTabs.has("branches") && (
+          <div
+            key="view-branches"
+            className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "branches" ? "" : "hidden"}`}
+            style={{ display: activeTab === "branches" ? undefined : "none" }}
+          >
+            <BranchesView
+              branches={branches}
+              setBranches={setBranches}
+              persona={isFranchiser ? "franchiser" : "branch_admin"}
+              selectedBranchId={selectedBranchId}
+              setSelectedBranchId={setSelectedBranchId}
+              showToast={showToast}
+            />
+          </div>
+        )}
+
+        {mountedTabs.has("pos") && (
+          <div
+            key="view-pos"
+            className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "pos" ? "" : "hidden"}`}
+            style={{ display: activeTab === "pos" ? undefined : "none" }}
+          >
+            <PosView
+              menuItems={menuItems}
+              cart={cart}
+              handleAddToCart={handleAddToCart}
+              handleUpdateCartQty={handleUpdateCartQty}
+              orderChannel={orderChannel}
+              setOrderChannel={setOrderChannel}
+              selectedTable={selectedTable}
+              setSelectedTable={setSelectedTable}
+              tables={tables}
+              setTables={setTables}
+              paymentMethod={paymentMethod}
+              setPaymentMethod={setPaymentMethod}
+              cartSubtotal={cartSubtotal}
+              taxAmount={taxAmount}
+              taxRatePercent={taxRatePercent}
+              discountPercent={discountPercent}
+              discountAmount={discountAmount}
+              cartTotal={cartTotal}
+              handleSendToKitchen={handleSendToKitchen}
+              setCart={setCart}
+              orders={orders}
+              staffList={staffList}
+              showToast={showToast}
+            />
+          </div>
+        )}
+
+        {mountedTabs.has("staff") && (
+          <div
+            key="view-staff"
+            className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "staff" ? "" : "hidden"}`}
+            style={{ display: activeTab === "staff" ? undefined : "none" }}
+          >
+            <StaffView
+              staffList={staffList}
+              setStaffList={setStaffList}
+              persona={isFranchiser ? "franchiser" : "branch_admin"}
+              selectedBranchId={selectedBranchId}
+              showToast={showToast}
+              routeAction={routeAction}
+            />
+          </div>
+        )}
+
 
         {mountedTabs.has("kds") && (
           <div
@@ -2082,13 +1861,13 @@ function AdminDashboardContent({
             style={{ display: activeTab === "analytics" || activeTab === "orders" ? undefined : "none" }}
           >
             <AnalyticsView
-              user={user}
+              user={user || undefined}
               showToast={showToast}
             />
           </div>
         )}
 
-        {mountedTabs.has("settings") && (
+        {mountedTabs.has("settings") && user && (
           <div
             key="view-settings"
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "settings" ? "" : "hidden"}`}
@@ -2117,7 +1896,7 @@ function AdminDashboardContent({
           </div>
         )}
 
-        {mountedTabs.has("profile") && (
+        {mountedTabs.has("profile") && user && (
           <div
             key="view-profile"
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "profile" ? "" : "hidden"}`}
@@ -2129,48 +1908,46 @@ function AdminDashboardContent({
             />
           </div>
         )}
-    </div>
-      </main >
+      </main>
 
-    {/* Mobile & Tablet Bottom Navigation Dock (< 1024px) */ }
-    < AdminBottomDock
-  activeTab = { activeTab }
-  setActiveTab = { handleTabChange }
-  onOpenMenuDrawer = {() => setIsMenuDrawerOpen(true)
-}
-kdsCount = { kdsTickets.length }
-userInitials = {
+      {/* Mobile & Tablet Bottom Navigation Dock (< 1024px) */}
+      <AdminBottomDock
+        activeTab={activeTab}
+        setActiveTab={handleTabChange}
+        onOpenMenuDrawer={() => setIsMenuDrawerOpen(true)}
+        kdsCount={kdsTickets.length}
+        userInitials={
           (user?.restaurantName || user?.name || "N")
-  .trim()
-  .substring(0, 1)
-  .toUpperCase()
+            .trim()
+            .substring(0, 1)
+            .toUpperCase()
         }
-restaurantName = { user?.restaurantName }
-isHidden = { isMenuDrawerOpen }
-  />
+        restaurantName={user?.restaurantName}
+        isHidden={isMenuDrawerOpen}
+      />
 
-  {/* Mobile & Tablet Bottom Sheet Grid Drawer (< 1024px) */ }
-  < AdminMenuDrawer
-isOpen = { isMenuDrawerOpen }
-onClose = {() => setIsMenuDrawerOpen(false)}
-activeTab = { activeTab }
-setActiveTab = { handleTabChange }
-theme = { theme }
-toggleTheme = { toggleTheme }
-onLogout = {() => {
-  logout();
-  router.push("/login");
-}}
-permittedNavItems = { user? getPermittedNavigation(user.role, user.assignedFeatures || [], user.terminalAccess) : undefined }
-counts = {{
-  kdsTickets: kdsTickets.length,
-    activeRiders: deliveries.filter(
-      (d) => d.status === "on_route" || d.status === "assigned" || d.status === "picked_up"
-    ).length,
-      staffTotal: staffList.length,
-        menuAlerts: menuItems.filter((i) => i.stockStatus !== "in_stock").length,
+      {/* Mobile & Tablet Bottom Sheet Grid Drawer (< 1024px) */}
+      <AdminMenuDrawer
+        isOpen={isMenuDrawerOpen}
+        onClose={() => setIsMenuDrawerOpen(false)}
+        activeTab={activeTab}
+        setActiveTab={handleTabChange}
+        theme={theme}
+        toggleTheme={toggleTheme}
+        onLogout={() => {
+          logout();
+          router.push("/login");
+        }}
+        permittedNavItems={user ? getPermittedNavigation(user.role, user.assignedFeatures || [], user.terminalAccess) : undefined}
+        counts={{
+          kdsTickets: kdsTickets.length,
+          activeRiders: deliveries.filter(
+            (d) => d.status === "on_route" || d.status === "assigned" || d.status === "picked_up"
+          ).length,
+          staffTotal: staffList.length,
+          menuAlerts: menuItems.filter((i) => i.stockStatus !== "in_stock").length,
         }}
       />
-    </div >
+    </div>
   );
 }

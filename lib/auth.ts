@@ -144,10 +144,12 @@ export function setAuthSession(session: AuthSession | null): void {
       localStorage.setItem(STAFF_SESSION_KEY, JSON.stringify(session));
       localStorage.removeItem(ADMIN_SESSION_KEY);
       localStorage.removeItem(LEGACY_SESSION_KEY);
+      document.cookie = "omni_admin_session=; path=/; max-age=0; SameSite=Lax";
     } else {
       localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session));
       localStorage.removeItem(STAFF_SESSION_KEY);
       localStorage.removeItem(LEGACY_SESSION_KEY);
+      document.cookie = "omni_admin_session=1; path=/; max-age=604800; SameSite=Lax";
     }
   } catch (err) {
     console.error("[auth.ts] Error saving AuthSession:", err);
@@ -169,5 +171,6 @@ export function clearAllAuthSessions(): void {
     localStorage.removeItem("staff_user");
     localStorage.removeItem("omni_staff_session");
     localStorage.removeItem("omni_admin_session");
+    document.cookie = "omni_admin_session=; path=/; max-age=0; SameSite=Lax";
   } catch {}
 }

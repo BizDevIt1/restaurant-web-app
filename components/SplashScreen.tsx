@@ -107,6 +107,16 @@ interface SplashScreenProps {
  * Reusable Omnibites Splash Screen overlay with espresso and gold-amber glow aesthetics.
  */
 export function SplashScreen({ isVisible, duration = 1200 }: SplashScreenProps) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) {
+    return null;
+  }
+
   return (
     <AnimatePresence>
       {isVisible && (
