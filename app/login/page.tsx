@@ -209,7 +209,10 @@ export default function LoginPage() {
             restaurantName: branchName,
             branchName: branchName,
             branchId: `br_${data.user.id}`,
-            assignedFeatures: ["POS", "KITCHEN", "MENU", "STAFF", "RIDER", "ANALYTICS"],
+            assignedFeatures:
+              Array.isArray(data.user?.user_metadata?.assigned_features) && data.user.user_metadata.assigned_features.length > 0
+                ? data.user.user_metadata.assigned_features
+                : ["OVERVIEW", "EXPENSES", "ANALYTICS", "STAFF", "SETTINGS", "SUBSCRIPTION"],
             organizationId: String(orgId),
             restaurantId: String(orgId),
           };
@@ -288,7 +291,7 @@ export default function LoginPage() {
                   phone: userPhone,
                   managerName: userContact,
                   managerEmail: trimmedEmail,
-                  assignedFeatures: ["POS", "KITCHEN", "MENU", "STAFF", "RIDER", "ANALYTICS"],
+                  assignedFeatures: ["OVERVIEW", "EXPENSES", "ANALYTICS", "STAFF", "SETTINGS", "SUBSCRIPTION"],
                   status: "ACTIVE",
                   todaySales: 0,
                   activeOrders: 0,
@@ -303,7 +306,7 @@ export default function LoginPage() {
                   phone: userPhone,
                   managerName: "Branch Manager",
                   managerEmail: `branch2.${trimmedEmail}`,
-                  assignedFeatures: ["POS", "KITCHEN", "MENU", "STAFF", "RIDER", "ANALYTICS"],
+                  assignedFeatures: ["OVERVIEW", "EXPENSES", "ANALYTICS", "STAFF", "SETTINGS", "SUBSCRIPTION"],
                   status: "ACTIVE",
                   todaySales: 0,
                   activeOrders: 0,
@@ -393,26 +396,48 @@ export default function LoginPage() {
 
           const mappedRole: UserRole = isFranchise ? "FRANCHISE_OWNER" : "STANDALONE_ADMIN";
 
-          // Normalize feature modules helper
+          // Normalize feature modules helper: Strict Bundled Entitlements
           const normalizeModules = (modules: any): string[] => {
+            // Always-On Core modules available to all authenticated Admins
+            const DEFAULT_FEATURES = [
+              "OVERVIEW",
+              "EXPENSES",
+              "ANALYTICS",
+              "STAFF",
+              "SETTINGS",
+              "SUBSCRIPTION",
+            ];
+
             if (!Array.isArray(modules) || modules.length === 0) {
-              return ["POS", "KITCHEN", "MENU", "STAFF", "RIDER", "ANALYTICS"];
+              return DEFAULT_FEATURES;
             }
+
             const mapping: Record<string, string> = {
               pos_terminal: "POS",
+              pos: "POS",
               kds_system: "KITCHEN",
+              kds: "KITCHEN",
+              kitchen: "KITCHEN",
+              tables: "KITCHEN",
               rider_app: "RIDER",
-              inventory_stock: "MENU",
-              menu: "MENU",
-              staff: "STAFF",
-              analytics: "ANALYTICS",
-              settings: "SETTINGS",
+              rider: "RIDER",
+              riders: "RIDER",
+              dispatch: "RIDER",
+              inventory_stock: "INVENTORY",
+              inventory: "INVENTORY",
+              procurement: "INVENTORY",
+              menu: "INVENTORY",
               branches: "BRANCHES",
             };
-            return modules.map((m: string) => {
-              const lower = String(m).toLowerCase().trim();
-              return mapping[lower] || m.toUpperCase();
-            });
+
+            const assigned = modules
+              .map((m: any) => {
+                const lower = String(m || "").toLowerCase().trim();
+                return mapping[lower] || null;
+              })
+              .filter(Boolean) as string[];
+
+            return Array.from(new Set([...DEFAULT_FEATURES, ...assigned]));
           };
 
           let parsedBranches: any[] = [];

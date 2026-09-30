@@ -42,6 +42,8 @@ import {
   playKitchenBuzzer,
   clearUserSession,
   getActiveUserSession,
+  setActiveUserSession,
+  normalizeModules,
 } from "../../lib/tenantStore";
 import { createClient } from "../../lib/supabase";
 import { getValidTenantContext } from "../../lib/tenantResolver";
@@ -81,6 +83,7 @@ import AnalyticsView from "./components/views/AnalyticsView";
 import SettingsView from "./components/views/SettingsView";
 import SubscriptionView from "./components/views/SubscriptionView";
 import ProfileView from "./components/views/ProfileView";
+import ModuleLockedView from "./components/ModuleLockedView";
 
 export default function AdminDashboardClient({
   initialCollapsed = false,
@@ -104,6 +107,46 @@ export default function AdminDashboardClient({
           if (!isMounted) return;
           setIsAuthenticated(true);
           setIsLoading(false);
+
+          // Asynchronously query Supabase restaurants directly for fresh enabled_modules
+          (async () => {
+            try {
+              const trimmedEmail = (localSession.email || "").trim().toLowerCase();
+              const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(localSession.id);
+              const numericId = parseInt(
+                String(localSession.organizationId || localSession.restaurantId || (!isUuid ? localSession.id : "")).replace(/[^0-9]/g, ""),
+                10
+              );
+
+              const conditions: string[] = [];
+              if (numericId && !isNaN(numericId) && numericId > 0) conditions.push(`id.eq.${numericId}`);
+              if (isUuid) conditions.push(`owner_id.eq.${localSession.id}`);
+              if (trimmedEmail) conditions.push(`owner_email.eq.${trimmedEmail}`);
+
+              if (conditions.length > 0) {
+                const { data: rest } = await supabase
+                  .from("restaurants")
+                  .select("enabled_modules, brand_name")
+                  .or(conditions.join(","))
+                  .limit(1)
+                  .maybeSingle();
+
+                if (rest) {
+                  const normalized = normalizeModules(Array.isArray(rest.enabled_modules) ? rest.enabled_modules : []);
+                  const updated = {
+                    ...localSession,
+                    assignedFeatures: normalized,
+                    restaurantName: rest.brand_name || localSession.restaurantName,
+                  };
+                  setActiveUserSession(updated);
+                  console.log("[AdminDashboardClient] Entitlements pre-hydrated on mount:", normalized);
+                }
+              }
+            } catch (e) {
+              console.warn("[AdminDashboardClient] Initial entitlement sync notice:", e);
+            }
+          })();
+
           return;
         }
 
@@ -312,6 +355,8 @@ function AdminDashboardContent({
     isStandaloneAdmin,
     activeBranchId,
     setActiveBranchId,
+    hasFeature,
+    refreshEntitlements,
     logout,
   } = useAuth();
 
@@ -393,6 +438,11 @@ function AdminDashboardContent({
     }
   }, [searchParams]);
 
+  // 3.5 Re-verify entitlements whenever URL path changes
+  useEffect(() => {
+    refreshEntitlements();
+  }, [pathname]);
+
   // 4. Instant in-memory tab change with clean URL updates (zero server roundtrip, zero flicker)
   const handleTabChange = (nextTab: AdminTab) => {
     setActiveTab(nextTab);
@@ -402,6 +452,7 @@ function AdminDashboardContent({
     if (typeof window !== "undefined" && window.location.pathname !== targetPath) {
       window.history.pushState({ tab: nextTab }, "", targetPath);
     }
+    refreshEntitlements();
   };
   const [selectedBranchId, setSelectedBranchId] = useState<string>("all");
   const [branches, setBranches] = useState<Branch[]>(() => {
@@ -1704,31 +1755,39 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "pos" ? "" : "hidden"}`}
             style={{ display: activeTab === "pos" ? undefined : "none" }}
           >
-            <PosView
-              menuItems={menuItems}
-              cart={cart}
-              handleAddToCart={handleAddToCart}
-              handleUpdateCartQty={handleUpdateCartQty}
-              orderChannel={orderChannel}
-              setOrderChannel={setOrderChannel}
-              selectedTable={selectedTable}
-              setSelectedTable={setSelectedTable}
-              tables={tables}
-              setTables={setTables}
-              paymentMethod={paymentMethod}
-              setPaymentMethod={setPaymentMethod}
-              cartSubtotal={cartSubtotal}
-              taxAmount={taxAmount}
-              taxRatePercent={taxRatePercent}
-              discountPercent={discountPercent}
-              discountAmount={discountAmount}
-              cartTotal={cartTotal}
-              handleSendToKitchen={handleSendToKitchen}
-              setCart={setCart}
-              orders={orders}
-              staffList={staffList}
-              showToast={showToast}
-            />
+            {hasFeature("POS") ? (
+              <PosView
+                menuItems={menuItems}
+                cart={cart}
+                handleAddToCart={handleAddToCart}
+                handleUpdateCartQty={handleUpdateCartQty}
+                orderChannel={orderChannel}
+                setOrderChannel={setOrderChannel}
+                selectedTable={selectedTable}
+                setSelectedTable={setSelectedTable}
+                tables={tables}
+                setTables={setTables}
+                paymentMethod={paymentMethod}
+                setPaymentMethod={setPaymentMethod}
+                cartSubtotal={cartSubtotal}
+                taxAmount={taxAmount}
+                taxRatePercent={taxRatePercent}
+                discountPercent={discountPercent}
+                discountAmount={discountAmount}
+                cartTotal={cartTotal}
+                handleSendToKitchen={handleSendToKitchen}
+                setCart={setCart}
+                orders={orders}
+                staffList={staffList}
+                showToast={showToast}
+              />
+            ) : (
+              <ModuleLockedView
+                moduleName="POS Counter"
+                requiredFeature="POS"
+                onNavigate={handleTabChange}
+              />
+            )}
           </div>
         )}
 
@@ -1756,12 +1815,20 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "kds" ? "" : "hidden"}`}
             style={{ display: activeTab === "kds" ? undefined : "none" }}
           >
-            <KdsView
-              kdsTickets={kdsTickets}
-              setKdsTickets={setKdsTickets}
-              handleAdvanceKds={handleAdvanceKds}
-              showToast={showToast}
-            />
+            {hasFeature("KITCHEN") ? (
+              <KdsView
+                kdsTickets={kdsTickets}
+                setKdsTickets={setKdsTickets}
+                handleAdvanceKds={handleAdvanceKds}
+                showToast={showToast}
+              />
+            ) : (
+              <ModuleLockedView
+                moduleName="Kitchen Display System (KDS)"
+                requiredFeature="KITCHEN"
+                onNavigate={handleTabChange}
+              />
+            )}
           </div>
         )}
 
@@ -1771,18 +1838,26 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "riders" ? "" : "hidden"}`}
             style={{ display: activeTab === "riders" ? undefined : "none" }}
           >
-            <RiderDispatchView
-              deliveries={deliveries}
-              setDeliveries={setDeliveries}
-              persona={isFranchiser ? "franchiser" : "branch_admin"}
-              selectedBranchId={selectedBranchId}
-              orders={orders}
-              setOrders={setOrders}
-              kdsTickets={kdsTickets}
-              setKdsTickets={setKdsTickets}
-              staffList={staffList}
-              showToast={showToast}
-            />
+            {hasFeature("RIDER") ? (
+              <RiderDispatchView
+                deliveries={deliveries}
+                setDeliveries={setDeliveries}
+                persona={isFranchiser ? "franchiser" : "branch_admin"}
+                selectedBranchId={selectedBranchId}
+                orders={orders}
+                setOrders={setOrders}
+                kdsTickets={kdsTickets}
+                setKdsTickets={setKdsTickets}
+                staffList={staffList}
+                showToast={showToast}
+              />
+            ) : (
+              <ModuleLockedView
+                moduleName="Rider Dispatch & Fleet"
+                requiredFeature="RIDER"
+                onNavigate={handleTabChange}
+              />
+            )}
           </div>
         )}
 
@@ -1792,16 +1867,24 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "menu" ? "" : "hidden"}`}
             style={{ display: activeTab === "menu" ? undefined : "none" }}
           >
-            <MenuView
-              menuItems={menuItems}
-              onAddDish={handleAddDish}
-              onUpdateDish={handleUpdateDish}
-              onDeleteDish={handleDeleteDish}
-              handleToggleStock={handleToggleStock}
-              onToggleStock={handleToggleStock}
-              showToast={showToast}
-              routeAction={routeAction}
-            />
+            {hasFeature("INVENTORY") ? (
+              <MenuView
+                menuItems={menuItems}
+                onAddDish={handleAddDish}
+                onUpdateDish={handleUpdateDish}
+                onDeleteDish={handleDeleteDish}
+                handleToggleStock={handleToggleStock}
+                onToggleStock={handleToggleStock}
+                showToast={showToast}
+                routeAction={routeAction}
+              />
+            ) : (
+              <ModuleLockedView
+                moduleName="Menu Catalog"
+                requiredFeature="INVENTORY"
+                onNavigate={handleTabChange}
+              />
+            )}
           </div>
         )}
 
@@ -1811,9 +1894,17 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "inventory" ? "" : "hidden"}`}
             style={{ display: activeTab === "inventory" ? undefined : "none" }}
           >
-            <InventoryView
-              showToast={showToast}
-            />
+            {hasFeature("INVENTORY") ? (
+              <InventoryView
+                showToast={showToast}
+              />
+            ) : (
+              <ModuleLockedView
+                moduleName="Stock & Inventory Suite"
+                requiredFeature="INVENTORY"
+                onNavigate={handleTabChange}
+              />
+            )}
           </div>
         )}
 
@@ -1823,9 +1914,17 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "procurement" ? "" : "hidden"}`}
             style={{ display: activeTab === "procurement" ? undefined : "none" }}
           >
-            <ProcurementView
-              showToast={showToast}
-            />
+            {hasFeature("INVENTORY") ? (
+              <ProcurementView
+                showToast={showToast}
+              />
+            ) : (
+              <ModuleLockedView
+                moduleName="Procurement & Purchase Orders"
+                requiredFeature="INVENTORY"
+                onNavigate={handleTabChange}
+              />
+            )}
           </div>
         )}
 
@@ -1847,10 +1946,18 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "tables" ? "" : "hidden"}`}
             style={{ display: activeTab === "tables" ? undefined : "none" }}
           >
-            <TableView
-              showToast={showToast}
-              routeAction={routeAction}
-            />
+            {hasFeature("KITCHEN") ? (
+              <TableView
+                showToast={showToast}
+                routeAction={routeAction}
+              />
+            ) : (
+              <ModuleLockedView
+                moduleName="Floor Matrix & Tables"
+                requiredFeature="KITCHEN"
+                onNavigate={handleTabChange}
+              />
+            )}
           </div>
         )}
 
@@ -1924,6 +2031,8 @@ function AdminDashboardContent({
         }
         restaurantName={user?.restaurantName}
         isHidden={isMenuDrawerOpen}
+        hasPos={hasFeature("POS")}
+        hasKitchen={hasFeature("KITCHEN")}
       />
 
       {/* Mobile & Tablet Bottom Sheet Grid Drawer (< 1024px) */}

@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { AuthenticatedUser, BranchData, UserRole } from "../types";
+import { createClient } from "../../../lib/supabase";
 import {
   getActiveUserSession,
   setActiveUserSession,
@@ -10,6 +11,8 @@ import {
   saveBranchAccount,
   clearUserSession,
   sanitizeUserSession,
+  getStoredRestaurants,
+  normalizeModules,
 } from "../../../lib/tenantStore";
 
 interface AuthContextType {
@@ -24,6 +27,7 @@ interface AuthContextType {
   isFranchiseOwner: boolean;
   isBranchAdmin: boolean;
   hasFeature: (feature: string) => boolean;
+  refreshEntitlements: () => Promise<void>;
   switchRolePreset: (role: UserRole) => void;
   addBranchToFranchise: (branch: BranchData, password?: string) => void;
   updateRestaurantProfile: (data: {
@@ -49,7 +53,176 @@ export function AuthProvider({
   const [user, setUser] = useState<AuthenticatedUser | null>(() => sanitizeUserSession(getActiveUserSession()));
   const [activeBranchId, setActiveBranchId] = useState<string>("all");
 
-  // Hydrate on mount from client-side storage
+  // Real-time entitlement refresh: queries Supabase restaurants directly to get fresh enabled_modules
+  const refreshEntitlements = async () => {
+    try {
+      const currentSession = sanitizeUserSession(getActiveUserSession()) || user;
+      if (!currentSession) return;
+
+      const trimmedEmail = (currentSession.email || "").trim().toLowerCase();
+      const isUuid = (val?: any) => typeof val === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val);
+
+      // 1. Resolve numeric restaurant primary key ID if available
+      const rawRestId = currentSession.organizationId || currentSession.restaurantId || (!isUuid(currentSession.id) ? currentSession.id : null);
+      const numericId = rawRestId ? parseInt(String(rawRestId).replace(/[^0-9]/g, ""), 10) : null;
+      const validNumericId = numericId && !isNaN(numericId) && numericId > 0 ? numericId : null;
+
+      // 2. Resolve owner UUID
+      let ownerUuid: string | null = isUuid(currentSession.id) ? currentSession.id : (currentSession as any).owner_id || null;
+
+      let freshModules: any[] | null = null;
+      let freshBrandName: string | null = null;
+      let freshBranches: any[] | null = null;
+
+      // 1. Direct query to Supabase public.restaurants for real-time entitlement state
+      try {
+        const supabase = createClient();
+
+        if (!ownerUuid) {
+          try {
+            const { data: { user: authUser } } = await supabase.auth.getUser();
+            if (authUser?.id && isUuid(authUser.id)) {
+              ownerUuid = authUser.id;
+            }
+          } catch {}
+        }
+
+        // Build PostgREST OR conditions with strict type safety (NEVER pass non-numeric to id.eq!)
+        const orConditions: string[] = [];
+        if (validNumericId) {
+          orConditions.push(`id.eq.${validNumericId}`);
+        }
+        if (ownerUuid) {
+          orConditions.push(`owner_id.eq.${ownerUuid}`);
+        }
+        if (trimmedEmail) {
+          orConditions.push(`owner_email.eq.${trimmedEmail}`);
+        }
+
+        let rest: any = null;
+
+        if (orConditions.length > 0) {
+          const { data, error } = await supabase
+            .from("restaurants")
+            .select("enabled_modules, brand_name, branches, id, owner_id, owner_email")
+            .or(orConditions.join(","))
+            .limit(1)
+            .maybeSingle();
+
+          if (!error && data) {
+            rest = data;
+          } else if (error) {
+            console.warn("[AuthContext] Supabase .or query notice:", error.message);
+          }
+        }
+
+        // Targeted individual queries if .or did not match
+        if (!rest && validNumericId) {
+          const { data } = await supabase
+            .from("restaurants")
+            .select("enabled_modules, brand_name, branches, id, owner_id, owner_email")
+            .eq("id", validNumericId)
+            .maybeSingle();
+          if (data) rest = data;
+        }
+
+        if (!rest && ownerUuid) {
+          const { data } = await supabase
+            .from("restaurants")
+            .select("enabled_modules, brand_name, branches, id, owner_id, owner_email")
+            .eq("owner_id", ownerUuid)
+            .maybeSingle();
+          if (data) rest = data;
+        }
+
+        if (!rest && trimmedEmail) {
+          const { data } = await supabase
+            .from("restaurants")
+            .select("enabled_modules, brand_name, branches, id, owner_id, owner_email")
+            .eq("owner_email", trimmedEmail)
+            .maybeSingle();
+          if (data) rest = data;
+        }
+
+        if (rest) {
+          freshModules = Array.isArray(rest.enabled_modules) ? rest.enabled_modules : [];
+          if (rest.brand_name) freshBrandName = rest.brand_name;
+          if (Array.isArray(rest.branches)) freshBranches = rest.branches;
+          console.log("[AuthContext] Live enabled_modules from Supabase:", freshModules);
+        }
+      } catch (err) {
+        console.warn("[AuthContext] Supabase real-time module query notice:", err);
+      }
+
+      // 2. Fallback check via server API route
+      if (freshModules === null) {
+        try {
+          const params = new URLSearchParams();
+          if (validNumericId) params.set("id", String(validNumericId));
+          if (ownerUuid) params.set("owner_id", ownerUuid);
+          if (trimmedEmail) params.set("email", trimmedEmail);
+
+          const res = await fetch(`/api/admin/restaurant?${params.toString()}`, {
+            cache: "no-store",
+          });
+          if (res.ok) {
+            const json = await res.json();
+            if (json.restaurant) {
+              freshModules = Array.isArray(json.restaurant.enabled_modules) ? json.restaurant.enabled_modules : [];
+              if (json.restaurant.brand_name) freshBrandName = json.restaurant.brand_name;
+              if (Array.isArray(json.restaurant.branches)) freshBranches = json.restaurant.branches;
+            }
+          }
+        } catch {}
+      }
+
+      // 3. Fallback check from Super Admin localStorage cache
+      if (freshModules === null && typeof window !== "undefined") {
+        const localList = getStoredRestaurants();
+        const matched = localList.find((r: any) => {
+          const rEmail = (r.email || r.owner_email || "").trim().toLowerCase();
+          const rId = String(r.id || "");
+          const rOwnerId = String(r.owner_id || "");
+          return (
+            (trimmedEmail && rEmail === trimmedEmail) ||
+            (validNumericId && rId === String(validNumericId)) ||
+            (ownerUuid && (rOwnerId === ownerUuid || rId === ownerUuid))
+          );
+        });
+        if (matched) {
+          freshModules = Array.isArray(matched.enabled_modules) ? matched.enabled_modules : [];
+          if (matched.brand_name) freshBrandName = matched.brand_name;
+          if (Array.isArray(matched.branches)) freshBranches = matched.branches;
+        }
+      }
+
+      if (freshModules !== null) {
+        const normalized = normalizeModules(freshModules);
+
+        // Check if assignedFeatures changed
+        const currentFeats = (user?.assignedFeatures || currentSession.assignedFeatures || []).map((f) => f.toUpperCase().trim()).sort();
+        const nextFeats = [...normalized].map((f) => f.toUpperCase().trim()).sort();
+        const hasChanged = JSON.stringify(currentFeats) !== JSON.stringify(nextFeats);
+
+        if (hasChanged || !currentSession.assignedFeatures || currentSession.assignedFeatures.length === 0) {
+          console.log("[AuthContext] Hydrated fresh entitlements from database:", normalized);
+          const updatedUser: AuthenticatedUser = sanitizeUserSession({
+            ...currentSession,
+            assignedFeatures: normalized,
+            restaurantName: freshBrandName || currentSession.restaurantName,
+            branches: freshBranches || currentSession.branches,
+          })!;
+
+          setUser(updatedUser);
+          setActiveUserSession(updatedUser);
+        }
+      }
+    } catch (e) {
+      console.warn("[AuthContext] Error in refreshEntitlements:", e);
+    }
+  };
+
+  // Hydrate on mount from client-side storage + real-time database refresh
   useEffect(() => {
     const session = sanitizeUserSession(getActiveUserSession());
     if (session) {
@@ -61,6 +234,40 @@ export function AuthProvider({
       }
       setUser(sanitizeUserSession(session));
     }
+
+    // Immediately trigger real-time database entitlement sync
+    refreshEntitlements();
+
+    // Re-verify entitlements whenever user returns to tab / window regains focus
+    const handleFocus = () => {
+      refreshEntitlements();
+    };
+
+    const handleVisibility = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        refreshEntitlements();
+      }
+    };
+
+    const handleStorage = () => {
+      refreshEntitlements();
+    };
+
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("sa_restaurants_updated", handleStorage);
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", handleVisibility);
+    }
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("sa_restaurants_updated", handleStorage);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleVisibility);
+      }
+    };
   }, []);
 
   // Update active branches when user changes
@@ -251,6 +458,7 @@ export function AuthProvider({
         isFranchiseOwner,
         isBranchAdmin,
         hasFeature,
+        refreshEntitlements,
         switchRolePreset,
         addBranchToFranchise,
         updateRestaurantProfile,

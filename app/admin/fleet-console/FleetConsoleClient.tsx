@@ -33,6 +33,13 @@ import { createClient } from "@/lib/supabase";
 import { AuthProvider, useAuth } from "../context/AuthContext";
 import { getValidTenantContext } from "@/lib/tenantResolver";
 import { getStoredOrders, getStoredStaff, saveStoredStaff } from "@/lib/tenantStore";
+import AdminSidebar from "../components/AdminSidebar";
+import AdminBottomDock from "../components/AdminBottomDock";
+import AdminMenuDrawer from "../components/AdminMenuDrawer";
+import { getPermittedNavigation } from "../navigationConfig";
+import { TAB_TO_PATH } from "../AdminDashboardClient";
+import { AdminTab } from "../types";
+import ModuleLockedView from "../components/ModuleLockedView";
 
 function formatTimeAgo(date: Date): string {
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
@@ -74,11 +81,15 @@ export interface PendingDeliveryOrder {
   prepTimeAgo: string;
 }
 
-function FleetConsoleContent() {
+function FleetConsoleContent({
+  initialCollapsed = false,
+}: {
+  initialCollapsed?: boolean;
+}) {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, logout, hasFeature } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<"register" | "dispatch">("dispatch");
+  const [consoleTab, setConsoleTab] = useState<"register" | "dispatch">("dispatch");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "available" | "in_transit" | "offline">("all");
@@ -86,6 +97,26 @@ function FleetConsoleContent() {
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [selectedOrderForDispatch, setSelectedOrderForDispatch] = useState<PendingDeliveryOrder | null>(null);
   const [selectedRiderIdForDispatch, setSelectedRiderIdForDispatch] = useState<string>("");
+
+  // Layout & Navigation State
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(initialCollapsed);
+  const [isMenuDrawerOpen, setIsMenuDrawerOpen] = useState(false);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+
+  const toggleTheme = () => {
+    setTheme((prev) => {
+      const next = prev === "dark" ? "light" : "dark";
+      if (typeof document !== "undefined") {
+        document.documentElement.classList.toggle("dark", next === "dark");
+      }
+      return next;
+    });
+  };
+
+  const handleTabChange = (tab: AdminTab) => {
+    const target = TAB_TO_PATH[tab] || (tab === "overview" ? "/admin" : `/admin/${tab}`);
+    router.push(target);
+  };
 
   // ==========================================
   // Form State: Register New Rider
@@ -136,6 +167,22 @@ function FleetConsoleContent() {
 
   // Pending delivery orders awaiting dispatch (Zero Dummy Mock Data)
   const [pendingOrders, setPendingOrders] = useState<PendingDeliveryOrder[]>([]);
+
+  // Navigation counts for sidebar badges
+  const counts = useMemo(() => {
+    const orgId = user?.organizationId || user?.id || "default";
+    let storedStaff: any[] = [];
+    try {
+      storedStaff = getStoredStaff(orgId, []);
+    } catch {}
+    return {
+      kdsTickets: 0,
+      activeRiders: riders.filter((r) => r.status === "in_transit" || r.status === "available").length,
+      staffTotal: storedStaff.length || riders.length,
+      branchesTotal: user?.branches?.length || 0,
+      menuAlerts: 0,
+    };
+  }, [user, riders]);
 
   // Persist cleaned fleet to local storage
   useEffect(() => {
@@ -448,7 +495,7 @@ function FleetConsoleContent() {
     setEmail("");
     setVehicleRegNumber("");
     setAssignedZones([]);
-    setActiveTab("dispatch");
+    setConsoleTab("dispatch");
   };
 
   // ==========================================
@@ -568,7 +615,7 @@ function FleetConsoleContent() {
   }, [riders, filterStatus, searchQuery]);
 
   return (
-    <div className="min-h-screen bg-[var(--bg)] text-[var(--text-hi)] font-sans antialiased pb-24 select-none">
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--text-hi)] flex transition-colors duration-300 antialiased font-sans selection:bg-[var(--gold)]/20 selection:text-[var(--gold)] select-none">
       {/* Toast Alert */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-5 py-3 rounded-2xl bg-[var(--surface-hi)] border border-[var(--gold)]/40 text-[var(--gold)] shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-4">
@@ -577,68 +624,96 @@ function FleetConsoleContent() {
         </div>
       )}
 
-      {/* Top Header Bar */}
-      <header className="sticky top-0 z-30 h-20 bg-[var(--bg-deep)]/90 backdrop-blur-xl border-b border-[var(--border)] px-4 sm:px-8 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-4">
-          <Link
-            href="/admin/dispatch"
-            className="p-2.5 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--gold)] hover:border-[var(--gold)]/40 transition-all cursor-pointer flex items-center justify-center group"
-            title="Return to Rider Dispatch"
-          >
-            <ArrowLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
-          </Link>
+      {/* ===================== SIDEBAR ===================== */}
+      <AdminSidebar
+        activeTab="riders"
+        setActiveTab={handleTabChange}
+        isCollapsed={isSidebarCollapsed}
+        setIsCollapsed={setIsSidebarCollapsed}
+        counts={counts}
+        theme={theme}
+        toggleTheme={toggleTheme}
+        permittedNavItems={
+          user
+            ? getPermittedNavigation(user.role, user.assignedFeatures || [], user.terminalAccess)
+            : undefined
+        }
+      />
 
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
-              <h1 className="font-display font-black text-lg sm:text-2xl text-[var(--text-hi)] tracking-tight">
-                Fleet Console &amp;{" "}
-                <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
-                  Driver Command
-                </span>
-              </h1>
-            </div>
-            <p className="text-xs text-[var(--text-lo)] font-medium mt-0.5 hidden sm:block">
-              Dedicated hub for rider registration, vehicle allocations, zone mapping, and live dispatch control.
-            </p>
+      {/* ===================== MAIN CONTENT AREA ===================== */}
+      <div className="flex-1 min-w-0 flex flex-col h-screen overflow-y-auto">
+        {!hasFeature("RIDER") ? (
+          <div className="flex-1 flex items-center justify-center p-4 sm:p-8">
+            <ModuleLockedView
+              moduleName="Fleet Console & Rider Dispatch"
+              requiredFeature="RIDER"
+              onNavigate={handleTabChange}
+            />
           </div>
-        </div>
+        ) : (
+          <>
+        {/* Top Header Bar */}
+        <header className="sticky top-0 z-30 h-20 bg-[var(--bg-deep)]/90 backdrop-blur-xl border-b border-[var(--border)] px-4 sm:px-8 flex items-center justify-between gap-4 shrink-0">
+          <div className="flex items-center gap-4">
+            <Link
+              href="/admin/dispatch"
+              className="p-2.5 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--gold)] hover:border-[var(--gold)]/40 transition-all cursor-pointer flex items-center justify-center group"
+              title="Return to Rider Dispatch"
+            >
+              <ArrowLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
+            </Link>
 
-        {/* Tab Pill Switcher */}
-        <div className="flex items-center gap-1 bg-[var(--surface-hi)] border border-[var(--border)] p-1 rounded-2xl">
-          <button
-            type="button"
-            onClick={() => setActiveTab("dispatch")}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${
-              activeTab === "dispatch"
-                ? "bg-[var(--gold)] text-[#1a1400] shadow-md"
-                : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
-            }`}
-          >
-            <Radio className="w-3.5 h-3.5" />
-            <span>Live Dispatch</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("register")}
-            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${
-              activeTab === "register"
-                ? "bg-[var(--gold)] text-[#1a1400] shadow-md"
-                : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
-            }`}
-          >
-            <UserPlus className="w-3.5 h-3.5" />
-            <span>Register Rider</span>
-          </button>
-        </div>
-      </header>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
+                <h1 className="font-display font-black text-lg sm:text-2xl text-[var(--text-hi)] tracking-tight">
+                  Fleet Console &amp;{" "}
+                  <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
+                    Driver Command
+                  </span>
+                </h1>
+              </div>
+              <p className="text-xs text-[var(--text-lo)] font-medium mt-0.5 hidden sm:block">
+                Dedicated hub for rider registration, vehicle allocations, zone mapping, and live dispatch control.
+              </p>
+            </div>
+          </div>
 
-      {/* Main Content Body */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-8 pt-6 sm:pt-8 space-y-6 sm:space-y-8">
-        {/* ========================================================================= */}
-        {/* TAB 2: LIVE DISPATCH & ACTIVE FLEET */}
-        {/* ========================================================================= */}
-        {activeTab === "dispatch" && (
+          {/* Tab Pill Switcher */}
+          <div className="flex items-center gap-1 bg-[var(--surface-hi)] border border-[var(--border)] p-1 rounded-2xl">
+            <button
+              type="button"
+              onClick={() => setConsoleTab("dispatch")}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${
+                consoleTab === "dispatch"
+                  ? "bg-[var(--gold)] text-[#1a1400] shadow-md"
+                  : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
+              }`}
+            >
+              <Radio className="w-3.5 h-3.5" />
+              <span>Live Dispatch</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setConsoleTab("register")}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${
+                consoleTab === "register"
+                  ? "bg-[var(--gold)] text-[#1a1400] shadow-md"
+                  : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
+              }`}
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Register Rider</span>
+            </button>
+          </div>
+        </header>
+
+        {/* Main Content Body */}
+        <main className="max-w-7xl w-full mx-auto px-4 sm:px-8 pt-6 sm:pt-8 space-y-6 sm:space-y-8 pb-24">
+          {/* ========================================================================= */}
+          {/* TAB 2: LIVE DISPATCH & ACTIVE FLEET */}
+          {/* ========================================================================= */}
+          {consoleTab === "dispatch" && (
           <div className="space-y-6 sm:space-y-8 animate-in fade-in duration-200">
             {/* 4 Summary KPI Cards */}
             <section className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-5 font-mono">
@@ -895,7 +970,7 @@ function FleetConsoleContent() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setActiveTab("register")}
+                      onClick={() => setConsoleTab("register")}
                       className="btn-gold animate-sheen px-4 py-2 text-xs font-bold rounded-xl flex items-center gap-1.5 mt-2 cursor-pointer shadow-md"
                     >
                       <Plus className="w-4 h-4" />
@@ -1083,7 +1158,7 @@ function FleetConsoleContent() {
         {/* ========================================================================= */}
         {/* TAB 1: REGISTER NEW RIDER FORM */}
         {/* ========================================================================= */}
-        {activeTab === "register" && (
+        {consoleTab === "register" && (
           <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in duration-200">
             <div className="glass-panel p-6 sm:p-8 rounded-3xl border border-[var(--border)] shadow-2xl space-y-6">
               <div className="border-b border-[var(--border)] pb-4">
@@ -1276,7 +1351,7 @@ function FleetConsoleContent() {
                 <div className="pt-4 border-t border-[var(--border)] flex items-center justify-end gap-3">
                   <button
                     type="button"
-                    onClick={() => setActiveTab("dispatch")}
+                    onClick={() => setConsoleTab("dispatch")}
                     className="px-5 py-2.5 rounded-xl bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-[var(--text-hi)] font-bold text-xs font-mono transition-colors cursor-pointer"
                   >
                     Cancel
@@ -1299,11 +1374,14 @@ function FleetConsoleContent() {
           </div>
         )}
       </main>
+          </>
+        )}
+      </div>
 
       {/* ========================================================================= */}
       {/* QUICK ASSIGN DISPATCH MODAL */}
       {/* ========================================================================= */}
-      {isAssignModalOpen && selectedOrderForDispatch && (
+      {hasFeature("RIDER") && isAssignModalOpen && selectedOrderForDispatch && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
             className="fixed inset-0 bg-black/75 backdrop-blur-sm animate-in fade-in"
@@ -1401,14 +1479,54 @@ function FleetConsoleContent() {
           </div>
         </div>
       )}
+
+      {/* Mobile & Tablet Bottom Navigation Dock (< 1024px) */}
+      <AdminBottomDock
+        activeTab="riders"
+        setActiveTab={handleTabChange}
+        onOpenMenuDrawer={() => setIsMenuDrawerOpen(true)}
+        kdsCount={counts.kdsTickets}
+        userInitials={
+          (user?.restaurantName || user?.name || "N")
+            .trim()
+            .substring(0, 1)
+            .toUpperCase()
+        }
+        restaurantName={user?.restaurantName}
+        isHidden={isMenuDrawerOpen}
+      />
+
+      {/* Mobile & Tablet Bottom Sheet Grid Drawer (< 1024px) */}
+      <AdminMenuDrawer
+        isOpen={isMenuDrawerOpen}
+        onClose={() => setIsMenuDrawerOpen(false)}
+        activeTab="riders"
+        setActiveTab={handleTabChange}
+        theme={theme}
+        toggleTheme={toggleTheme}
+        onLogout={() => {
+          logout();
+          router.push("/login");
+        }}
+        permittedNavItems={
+          user
+            ? getPermittedNavigation(user.role, user.assignedFeatures || [], user.terminalAccess)
+            : undefined
+        }
+        counts={counts}
+      />
     </div>
   );
 }
 
-export default function FleetConsoleClient() {
+export default function FleetConsoleClient({
+  initialCollapsed = false,
+}: {
+  initialCollapsed?: boolean;
+}) {
   return (
     <AuthProvider>
-      <FleetConsoleContent />
+      <FleetConsoleContent initialCollapsed={initialCollapsed} />
     </AuthProvider>
   );
 }

@@ -1,14 +1,15 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   LayoutGrid,
   Receipt,
-  Flame,
+  ChefHat,
   Armchair,
   Users,
+  Boxes,
   BookOpen,
-  Package,
+  Truck,
   BarChart3,
   Settings,
   LogOut,
@@ -17,17 +18,26 @@ import {
   X,
   Building2,
   Bike,
-  Truck,
   CreditCard,
+  ChevronDown,
+  ChevronRight,
   type LucideIcon,
 } from "lucide-react";
 import { AdminTab } from "../types";
 
-interface MenuGridItem {
+interface SubMenuItem {
   id: AdminTab;
   label: string;
   icon: LucideIcon;
   badge?: string | number;
+}
+
+interface MenuItem {
+  id: AdminTab;
+  label: string;
+  icon: LucideIcon;
+  badge?: string | number;
+  subItems?: SubMenuItem[];
 }
 
 interface AdminMenuDrawerProps {
@@ -56,6 +66,7 @@ export default function AdminMenuDrawer({
   toggleTheme,
   onLogout,
   counts,
+  permittedNavItems,
 }: AdminMenuDrawerProps) {
   // Lock body scroll when drawer is open
   useEffect(() => {
@@ -69,23 +80,146 @@ export default function AdminMenuDrawer({
     };
   }, [isOpen]);
 
-  // Standard menu catalog items ordered as requested
-  const menuItems: MenuGridItem[] = [
-    { id: "overview", label: "Overview", icon: LayoutGrid },
-    { id: "pos", label: "POS Counter", icon: Receipt },
-    { id: "kds", label: "Kitchen (KDS)", icon: Flame, badge: counts?.kdsTickets },
-    { id: "tables", label: "Floor & Tables", icon: Armchair },
-    { id: "staff", label: "Staff", icon: Users, badge: counts?.staffTotal },
-    { id: "menu", label: "Menu Catalog", icon: BookOpen, badge: counts?.menuAlerts },
-    { id: "inventory", label: "Inventory", icon: Package },
-    { id: "expenses", label: "Expenses", icon: Receipt },
-    { id: "analytics", label: "Analytics", icon: BarChart3 },
-    { id: "branches", label: "Branches", icon: Building2 },
-    { id: "riders", label: "Dispatch", icon: Bike, badge: counts?.activeRiders },
-    { id: "procurement", label: "Procurement", icon: Truck },
-    { id: "subscription", label: "Subscription", icon: CreditCard },
-    { id: "settings", label: "Settings", icon: Settings },
-  ];
+  const isPermitted = useCallback(
+    (id: string) => {
+      if (!permittedNavItems || !Array.isArray(permittedNavItems) || permittedNavItems.length === 0) {
+        return true;
+      }
+      return permittedNavItems.some(
+        (p: any) => p && (p.id === id || (id === "kds" && p.id === "kitchen"))
+      );
+    },
+    [permittedNavItems]
+  );
+
+  const isKitchenActive = activeTab === "kds" || activeTab === "tables";
+  const isInventoryActive =
+    activeTab === "inventory" || activeTab === "menu" || activeTab === "procurement";
+
+  const [openAccordions, setOpenAccordions] = useState<Record<string, boolean>>({
+    kds: true,
+    inventory: true,
+  });
+
+  useEffect(() => {
+    if (isKitchenActive) {
+      setOpenAccordions((prev) => ({ ...prev, kds: true }));
+    }
+  }, [isKitchenActive]);
+
+  useEffect(() => {
+    if (isInventoryActive) {
+      setOpenAccordions((prev) => ({ ...prev, inventory: true }));
+    }
+  }, [isInventoryActive]);
+
+  const toggleAccordion = (groupId: string, e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setOpenAccordions((prev) => ({
+      ...prev,
+      [groupId]: !prev[groupId],
+    }));
+  };
+
+  // Structured menu catalog with nested subcategories
+  const visibleMenuItems: MenuItem[] = useMemo(() => {
+    const list: MenuItem[] = [];
+
+    // 1. Overview
+    if (isPermitted("overview")) {
+      list.push({ id: "overview", label: "Overview", icon: LayoutGrid });
+    }
+
+    // 2. Branches
+    if (isPermitted("branches")) {
+      list.push({ id: "branches", label: "Branches", icon: Building2 });
+    }
+
+    // 3. POS Counter
+    if (isPermitted("pos")) {
+      list.push({ id: "pos", label: "POS Counter", icon: Receipt });
+    }
+
+    // 4. Kitchen Operations (Parent: kds)
+    if (isPermitted("kds")) {
+      const kdsSubItems: SubMenuItem[] = [];
+      if (isPermitted("tables")) {
+        kdsSubItems.push({
+          id: "tables",
+          label: "Floor & Tables",
+          icon: Armchair,
+        });
+      }
+      list.push({
+        id: "kds",
+        label: "Kitchen (KDS)",
+        icon: ChefHat,
+        badge: counts?.kdsTickets,
+        subItems: kdsSubItems,
+      });
+    }
+
+    // 5. Inventory Suite (Parent: inventory)
+    if (isPermitted("inventory")) {
+      const invSubItems: SubMenuItem[] = [];
+      if (isPermitted("menu")) {
+        invSubItems.push({
+          id: "menu",
+          label: "Menu Management",
+          icon: BookOpen,
+          badge: counts?.menuAlerts,
+        });
+      }
+      if (isPermitted("procurement")) {
+        invSubItems.push({
+          id: "procurement",
+          label: "Procurement & POs",
+          icon: Truck,
+        });
+      }
+      list.push({
+        id: "inventory",
+        label: "Inventory & Stock",
+        icon: Boxes,
+        subItems: invSubItems,
+      });
+    }
+
+    // 6. Rider Dispatch
+    if (isPermitted("riders")) {
+      list.push({ id: "riders", label: "Rider Dispatch", icon: Bike, badge: counts?.activeRiders });
+    }
+
+    // 7. Staff
+    if (isPermitted("staff")) {
+      list.push({ id: "staff", label: "Staff", icon: Users, badge: counts?.staffTotal });
+    }
+
+    // 8. Expenses
+    if (isPermitted("expenses")) {
+      list.push({ id: "expenses", label: "Expenses", icon: Receipt });
+    }
+
+    // 9. Analytics
+    if (isPermitted("analytics")) {
+      list.push({ id: "analytics", label: "Analytics", icon: BarChart3 });
+    }
+
+    // 10. Settings
+    if (isPermitted("settings")) {
+      list.push({ id: "settings", label: "Settings", icon: Settings });
+    }
+
+    // 11. Subscription
+    if (isPermitted("subscription")) {
+      list.push({ id: "subscription", label: "Subscription", icon: CreditCard });
+    }
+
+    return list;
+  }, [isPermitted, counts]);
 
   if (!isOpen) return null;
 
@@ -102,7 +236,7 @@ export default function AdminMenuDrawer({
   };
 
   return (
-    <div className="fixed inset-0 z-50 xl:hidden">
+    <div className="fixed inset-0 z-50 lg:hidden">
       {/* Dark Backdrop with blur */}
       <div
         onClick={onClose}
@@ -154,55 +288,109 @@ export default function AdminMenuDrawer({
           </div>
         </div>
 
-        {/* 4-Column Icon Grid adapting dynamically to theme */}
-        <div className="grid grid-cols-4 gap-2.5 sm:gap-3 pt-4">
-          {menuItems.map((item) => {
+        {/* Navigation List with Nested Accordion Hierarchy */}
+        <div className="space-y-1.5 pt-3">
+          {visibleMenuItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
+            const hasSubItems = Boolean(item.subItems && item.subItems.length > 0);
+            const isAccordionOpen = Boolean(openAccordions[item.id]);
+
             return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => handleSelectTab(item.id)}
-                className={`flex flex-col items-center justify-center gap-2 p-3 sm:p-3.5 rounded-2xl transition-all cursor-pointer relative select-none ${
-                  isActive
-                    ? "border border-[var(--gold)] bg-[var(--gold-dim)] text-[var(--gold)] font-semibold shadow-sm"
-                    : "border border-transparent text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
-                }`}
-              >
-                <div className="relative">
-                  <Icon
-                    className={`w-6 h-6 transition-transform group-hover:scale-110 ${
-                      isActive ? "text-[var(--gold)]" : "text-[var(--text-hi)]"
-                    }`}
-                  />
-                  {Boolean(item.badge && Number(item.badge) > 0) && (
-                    <span className="absolute -top-1.5 -right-2 w-4 h-4 rounded-full bg-[var(--gold)] text-[var(--bg-deep)] text-[10px] font-mono font-bold flex items-center justify-center shadow-sm">
-                      {item.badge}
-                    </span>
-                  )}
-                </div>
-                <span
-                  className={`text-[11px] sm:text-xs text-center leading-tight line-clamp-2 ${
-                    isActive ? "text-[var(--gold)] font-bold" : "text-[var(--text-lo)] font-medium"
+              <div key={item.id} className="w-full">
+                <div
+                  onClick={() => {
+                    handleSelectTab(item.id);
+                    if (hasSubItems && !isAccordionOpen) {
+                      setOpenAccordions((prev) => ({ ...prev, [item.id]: true }));
+                    }
+                  }}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all cursor-pointer select-none ${
+                    isActive
+                      ? "border border-[var(--gold)] bg-[var(--gold-dim)] text-[var(--gold)] font-bold shadow-sm"
+                      : "border border-transparent text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
                   }`}
                 >
-                  {item.label}
-                </span>
-              </button>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Icon
+                      className={`w-5 h-5 shrink-0 ${
+                        isActive ? "text-[var(--gold)]" : "text-[var(--text-lo)]"
+                      }`}
+                    />
+                    <span className="truncate">{item.label}</span>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 ml-2">
+                    {Boolean(item.badge && Number(item.badge) > 0) && (
+                      <span className="px-2 py-0.5 rounded-full bg-[var(--gold)] text-[#342c14] text-[10px] font-mono font-bold">
+                        {item.badge}
+                      </span>
+                    )}
+                    {hasSubItems && (
+                      <button
+                        type="button"
+                        onClick={(e) => toggleAccordion(item.id, e)}
+                        className="p-1.5 rounded-lg hover:bg-[var(--surface)] text-[var(--text-faint)] hover:text-[var(--text-hi)] transition-colors cursor-pointer"
+                        aria-label={isAccordionOpen ? "Collapse sub-menu" : "Expand sub-menu"}
+                      >
+                        {isAccordionOpen ? (
+                          <ChevronDown className="w-4 h-4 text-[var(--gold)]" />
+                        ) : (
+                          <ChevronRight className="w-4 h-4 text-[var(--text-lo)]" />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Sub-items accordion container */}
+                {hasSubItems && isAccordionOpen && (
+                  <div className="ml-5 pl-3.5 border-l border-zinc-800 dark:border-zinc-800 space-y-1 my-1.5 transition-all">
+                    {item.subItems!.map((sub) => {
+                      const SubIcon = sub.icon;
+                      const isSubActive = activeTab === sub.id;
+                      return (
+                        <div
+                          key={sub.id}
+                          onClick={() => handleSelectTab(sub.id)}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer select-none ${
+                            isSubActive
+                              ? "border border-[var(--gold)]/40 bg-[var(--gold-dim)] text-[var(--gold)] font-bold shadow-sm"
+                              : "border border-transparent text-[var(--text-lo)] hover:text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <SubIcon
+                              className={`w-4 h-4 shrink-0 ${
+                                isSubActive ? "text-[var(--gold)]" : "text-[var(--text-lo)]"
+                              }`}
+                            />
+                            <span className="truncate">{sub.label}</span>
+                          </div>
+                          {Boolean(sub.badge && Number(sub.badge) > 0) && (
+                            <span className="px-1.5 py-0.2 rounded-full bg-[var(--gold)] text-[#342c14] text-[9.5px] font-mono font-bold">
+                              {sub.badge}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
+        </div>
 
-          {/* Log Out Special Card with theme-adaptive red */}
+        {/* Log Out Special Card */}
+        <div className="pt-4 mt-3 border-t border-[var(--border)]">
           <button
             type="button"
             onClick={handleLogoutClick}
-            className="flex flex-col items-center justify-center gap-2 p-3 sm:p-3.5 rounded-2xl border border-[var(--red)]/40 bg-[var(--red-dim)] text-[var(--red)] hover:bg-[var(--red-dim)]/80 transition-all cursor-pointer select-none"
+            className="w-full flex items-center justify-center gap-2 p-3 rounded-xl border border-[var(--red)]/40 bg-[var(--red-dim)] text-[var(--red)] hover:bg-[var(--red-dim)]/80 transition-all cursor-pointer font-bold text-xs select-none"
           >
-            <LogOut className="w-6 h-6 text-[var(--red)]" />
-            <span className="text-[11px] sm:text-xs font-bold text-center leading-tight text-[var(--red)]">
-              Log Out
-            </span>
+            <LogOut className="w-4 h-4 text-[var(--red)]" />
+            <span>Log Out</span>
           </button>
         </div>
       </div>

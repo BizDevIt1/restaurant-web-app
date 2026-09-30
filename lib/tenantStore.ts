@@ -353,28 +353,49 @@ export function playKitchenBuzzer(): void {
   }
 }
 
+export const DEFAULT_CORE_FEATURES = [
+  "OVERVIEW",
+  "EXPENSES",
+  "ANALYTICS",
+  "STAFF",
+  "SETTINGS",
+  "SUBSCRIPTION",
+];
+
 /**
  * Helper to normalize module names into standard feature strings.
+ * Core features are always-on; add-on entitlements require explicit assignment.
  */
-function normalizeModules(modules: any): string[] {
+export function normalizeModules(modules: any): string[] {
   if (!Array.isArray(modules) || modules.length === 0) {
-    return ["POS", "KITCHEN", "MENU", "STAFF", "RIDER", "ANALYTICS"];
+    return [...DEFAULT_CORE_FEATURES];
   }
   const mapping: Record<string, string> = {
     pos_terminal: "POS",
+    pos: "POS",
     kds_system: "KITCHEN",
+    kds: "KITCHEN",
+    kitchen: "KITCHEN",
+    tables: "KITCHEN",
     rider_app: "RIDER",
-    inventory_stock: "MENU",
-    menu: "MENU",
-    staff: "STAFF",
-    analytics: "ANALYTICS",
-    settings: "SETTINGS",
+    rider: "RIDER",
+    riders: "RIDER",
+    dispatch: "RIDER",
+    inventory_stock: "INVENTORY",
+    inventory: "INVENTORY",
+    procurement: "INVENTORY",
+    menu: "INVENTORY",
     branches: "BRANCHES",
   };
-  return modules.map((m: string) => {
-    const lower = String(m).toLowerCase().trim();
-    return mapping[lower] || m.toUpperCase();
-  });
+
+  const assigned = modules
+    .map((m: any) => {
+      const lower = String(m || "").toLowerCase().trim();
+      return mapping[lower] || null;
+    })
+    .filter(Boolean) as string[];
+
+  return Array.from(new Set([...DEFAULT_CORE_FEATURES, ...assigned]));
 }
 
 export const OMNI_RESTAURANTS_KEY = "omni_restaurants";
@@ -583,8 +604,9 @@ export function sanitizeUserSession(u: AuthenticatedUser | null): AuthenticatedU
   const cleanName = sanitizeSessionText(u.name) || "Admin";
   const cleanEmail = u.email ? u.email.replace(/frenchis\w*|franchis\w*/gi, "admin").trim() : "";
   const cleanBranch = u.branchName ? sanitizeSessionText(u.branchName) || "Main Branch" : undefined;
-  const cleanBranches = u.branches?.map((b) => ({
+  const cleanBranches = u.branches?.map((b: any, idx: number) => ({
     ...b,
+    id: b.id || b.branch_id || b.code || `branch_${idx}`,
     name: sanitizeSessionText(b.name) || "Branch Outlet",
     managerName: sanitizeSessionText(b.managerName) || "Branch Manager",
     managerEmail: b.managerEmail ? b.managerEmail.replace(/frenchis\w*|franchis\w*/gi, "admin").trim() : "",
@@ -634,7 +656,7 @@ export function getActiveUserSession(): AuthenticatedUser | null {
       branchId: session.branchId ? String(session.branchId) : undefined,
       branchName: session.branchName,
       branches: branches,
-      assignedFeatures: session.assignedFeatures || ["POS", "KITCHEN", "MENU", "STAFF", "RIDER", "ANALYTICS", "SETTINGS"],
+      assignedFeatures: normalizeModules(session.assignedFeatures),
       restaurantType: session.restaurantType || "STANDALONE",
       branchesCount: session.branchesCount || (branches ? branches.length : 1),
       organizationId: String(session.organizationId),

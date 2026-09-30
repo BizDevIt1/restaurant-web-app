@@ -46,57 +46,6 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
     tooltip: "Multi-branch Network & Outlets Provisioning",
   },
   {
-    id: "staff",
-    label: "Staff Management",
-    icon: Users,
-    path: "/admin/staff",
-    allowedRoles: ["STANDALONE_ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
-    badgeKey: "staff",
-    tooltip: "Staff Roster & Terminal Screen Delegation",
-  },
-  {
-    id: "menu",
-    label: "Menu Management",
-    icon: UtensilsCrossed,
-    path: "/admin/menu",
-    allowedRoles: ["STANDALONE_ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
-    requiredFeature: "MENU",
-    badgeKey: "menu",
-    tooltip: "Catalog, Pricing & 86'd Stock Control",
-  },
-  {
-    id: "inventory",
-    label: "Inventory & Stock",
-    icon: Boxes,
-    path: "/admin/inventory",
-    allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
-    tooltip: "Raw material balances and stock thresholds",
-  },
-  {
-    id: "procurement",
-    label: "Procurement & POs",
-    icon: Truck,
-    path: "/admin/procurement",
-    allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
-    tooltip: "Suppliers Directory & Purchase Orders",
-  },
-  {
-    id: "expenses",
-    label: "Expenses & OPEX",
-    icon: Receipt,
-    path: "/admin/expenses",
-    allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
-    tooltip: "Operating expenses and overheads",
-  },
-  {
-    id: "tables",
-    label: "Floor & Tables",
-    icon: LayoutGrid,
-    path: "/admin/tables",
-    allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
-    tooltip: "Real-time table occupancy & floor sections",
-  },
-  {
     id: "pos",
     label: "POS Counter",
     icon: Receipt,
@@ -117,6 +66,43 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
     tooltip: "Kitchen Display System & Chef Tickets",
   },
   {
+    id: "tables",
+    label: "Floor & Tables",
+    icon: LayoutGrid,
+    path: "/admin/tables",
+    allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
+    requiredFeature: "KITCHEN", // Nested under Kitchen & Floor Operations bundle
+    tooltip: "Real-time table occupancy & floor sections",
+  },
+  {
+    id: "inventory",
+    label: "Inventory & Stock",
+    icon: Boxes,
+    path: "/admin/inventory",
+    allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
+    requiredFeature: "INVENTORY", // Parent of Inventory Suite
+    tooltip: "Raw material balances and stock thresholds",
+  },
+  {
+    id: "procurement",
+    label: "Procurement & POs",
+    icon: Truck,
+    path: "/admin/procurement",
+    allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
+    requiredFeature: "INVENTORY", // Sub-route of Inventory Suite
+    tooltip: "Suppliers Directory & Purchase Orders",
+  },
+  {
+    id: "menu",
+    label: "Menu Management",
+    icon: UtensilsCrossed,
+    path: "/admin/menu",
+    allowedRoles: ["STANDALONE_ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
+    requiredFeature: "INVENTORY", // Sub-route of Inventory Suite
+    badgeKey: "menu",
+    tooltip: "Catalog, Pricing & 86'd Stock Control",
+  },
+  {
     id: "riders",
     label: "Rider Dispatch",
     icon: Bike,
@@ -125,6 +111,23 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
     requiredFeature: "RIDER",
     badgeKey: "riders",
     tooltip: "Live Delivery Courier Dispatch & Fleet",
+  },
+  {
+    id: "staff",
+    label: "Staff Management",
+    icon: Users,
+    path: "/admin/staff",
+    allowedRoles: ["STANDALONE_ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
+    badgeKey: "staff",
+    tooltip: "Staff Roster & Terminal Screen Delegation",
+  },
+  {
+    id: "expenses",
+    label: "Expenses & OPEX",
+    icon: Receipt,
+    path: "/admin/expenses",
+    allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
+    tooltip: "Operating expenses and overheads",
   },
   {
     id: "analytics",
@@ -181,8 +184,8 @@ export function getPermittedNavigation(
     }
   }
 
-  const normalizedFeatures = assignedFeatures.map((f) => f.toUpperCase());
-  return NAVIGATION_REGISTRY.filter((item) => {
+  const normalizedFeatures = (assignedFeatures || []).map((f) => String(f || "").toUpperCase().trim());
+  const permitted = NAVIGATION_REGISTRY.filter((item) => {
     if (role === "STAFF_MEMBER") {
       if (item.id === "branches") return false;
       return true;
@@ -205,10 +208,16 @@ export function getPermittedNavigation(
     // 2. If a specific feature is required, verify user has it
     if (
       item.requiredFeature &&
-      !normalizedFeatures.includes(item.requiredFeature.toUpperCase())
+      !normalizedFeatures.includes(item.requiredFeature.toUpperCase().trim())
     ) {
       return false;
     }
     return true;
   });
+
+  if (typeof window !== "undefined") {
+    console.log("[Navigation] Active assignedFeatures:", normalizedFeatures, "Permitted tabs:", permitted.map((p) => p.id));
+  }
+
+  return permitted;
 }

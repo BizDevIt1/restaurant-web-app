@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   ArrowLeft,
   UserCheck,
@@ -40,7 +40,7 @@ export default function StaffProvisioningView({
   onSuccess,
   showToast,
 }: StaffProvisioningViewProps) {
-  const { user } = useAuth();
+  const { user, hasFeature } = useAuth();
 
   // Helper to extract numeric restaurant ID for PostgreSQL BIGINT
   const parseNumericId = (id?: string | number): number => {
@@ -50,21 +50,108 @@ export default function StaffProvisioningView({
     return digits ? parseInt(digits, 10) : 27;
   };
 
-  const availableBranches =
-    user?.branches && user.branches.length > 0
-      ? user.branches
-      : [
-          {
-            id: user?.branchId || "main",
-            name: user?.branchName || user?.restaurantName || "Main Outlet",
+  const availableBranches = useMemo(() => {
+    if (user?.branches && Array.isArray(user.branches) && user.branches.length > 0) {
+      return user.branches.map((b: any, idx: number) => {
+        if (typeof b === "string") {
+          return {
+            id: `branch_${idx}_${b}`,
+            name: b,
             city: user?.city || "",
-          },
-        ];
+          };
+        }
+        const branchId = b.id || b.branch_id || b.code || `branch_${idx}`;
+        const branchName = b.name || b.branch_name || `Branch ${idx + 1}`;
+        return {
+          ...b,
+          id: String(branchId),
+          name: String(branchName),
+          city: b.city || user?.city || "",
+        };
+      });
+    }
+    return [
+      {
+        id: String(user?.branchId || "main"),
+        name: String(user?.branchName || user?.restaurantName || "Main Outlet"),
+        city: user?.city || "",
+      },
+    ];
+  }, [user]);
+
+  // Dynamic role list based on restaurant entitlements:
+  // - Manager: Always allowed
+  // - Cashier: Requires "POS"
+  // - Chef & Waiter: Requires "KITCHEN"
+  // - Rider: Requires "RIDER"
+  const ALL_ROLES: Array<{
+    id: "cashier" | "chef" | "rider" | "waiter" | "manager";
+    label: string;
+    sublabel: string;
+    icon: React.ComponentType<{ className?: string }>;
+    featureRequired?: string;
+  }> = useMemo(
+    () => [
+      {
+        id: "manager",
+        label: "Manager",
+        sublabel: "Full Operations",
+        icon: ShieldCheck,
+      },
+      {
+        id: "cashier",
+        label: "Cashier",
+        sublabel: "POS Checkout & Bills",
+        icon: Receipt,
+        featureRequired: "POS",
+      },
+      {
+        id: "chef",
+        label: "Chef / Cook",
+        sublabel: "Kitchen KDS Queue",
+        icon: Flame,
+        featureRequired: "KITCHEN",
+      },
+      {
+        id: "waiter",
+        label: "Waiter / Server",
+        sublabel: "Table-side Orders",
+        icon: UtensilsCrossed,
+        featureRequired: "KITCHEN",
+      },
+      {
+        id: "rider",
+        label: "Delivery Rider",
+        sublabel: "Dispatch & Fleet",
+        icon: Bike,
+        featureRequired: "RIDER",
+      },
+    ],
+    []
+  );
+
+  const ROLES_LIST = useMemo(() => {
+    return ALL_ROLES.filter((r) => {
+      if (!r.featureRequired) return true;
+      return hasFeature(r.featureRequired);
+    });
+  }, [ALL_ROLES, hasFeature]);
 
   // Form State
-  const [role, setRole] = useState<"manager" | "cashier" | "chef" | "rider" | "waiter">(
-    initialData?.role || "cashier"
-  );
+  const [role, setRole] = useState<"manager" | "cashier" | "chef" | "rider" | "waiter">(() => {
+    if (initialData?.role) return initialData.role;
+    if (hasFeature("POS")) return "cashier";
+    if (hasFeature("KITCHEN")) return "chef";
+    if (hasFeature("RIDER")) return "rider";
+    return "manager";
+  });
+
+  // Ensure selected role remains valid if entitlements change
+  useEffect(() => {
+    if (ROLES_LIST.length > 0 && !ROLES_LIST.some((r) => r.id === role)) {
+      setRole(ROLES_LIST[0].id);
+    }
+  }, [ROLES_LIST, role]);
   const [fullName, setFullName] = useState(initialData?.name || "");
   const [phone, setPhone] = useState(initialData?.phone || "+92 ");
   const [selectedBranchName, setSelectedBranchName] = useState(
@@ -341,44 +428,6 @@ export default function StaffProvisioningView({
     }
   };
 
-  const ROLES_LIST: Array<{
-    id: "cashier" | "chef" | "rider" | "waiter" | "manager";
-    label: string;
-    sublabel: string;
-    icon: React.ComponentType<{ className?: string }>;
-  }> = [
-    {
-      id: "cashier",
-      label: "Cashier",
-      sublabel: "POS Checkout & Bills",
-      icon: Receipt,
-    },
-    {
-      id: "chef",
-      label: "Chef / Cook",
-      sublabel: "Kitchen KDS Queue",
-      icon: Flame,
-    },
-    {
-      id: "rider",
-      label: "Delivery Rider",
-      sublabel: "Dispatch & Fleet",
-      icon: Bike,
-    },
-    {
-      id: "waiter",
-      label: "Waiter / Server",
-      sublabel: "Table-side Orders",
-      icon: UtensilsCrossed,
-    },
-    {
-      id: "manager",
-      label: "Manager",
-      sublabel: "Full Operations",
-      icon: ShieldCheck,
-    },
-  ];
-
   return (
     <div className="w-full max-w-4xl mx-auto p-3.5 sm:p-6 lg:p-8 space-y-6 pb-12 animate-in fade-in duration-200 select-none">
       <div className="max-w-4xl mx-auto w-full space-y-6">
@@ -473,7 +522,19 @@ export default function StaffProvisioningView({
               </div>
 
               {/* Desktop Role Pill Grid (>= 1024px) */}
-              <div className="hidden lg:grid lg:grid-cols-5 gap-3">
+              <div
+                className={`hidden lg:grid gap-3 ${
+                  ROLES_LIST.length === 1
+                    ? "lg:grid-cols-1 max-w-xs"
+                    : ROLES_LIST.length === 2
+                    ? "lg:grid-cols-2 max-w-md"
+                    : ROLES_LIST.length === 3
+                    ? "lg:grid-cols-3"
+                    : ROLES_LIST.length === 4
+                    ? "lg:grid-cols-4"
+                    : "lg:grid-cols-5"
+                }`}
+              >
                 {ROLES_LIST.map((r) => {
                   const Icon = r.icon;
                   const isSelected = role === r.id;
@@ -551,8 +612,8 @@ export default function StaffProvisioningView({
                     onChange={(e) => setSelectedBranchName(e.target.value)}
                     className="w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)] rounded-xl pl-9 pr-4 py-2.5 text-xs text-[var(--text-hi)] focus:outline-none transition-all cursor-pointer font-sans"
                   >
-                    {availableBranches.map((b) => (
-                      <option key={b.id} value={b.name}>
+                    {availableBranches.map((b, idx) => (
+                      <option key={`${b.id || b.name || "branch"}-${idx}`} value={b.name}>
                         {b.name} {b.city ? `(${b.city})` : ""}
                       </option>
                     ))}

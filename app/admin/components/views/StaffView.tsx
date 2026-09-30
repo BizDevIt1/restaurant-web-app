@@ -68,7 +68,7 @@ export default function StaffView({
   routeAction,
 }: StaffViewProps) {
   const router = useRouter();
-  const { user, isBranchAdmin } = useAuth();
+  const { user, isBranchAdmin, hasFeature } = useAuth();
   const currentOrgId = user?.organizationId || user?.id || "default";
 
   // Local roster synchronized with Supabase & deduplicated
@@ -348,6 +348,30 @@ export default function StaffView({
   const ridersCount = uniqueFilteredStaff.filter((s) => s.role === "rider").length;
   const managersCount = uniqueFilteredStaff.filter((s) => s.role === "manager").length;
 
+  // Dynamic role filter options based on active features
+  const roleFilterOptions = useMemo(() => {
+    const opts = [
+      { id: "all", label: "All Roles", count: totalStaffCount },
+      { id: "manager", label: "Managers", count: managersCount },
+    ];
+    if (hasFeature("POS")) {
+      opts.push({ id: "cashier", label: "Cashiers", count: cashiersCount });
+    }
+    if (hasFeature("KITCHEN")) {
+      opts.push({ id: "chef", label: "Chefs", count: chefsCount });
+    }
+    if (hasFeature("RIDER")) {
+      opts.push({ id: "rider", label: "Riders", count: ridersCount });
+    }
+    return opts;
+  }, [hasFeature, totalStaffCount, managersCount, cashiersCount, chefsCount, ridersCount]);
+
+  useEffect(() => {
+    if (roleFilter !== "all" && !roleFilterOptions.some((o) => o.id === roleFilter)) {
+      setRoleFilter("all");
+    }
+  }, [roleFilter, roleFilterOptions]);
+
   // Render Dedicated Full-Page Staff Provisioning Mode (No Popup Modals)
   if (provisioningMode) {
     return (
@@ -437,35 +461,41 @@ export default function StaffView({
 
         <div className="glass-panel p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-[var(--border)] space-y-1">
           <div className="flex items-center justify-between text-[10.5px] sm:text-[11px] font-mono text-[var(--text-faint)] uppercase">
-            <span>Cashiers</span>
-            <Receipt className="w-3.5 h-3.5 text-[#25d366]" />
-          </div>
-          <p className="text-lg sm:text-2xl font-display font-black text-[#25d366]">{cashiersCount}</p>
-        </div>
-
-        <div className="glass-panel p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-[var(--border)] space-y-1">
-          <div className="flex items-center justify-between text-[10.5px] sm:text-[11px] font-mono text-[var(--text-faint)] uppercase">
-            <span>Chefs</span>
-            <Flame className="w-3.5 h-3.5 text-amber-400" />
-          </div>
-          <p className="text-lg sm:text-2xl font-display font-black text-amber-400">{chefsCount}</p>
-        </div>
-
-        <div className="glass-panel p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-[var(--border)] space-y-1">
-          <div className="flex items-center justify-between text-[10.5px] sm:text-[11px] font-mono text-[var(--text-faint)] uppercase">
-            <span>Riders</span>
-            <Bike className="w-3.5 h-3.5 text-blue-400" />
-          </div>
-          <p className="text-lg sm:text-2xl font-display font-black text-blue-400">{ridersCount}</p>
-        </div>
-
-        <div className="glass-panel p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-[var(--border)] space-y-1 col-span-2 sm:col-span-1 lg:col-span-1">
-          <div className="flex items-center justify-between text-[10.5px] sm:text-[11px] font-mono text-[var(--text-faint)] uppercase">
             <span>Managers</span>
             <ShieldCheck className="w-3.5 h-3.5 text-[var(--gold)]" />
           </div>
           <p className="text-lg sm:text-2xl font-display font-black text-[var(--gold)]">{managersCount}</p>
         </div>
+
+        {hasFeature("POS") && (
+          <div className="glass-panel p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-[var(--border)] space-y-1">
+            <div className="flex items-center justify-between text-[10.5px] sm:text-[11px] font-mono text-[var(--text-faint)] uppercase">
+              <span>Cashiers</span>
+              <Receipt className="w-3.5 h-3.5 text-[#25d366]" />
+            </div>
+            <p className="text-lg sm:text-2xl font-display font-black text-[#25d366]">{cashiersCount}</p>
+          </div>
+        )}
+
+        {hasFeature("KITCHEN") && (
+          <div className="glass-panel p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-[var(--border)] space-y-1">
+            <div className="flex items-center justify-between text-[10.5px] sm:text-[11px] font-mono text-[var(--text-faint)] uppercase">
+              <span>Chefs</span>
+              <Flame className="w-3.5 h-3.5 text-amber-400" />
+            </div>
+            <p className="text-lg sm:text-2xl font-display font-black text-amber-400">{chefsCount}</p>
+          </div>
+        )}
+
+        {hasFeature("RIDER") && (
+          <div className="glass-panel p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-[var(--border)] space-y-1">
+            <div className="flex items-center justify-between text-[10.5px] sm:text-[11px] font-mono text-[var(--text-faint)] uppercase">
+              <span>Riders</span>
+              <Bike className="w-3.5 h-3.5 text-blue-400" />
+            </div>
+            <p className="text-lg sm:text-2xl font-display font-black text-blue-400">{ridersCount}</p>
+          </div>
+        )}
       </div>
 
       {/* Unified Role Filter Dropdown & Live Search in a Single Horizontal Row */}
@@ -477,13 +507,7 @@ export default function StaffView({
             onChange={(val) => setRoleFilter(val)}
             buttonClassName="h-10 text-xs font-mono text-[var(--text-hi)]"
             menuClassName="w-56 sm:w-60"
-            options={[
-              { id: "all", label: "All Roles", count: totalStaffCount },
-              { id: "cashier", label: "Cashiers", count: cashiersCount },
-              { id: "chef", label: "Chefs", count: chefsCount },
-              { id: "rider", label: "Riders", count: ridersCount },
-              { id: "manager", label: "Managers", count: managersCount },
-            ]}
+            options={roleFilterOptions}
           />
         </div>
 
