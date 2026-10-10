@@ -20,14 +20,26 @@ import {
   User,
   History,
   ChevronDown,
+  UtensilsCrossed,
+  ShoppingCart,
+  Eye,
+  AlertCircle,
+  Info,
 } from "lucide-react";
-import { RawMaterial, InventoryWastage } from "../../types";
+import { RawMaterial, InventoryWastage, MenuItem, ItemVariant } from "../../types";
 import ResponsiveSelect from "../ResponsiveSelect";
 import { useAuth } from "../../context/AuthContext";
 import { useAdminCache } from "../../context/AdminCacheContext";
 import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
 import WastageModal from "./WastageModal";
+import {
+  ItemPortionAvailabilityText,
+  ItemStockStatusBadge,
+  VariantPortionBadge,
+} from "@/app/components/PosInventoryPortionBadges";
+import { getItemRepresentativePortions } from "@/lib/posLedgerSync";
+import { getSmartFoodImage } from "@/utils/posFoodImages";
 
 interface InventoryViewProps {
   showToast: (msg: string) => void;
@@ -55,7 +67,19 @@ const generateSku = (name: string, category: string): string => {
 
 export default function InventoryView({ showToast }: InventoryViewProps) {
   const { user } = useAuth();
-  const { rawMaterials: cachedRawMaterials, updateRawMaterialRow, insertRawMaterialRow, deleteRawMaterialRow } = useAdminCache();
+  const {
+    rawMaterials: cachedRawMaterials,
+    updateRawMaterialRow,
+    insertRawMaterialRow,
+    deleteRawMaterialRow,
+    liveSimulatedMenuItems,
+    effectiveLedger,
+    baseMaterialsMap,
+    getVariantPortions,
+    posCart,
+    inventoryTick,
+    rawRecipes,
+  } = useAdminCache();
 
   const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>(() =>
     cachedRawMaterials && cachedRawMaterials.length > 0 ? cachedRawMaterials : []
@@ -74,8 +98,11 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
     }
   }, [cachedRawMaterials]);
 
-  // Active View Tab: Stock Balances vs. Wastage Log
-  const [activeViewTab, setActiveViewTab] = useState<"balances" | "wastage">("balances");
+  // Active View Tab: Stock Balances vs. Live Recipe Portions vs. Wastage Log
+  const [activeViewTab, setActiveViewTab] = useState<"balances" | "live_stock" | "wastage">("balances");
+  const [dishCategoryFilter, setDishCategoryFilter] = useState<string>("all");
+  const [inspectingDish, setInspectingDish] = useState<MenuItem | null>(null);
+  const [selectedInspectVariant, setSelectedInspectVariant] = useState<ItemVariant | null>(null);
 
   // Search & Category Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -172,6 +199,77 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
 
   useEffect(() => {
     fetchInventory();
+
+    const handleStockDeducted = () => {
+      fetchInventory();
+    };
+
+    const handleStorageUpdate = (e: StorageEvent) => {
+      if (e.key && e.key.startsWith("pos_inventory_deducted_")) {
+        fetchInventory();
+      }
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("inventory_stock_deducted", handleStockDeducted);
+      window.addEventListener("storage", handleStorageUpdate);
+    }
+
+    let channel: any = null;
+    let isMounted = true;
+
+    (async () => {
+      try {
+        const supabase = createClient();
+        const { restId } = await getValidTenantContext(user);
+        if (restId && isMounted) {
+          const subId = Math.random().toString(36).substring(2, 7);
+          channel = supabase
+            .channel(`admin_inventory_realtime_${restId}_${subId}`)
+            .on(
+              "postgres_changes",
+              {
+                event: "*",
+                schema: "public",
+                table: "raw_materials",
+                filter: `restaurant_id=eq.${restId}`,
+              },
+              () => {
+                if (isMounted) fetchInventory();
+              }
+            )
+            .on(
+              "postgres_changes",
+              {
+                event: "*",
+                schema: "public",
+                table: "inventory_wastage",
+                filter: `restaurant_id=eq.${restId}`,
+              },
+              () => {
+                if (isMounted) fetchInventory();
+              }
+            )
+            .subscribe();
+        }
+      } catch (err) {
+        console.warn("[InventoryView] Realtime subscription error:", err);
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+      if (typeof window !== "undefined") {
+        window.removeEventListener("inventory_stock_deducted", handleStockDeducted);
+        window.removeEventListener("storage", handleStorageUpdate);
+      }
+      if (channel) {
+        try {
+          const supabase = createClient();
+          supabase.removeChannel(channel);
+        } catch { }
+      }
+    };
   }, [user?.organizationId, user?.id]);
 
   // Open Add Modal
@@ -207,6 +305,7 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
   // Handle Form Submit (Add or Edit)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     const cleanName = formName.trim();
     if (!cleanName) {
       showToast("Please enter an item name.");
@@ -435,26 +534,73 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
     });
   }, [wastageLogs, searchQuery]);
 
+  // Live Simulated Dishes Metrics & Filtering (Mirrored from POS Terminal Recipe Ledger)
+  const inStockDishesCount = useMemo(() => {
+    return (liveSimulatedMenuItems || []).filter((d) => {
+      const rep = getItemRepresentativePortions(d, getVariantPortions);
+      return !rep.isOutOfStock && d.stockStatus !== "out_of_stock";
+    }).length;
+  }, [liveSimulatedMenuItems, getVariantPortions, inventoryTick]);
+
+  const lowStockDishesCount = useMemo(() => {
+    return (liveSimulatedMenuItems || []).filter((d) => {
+      const rep = getItemRepresentativePortions(d, getVariantPortions);
+      return !rep.isOutOfStock && rep.portionCount > 0 && rep.portionCount <= 5;
+    }).length;
+  }, [liveSimulatedMenuItems, getVariantPortions, inventoryTick]);
+
+  const outOfStockDishesCount = useMemo(() => {
+    return (liveSimulatedMenuItems || []).filter((d) => {
+      const rep = getItemRepresentativePortions(d, getVariantPortions);
+      return rep.portionCount <= 0 || (!d.hasRecipe && d.stockStatus === "out_of_stock");
+    }).length;
+  }, [liveSimulatedMenuItems, getVariantPortions, inventoryTick]);
+
+  const totalCartReservedUnits = useMemo(() => {
+    return (posCart || []).reduce((sum, it) => sum + (it.quantity || 1), 0);
+  }, [posCart]);
+
+  const filteredDishes = useMemo(() => {
+    return (liveSimulatedMenuItems || []).filter((d) => {
+      const matchCat =
+        dishCategoryFilter === "all" ||
+        d.category.toLowerCase() === dishCategoryFilter.toLowerCase();
+      const matchSearch =
+        !searchQuery ||
+        d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        d.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        d.category.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchCat && matchSearch;
+    });
+  }, [liveSimulatedMenuItems, dishCategoryFilter, searchQuery, inventoryTick]);
+
+  const dishCategoriesList = useMemo(() => {
+    const map = new Map<string, { id: string; label: string; count: number }>();
+    (liveSimulatedMenuItems || []).forEach((d) => {
+      const key = (d.category || "other").toLowerCase();
+      const label = d.category ? d.category.charAt(0).toUpperCase() + d.category.slice(1) : "Other";
+      if (!map.has(key)) {
+        map.set(key, { id: key, label, count: 1 });
+      } else {
+        map.get(key)!.count += 1;
+      }
+    });
+    return Array.from(map.values());
+  }, [liveSimulatedMenuItems]);
+
   return (
-    <div className="p-4 sm:p-8 space-y-6 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* ========================================================================= */}
       {/* A. TOP BAR */}
       {/* ========================================================================= */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <Boxes className="w-3.5 h-3.5" />
-            <span>RAW MATERIALS &amp; WASTAGE CONTROL</span>
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-3xl text-[var(--text-hi)] tracking-tight">
             Inventory{" "}
             <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
               Registry
             </span>
           </h1>
-          <p className="text-xs sm:text-sm text-[var(--text-lo)] mt-1 font-medium">
-            Real-time raw material balances and stock thresholds
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
@@ -516,7 +662,7 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
           <div className="flex items-center justify-between mb-2 gap-2 min-w-0">
             <span
               className={`text-[11px] font-mono font-semibold uppercase tracking-wider break-words whitespace-normal ${
-                lowStockWarnings > 0 ? "text-amber-400" : "text-[#25d366]"
+                lowStockWarnings > 0 ? "text-amber-800 dark:text-amber-400" : "text-emerald-700 dark:text-[#25d366]"
               }`}
             >
               Low Stock Warnings
@@ -524,8 +670,8 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
             <div
               className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform ${
                 lowStockWarnings > 0
-                  ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
-                  : "bg-[#25d366]/15 border-[#25d366]/30 text-[#25d366]"
+                  ? "bg-amber-50 text-amber-800 border-amber-200/80 dark:bg-amber-500/15 dark:border-amber-500/30 dark:text-amber-400"
+                  : "bg-emerald-50 text-emerald-800 border-emerald-200/80 dark:bg-[#25d366]/15 dark:border-[#25d366]/30 dark:text-[#25d366]"
               }`}
             >
               {lowStockWarnings > 0 ? (
@@ -538,7 +684,7 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
           <div className="min-w-0">
             <div
               className={`font-mono font-extrabold text-2xl sm:text-3xl tracking-tight truncate ${
-                lowStockWarnings > 0 ? "text-amber-400" : "text-[#25d366]"
+                lowStockWarnings > 0 ? "text-amber-800 dark:text-amber-400" : "text-emerald-700 dark:text-[#25d366]"
               }`}
             >
               {lowStockWarnings}
@@ -547,7 +693,7 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
               <span className="truncate">Safety Threshold</span>
               <span
                 className={`font-bold shrink-0 ${
-                  lowStockWarnings > 0 ? "text-amber-400" : "text-[#25d366]"
+                  lowStockWarnings > 0 ? "text-amber-800 dark:text-amber-400" : "text-emerald-700 dark:text-[#25d366]"
                 }`}
               >
                 {lowStockWarnings > 0 ? "Action Required" : "Healthy"}
@@ -586,11 +732,16 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
         <div className="relative w-[44%] sm:w-60 shrink-0">
           <ResponsiveSelect
             value={activeViewTab}
-            onChange={(val) => setActiveViewTab(val as "balances" | "wastage")}
+            onChange={(val) => setActiveViewTab(val as "balances" | "live_stock" | "wastage")}
             buttonClassName="h-10 text-xs font-mono text-[var(--text-hi)]"
-            menuClassName="w-56 sm:w-60"
+            menuClassName="w-56 sm:w-64"
             options={[
               { id: "balances", label: "Stock Balances", count: rawMaterials.length },
+              {
+                id: "live_stock",
+                label: "Live Recipe & Portions",
+                count: liveSimulatedMenuItems ? liveSimulatedMenuItems.length : 0,
+              },
               { id: "wastage", label: "Wastage Log", count: wastageLogs.length },
             ]}
           />
@@ -603,7 +754,13 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={activeViewTab === "balances" ? "Search materials..." : "Search wastage..."}
+            placeholder={
+              activeViewTab === "balances"
+                ? "Search materials..."
+                : activeViewTab === "live_stock"
+                ? "Search dishes & portion availability..."
+                : "Search wastage..."
+            }
             className="w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)] rounded-xl pl-9 pr-3 py-2.5 h-10 text-xs text-[var(--text-hi)] placeholder-[var(--text-faint)] focus:outline-none transition-all shadow-inner font-mono"
           />
           {searchQuery && (
@@ -643,9 +800,128 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
             </div>
           </div>
 
-          {/* Raw Materials Table */}
+          {/* Raw Materials Table & Responsive Stack */}
           <div className="glass-panel rounded-2xl border border-[var(--border)] overflow-hidden shadow-xl">
-            <div className="overflow-x-auto">
+            {/* Mobile Stacked Card List (< 768px) - Zero Horizontal Scrolling */}
+            <div className="md:hidden flex flex-col divide-y divide-[var(--border)]">
+              {rawMaterials.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                  <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
+                    <Boxes className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-3">No raw materials registered yet</h3>
+                  <button
+                    type="button"
+                    onClick={openAddModal}
+                    className="btn-gold px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 cursor-pointer shadow-md"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add Material</span>
+                  </button>
+                </div>
+              ) : filteredItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                  <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
+                    <Boxes className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching raw materials</h3>
+                  <p className="text-xs text-[var(--text-lo)] max-w-xs mt-1">No raw materials matched your search or category filter.</p>
+                </div>
+              ) : (
+                filteredItems.map((item) => {
+                  const effectiveStock = effectiveLedger?.get(String(item.id))?.current_stock;
+                  const numEffective = typeof effectiveStock === "number" ? Math.max(0, effectiveStock) : item.current_stock;
+                  const inFlightReserved = Math.max(0, item.current_stock - numEffective);
+                  const itemValue = numEffective * item.cost_per_unit;
+                  const isDepleted = numEffective <= 0;
+                  const isLow = !isDepleted && numEffective <= item.min_safety_stock;
+
+                  return (
+                    <div key={item.id} className="p-3.5 space-y-2.5 bg-[var(--surface-base)]/20 hover:bg-[var(--surface-hi)]/30 transition-colors">
+                      {/* Top Row: Name + SKU + Status Badge */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <span className="font-bold text-[var(--text-hi)] text-sm block">
+                            {item.name}
+                          </span>
+                          <span className="text-[10px] text-[var(--text-faint)] font-mono">
+                            SKU: {item.sku || "N/A"} • <span className="text-[var(--gold)] uppercase">{item.category}</span>
+                          </span>
+                        </div>
+                        <span
+                          className={`badge-pill ${
+                            isDepleted
+                              ? "badge-danger"
+                              : isLow
+                              ? "badge-warning"
+                              : "badge-success"
+                          }`}
+                        >
+                          <span className="badge-dot" />
+                          {isDepleted ? "DEPLETED" : isLow ? "LOW STOCK" : "IN STOCK"}
+                        </span>
+                      </div>
+
+                      {/* Metrics: Current Stock, Safety, Unit Cost, Total Value */}
+                      <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-[var(--surface-hi)]/50 p-2.5 rounded-lg border border-[var(--border)]">
+                        <div>
+                          <span className="text-[10px] text-[var(--text-faint)] block uppercase">Available Stock</span>
+                          <span className={`font-extrabold text-sm ${isDepleted ? "text-red-700 dark:text-red-400" : isLow ? "text-amber-800 dark:text-amber-400" : "text-emerald-700 dark:text-[#25d366]"}`}>
+                            {numEffective.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 3 })} <span className="text-[10px] text-[var(--text-faint)] font-normal">{item.unit}</span>
+                          </span>
+                          {inFlightReserved > 0 && (
+                            <span className="text-[9.5px] font-mono text-amber-800 dark:text-amber-400 block mt-0.5 font-semibold">
+                              -{inFlightReserved.toFixed(2)} in POS cart ({item.current_stock.toFixed(2)} total)
+                            </span>
+                          )}
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-[var(--text-faint)] block uppercase">Safety Level</span>
+                          <span className="font-medium text-[var(--text-lo)] text-xs">
+                            Min: {item.min_safety_stock} {item.unit}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-[var(--text-faint)] block uppercase">Unit Cost</span>
+                          <span className="font-medium text-[var(--text-lo)] text-xs">
+                            Rs {item.cost_per_unit.toLocaleString()} / {item.unit}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-[var(--text-faint)] block uppercase">Total Value</span>
+                          <span className="font-bold text-[var(--gold)] text-xs">
+                            Rs {itemValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-[var(--border)]/40">
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(item)}
+                          className="px-2.5 py-1 rounded-lg bg-[var(--surface-hi)] hover:bg-[var(--gold-dim)] text-[var(--text-lo)] hover:text-[var(--gold)] border border-[var(--border)] text-[10px] font-mono font-semibold cursor-pointer transition-all inline-flex items-center gap-1"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setItemToDelete(item)}
+                          className="p-1.5 rounded-lg bg-[var(--surface-hi)] hover:bg-red-500/20 text-[var(--text-lo)] hover:text-red-400 border border-[var(--border)] transition-colors cursor-pointer"
+                          title="Delete material"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Desktop Table View (>= 768px) */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-[var(--border)] bg-white/[0.02] text-[10px] font-mono text-[var(--text-faint)] uppercase">
@@ -663,10 +939,10 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
                     <tr>
                       <td colSpan={7} className="p-4">
                         <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
-                          <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+                          <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
                             <Boxes className="w-6 h-6" />
                           </div>
-                          <h3 className="text-sm font-semibold text-white tracking-wide mb-4">No raw materials registered yet</h3>
+                          <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-4">No raw materials registered yet</h3>
                           <button
                             type="button"
                             onClick={openAddModal}
@@ -682,18 +958,21 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
                     <tr>
                       <td colSpan={7} className="p-4">
                         <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
-                          <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+                          <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
                             <Boxes className="w-6 h-6" />
                           </div>
-                          <h3 className="text-sm font-semibold text-white tracking-wide">No matching raw materials</h3>
-                          <p className="text-xs text-white/50 max-w-sm mt-1 mb-4">No raw materials matched your search or category filter.</p>
+                          <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching raw materials</h3>
+                          <p className="text-xs text-[var(--text-lo)] max-w-sm mt-1 mb-4">No raw materials matched your search or category filter.</p>
                         </div>
                       </td>
                     </tr>
                   ) : (
                     filteredItems.map((item) => {
-                      const isLow = item.current_stock <= item.min_safety_stock;
-                      const itemValue = item.current_stock * item.cost_per_unit;
+                      const effectiveStock = effectiveLedger?.get(String(item.id))?.current_stock;
+                      const numEffective = typeof effectiveStock === "number" ? Math.max(0, effectiveStock) : item.current_stock;
+                      const inFlightReserved = Math.max(0, item.current_stock - numEffective);
+                      const isLow = numEffective <= item.min_safety_stock;
+                      const itemValue = numEffective * item.cost_per_unit;
 
                       return (
                         <tr
@@ -714,30 +993,37 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
 
                           {/* Category */}
                           <td className="py-3.5 px-4">
-                            <span className="px-2 py-0.5 rounded-lg bg-[var(--surface-hi)] border border-[var(--border)] text-[10.5px] font-semibold text-[var(--text-lo)] uppercase">
+                            <span className="badge-pill badge-neutral text-[10px] uppercase font-semibold">
                               {item.category}
                             </span>
                           </td>
 
-                          {/* Current Stock */}
+                          {/* Current Stock & Active POS Cart Reservation */}
                           <td className="py-3.5 px-4">
-                            <div className="flex items-center gap-1.5">
-                              {isLow && (
+                            <div className="flex flex-col gap-0.5">
+                              <div className="flex items-center gap-1.5">
+                                {isLow && (
+                                  <span
+                                    className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0"
+                                    title="Effective available stock is at or below safety threshold"
+                                  />
+                                )}
                                 <span
-                                  className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0"
-                                  title="Stock is at or below safety threshold"
-                                />
+                                  className={`font-extrabold text-sm ${
+                                    isLow ? "text-amber-800 dark:text-amber-400" : "text-[var(--text-hi)]"
+                                  }`}
+                                >
+                                  {numEffective.toFixed(3)}
+                                </span>
+                                <span className="text-[11px] text-[var(--text-faint)] lowercase">
+                                  {item.unit}
+                                </span>
+                              </div>
+                              {inFlightReserved > 0 && (
+                                <span className="text-[9.5px] text-amber-800 dark:text-amber-400 font-mono font-semibold">
+                                  -{inFlightReserved.toFixed(2)} in POS cart ({item.current_stock.toFixed(2)} on-hand)
+                                </span>
                               )}
-                              <span
-                                className={`font-extrabold text-sm ${
-                                  isLow ? "text-amber-400" : "text-[var(--text-hi)]"
-                                }`}
-                              >
-                                {item.current_stock.toFixed(3)}
-                              </span>
-                              <span className="text-[11px] text-[var(--text-faint)] lowercase">
-                                {item.unit}
-                              </span>
                             </div>
                           </td>
 
@@ -752,7 +1038,7 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
                           </td>
 
                           {/* Total Value */}
-                          <td className="py-3.5 px-4 font-bold text-[var(--gold)] text-xs">
+                          <td className="py-3.5 px-4 font-bold text-amber-900 dark:text-[var(--gold)] text-xs">
                             Rs {itemValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
                           </td>
 
@@ -789,12 +1075,409 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
       )}
 
       {/* ========================================================================= */}
-      {/* VIEW TAB 2: WASTAGE & SPOILAGE LOG */}
+      {/* VIEW TAB 2: LIVE RECIPE & PORTIONS (MIRRORED FROM POS TERMINAL LEDGER) */}
+      {/* ========================================================================= */}
+      {activeViewTab === "live_stock" && (
+        <div className="space-y-4 animate-in fade-in duration-150">
+          {/* Quick Metrics KPI Bar */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-mono">
+            <div className="glass-panel p-3.5 rounded-2xl border border-[var(--border)] bg-[var(--surface-hi)]/40 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] text-[var(--text-faint)] uppercase block">Dishes Monitored</span>
+                <span className="text-xl font-bold text-[var(--text-hi)] font-mono">{(liveSimulatedMenuItems || []).length}</span>
+              </div>
+              <div className="w-8 h-8 rounded-xl bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/30 flex items-center justify-center">
+                <UtensilsCrossed className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div className="glass-panel p-3.5 rounded-2xl border border-[var(--border)] bg-[var(--surface-hi)]/40 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] text-emerald-400 uppercase block font-semibold">In Stock</span>
+                <span className="text-xl font-bold text-emerald-400 font-mono">{inStockDishesCount}</span>
+              </div>
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
+                <CheckCircle2 className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div className="glass-panel p-3.5 rounded-2xl border border-[var(--border)] bg-[var(--surface-hi)]/40 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] text-amber-800 dark:text-amber-400 uppercase block font-semibold">Low Stock (&le; 5)</span>
+                <span className="text-xl font-bold text-amber-800 dark:text-amber-400 font-mono">{lowStockDishesCount}</span>
+              </div>
+              <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-800 border border-amber-200/80 shadow-xs dark:bg-amber-500/15 dark:text-amber-400 dark:border-amber-500/30 flex items-center justify-center">
+                <AlertTriangle className="w-4 h-4" />
+              </div>
+            </div>
+
+            <div className="glass-panel p-3.5 rounded-2xl border border-[var(--border)] bg-[var(--surface-hi)]/40 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] text-rose-700 dark:text-rose-400 uppercase block font-semibold">86&apos;d (Sold Out)</span>
+                <span className="text-xl font-bold text-rose-700 dark:text-rose-400 font-mono">{outOfStockDishesCount}</span>
+              </div>
+              <div className="w-8 h-8 rounded-xl bg-rose-50 text-rose-700 border border-rose-200/80 shadow-xs dark:bg-rose-500/15 dark:text-rose-400 dark:border-rose-500/30 flex items-center justify-center">
+                <AlertCircle className="w-4 h-4" />
+              </div>
+            </div>
+          </div>
+
+          {/* Active POS In-Flight Reservation Notification Banner if cart has items */}
+          {totalCartReservedUnits > 0 && (
+            <div className="p-3 rounded-2xl bg-amber-950/40 border border-amber-500/30 flex items-center justify-between gap-3 text-xs font-mono">
+              <div className="flex items-center gap-2.5 text-amber-300">
+                <ShoppingCart className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+                <span>
+                  Active POS terminal cart is currently reserving ingredients for <strong>{totalCartReservedUnits}</strong> items in real-time. Portions below reflect live remaining yield.
+                </span>
+              </div>
+              <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 text-[10px] font-bold shrink-0">
+                LIVE SIMULATION
+              </span>
+            </div>
+          )}
+
+          {/* Category Filter */}
+          <div className="flex items-center gap-3">
+            <div className="relative w-full sm:w-64">
+              <ResponsiveSelect
+                value={dishCategoryFilter}
+                onChange={(val) => setDishCategoryFilter(val)}
+                buttonClassName="h-10 text-xs font-mono text-[var(--text-hi)]"
+                menuClassName="w-full sm:w-64"
+                options={[
+                  { id: "all", label: "All Dish Categories", count: (liveSimulatedMenuItems || []).length },
+                  ...dishCategoriesList.map((cat) => ({
+                    id: cat.id,
+                    label: cat.label,
+                    count: cat.count,
+                  })),
+                ]}
+              />
+            </div>
+          </div>
+
+          {/* Table & Cards List */}
+          <div className="glass-panel rounded-2xl border border-[var(--border)] overflow-hidden shadow-xl">
+            {/* Mobile Stacked Card List (< 768px) */}
+            <div className="md:hidden flex flex-col divide-y divide-[var(--border)]">
+              {filteredDishes.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                  <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
+                    <UtensilsCrossed className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching dishes</h3>
+                  <p className="text-xs text-[var(--text-lo)] max-w-xs mt-1">No items matched your category filter or search query.</p>
+                </div>
+              ) : (
+                filteredDishes.map((dish) => {
+                  const repYield = getItemRepresentativePortions(dish, getVariantPortions);
+                  const isStrictlyZeroStock = repYield.portionCount <= 0;
+                  const isEffectivelyOos = isStrictlyZeroStock || (!dish.hasRecipe && dish.stockStatus === "out_of_stock");
+
+                  return (
+                    <div key={dish.id} className="p-3.5 space-y-3 bg-[var(--surface-base)]/20 hover:bg-[var(--surface-hi)]/30 transition-colors">
+                      <div className="flex items-start gap-3 justify-between">
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          <div className="w-12 h-12 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] flex items-center justify-center shrink-0 overflow-hidden relative shadow-sm">
+                            <img
+                              src={getSmartFoodImage(dish.name, dish.category, dish.imageUrl || dish.image_url)}
+                              alt={dish.name}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLElement).style.display = "none";
+                              }}
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <span className="font-bold text-[var(--text-hi)] text-sm truncate block">
+                              {dish.name}
+                            </span>
+                            <div className="flex items-center gap-2 text-[10px] text-[var(--text-faint)] font-mono mt-0.5">
+                              <span className="badge-pill badge-neutral text-[10px] uppercase font-semibold">
+                                {dish.category}
+                              </span>
+                              <span>ID: {dish.id}</span>
+                            </div>
+                            <ItemPortionAvailabilityText
+                              displayText={repYield.displayText}
+                              textColorClass={repYield.textColorClass}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="shrink-0 flex flex-col items-end gap-1">
+                          <ItemStockStatusBadge
+                            isOutOfStock={isEffectivelyOos}
+                            portionCount={repYield.portionCount}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Variants Yields */}
+                      {dish.variants && dish.variants.length > 0 && (
+                        <div className="space-y-1 pt-1 border-t border-[var(--border)]/40">
+                          <span className="text-[9.5px] font-mono text-[var(--text-faint)] uppercase block">
+                            Variant Breakdown (Integer Floored):
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {dish.variants.map((v, idx) => {
+                              const vYield = getVariantPortions
+                                ? getVariantPortions(dish, v)
+                                : {
+                                    maxPortions: repYield.portionCount,
+                                    isOutOfStock: isEffectivelyOos,
+                                    stockStatus: isEffectivelyOos ? ("out_of_stock" as const) : repYield.portionCount <= 5 ? ("low_stock" as const) : ("in_stock" as const),
+                                  };
+                              return (
+                                <div
+                                  key={v.id || idx}
+                                  className="flex items-center gap-1.5 bg-[var(--surface-hi)] px-2 py-1 rounded-lg border border-[var(--border)] text-[10px] font-mono"
+                                >
+                                  <span className="text-[var(--text-hi)] font-medium">{v.name}:</span>
+                                  <VariantPortionBadge yieldResult={vYield} />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Action */}
+                      <div className="flex items-center justify-between pt-1 border-t border-[var(--border)]/40 text-xs">
+                        <span className="font-mono text-[10px] text-[var(--text-faint)]">
+                          Price: Rs {dish.price.toLocaleString()}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInspectingDish(dish);
+                            setSelectedInspectVariant(dish.variants && dish.variants.length > 0 ? dish.variants[0] : null);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-[var(--surface-hi)] hover:bg-[var(--gold-dim)] text-[var(--text-lo)] hover:text-[var(--gold)] border border-[var(--border)] text-[10.5px] font-mono font-semibold cursor-pointer transition-all inline-flex items-center gap-1.5"
+                        >
+                          <Eye className="w-3 h-3" />
+                          <span>Inspect BOM</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Desktop Table View (>= 768px) */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse font-mono">
+                <thead>
+                  <tr className="border-b border-[var(--border)] bg-white/[0.02] text-[10px] font-mono text-[var(--text-faint)] uppercase whitespace-nowrap">
+                    <th className="py-3.5 px-4 font-bold">Dish Item</th>
+                    <th className="py-3.5 px-4 font-bold">Category</th>
+                    <th className="py-3.5 px-4 font-bold">Price</th>
+                    <th className="py-3.5 px-4 font-bold">Live Status</th>
+                    <th className="py-3.5 px-4 font-bold">Variants &amp; Recipe Yields</th>
+                    <th className="py-3.5 px-4 font-bold text-right">Inspect</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--border)]">
+                  {filteredDishes.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-4">
+                        <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
+                          <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
+                            <UtensilsCrossed className="w-6 h-6" />
+                          </div>
+                          <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching dishes</h3>
+                          <p className="text-xs text-[var(--text-lo)] max-w-sm mt-1">No items matched your category filter or search query.</p>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredDishes.map((dish) => {
+                      const repYield = getItemRepresentativePortions(dish, getVariantPortions);
+                      const isStrictlyZeroStock = repYield.portionCount <= 0;
+                      const isEffectivelyOos = isStrictlyZeroStock || (!dish.hasRecipe && dish.stockStatus === "out_of_stock");
+
+                      return (
+                        <tr key={dish.id} className="hover:bg-[var(--surface-hi)]/40 transition-colors group">
+                          {/* Dish Item & Plain Text Availability Counter */}
+                          <td className="py-3.5 px-4 font-sans">
+                            <div className="flex items-center gap-3">
+                              <div className="w-11 h-11 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform overflow-hidden relative shadow-sm">
+                                <img
+                                  src={getSmartFoodImage(dish.name, dish.category, dish.imageUrl || dish.image_url)}
+                                  alt={dish.name}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    (e.target as HTMLElement).style.display = "none";
+                                  }}
+                                />
+                              </div>
+                              <div>
+                                <span className="font-bold text-sm text-[var(--text-hi)] group-hover:text-[var(--gold)] transition-colors block">
+                                  {dish.name}
+                                </span>
+                                <span className="text-[10px] text-[var(--text-faint)] font-mono">
+                                  ID: {dish.id}
+                                </span>
+                                <ItemPortionAvailabilityText
+                                  displayText={repYield.displayText}
+                                  textColorClass={repYield.textColorClass}
+                                />
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Category */}
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <span className="badge-pill badge-neutral text-[10px] uppercase font-semibold">
+                              {dish.category}
+                            </span>
+                          </td>
+
+                          {/* Price */}
+                          <td className="py-3.5 px-4 whitespace-nowrap font-extrabold text-[var(--gold)] text-xs">
+                            Rs {dish.price.toLocaleString()}
+                          </td>
+
+                          {/* Live Status Badge */}
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            <ItemStockStatusBadge
+                              isOutOfStock={isEffectivelyOos}
+                              portionCount={repYield.portionCount}
+                            />
+                          </td>
+
+                          {/* Variants & Recipe Yields */}
+                          <td className="py-3.5 px-4">
+                            {dish.variants && dish.variants.length > 0 ? (
+                              <div className="flex flex-wrap gap-1.5 max-w-sm">
+                                {dish.variants.map((v, idx) => {
+                                  const vYield = getVariantPortions
+                                    ? getVariantPortions(dish, v)
+                                    : {
+                                        maxPortions: repYield.portionCount,
+                                        isOutOfStock: isEffectivelyOos,
+                                        stockStatus: isEffectivelyOos ? ("out_of_stock" as const) : repYield.portionCount <= 5 ? ("low_stock" as const) : ("in_stock" as const),
+                                      };
+                                  return (
+                                    <span
+                                      key={v.id || idx}
+                                      className="inline-flex items-center gap-1 bg-[var(--surface-hi)] px-2 py-0.5 rounded border border-[var(--border)] text-[9.5px] font-mono"
+                                    >
+                                      <span className="text-[var(--text-lo)] font-medium">{v.name}:</span>
+                                      <VariantPortionBadge yieldResult={vYield} />
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-[var(--text-faint)]">
+                                Single portion item
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Action */}
+                          <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setInspectingDish(dish);
+                                setSelectedInspectVariant(dish.variants && dish.variants.length > 0 ? dish.variants[0] : null);
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--gold-dim)] text-[var(--text-lo)] hover:text-[var(--gold)] border border-[var(--border)] hover:border-[var(--gold)]/40 text-xs font-semibold cursor-pointer transition-all inline-flex items-center gap-1.5 shadow-sm"
+                              title="Inspect Recipe BOM & Inventory Breakdown"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Inspect BOM</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* VIEW TAB 3: WASTAGE & SPOILAGE LOG */}
       {/* ========================================================================= */}
       {activeViewTab === "wastage" && (
         <div className="space-y-4 animate-in fade-in duration-150">
           <div className="glass-panel rounded-2xl border border-[var(--border)] overflow-hidden shadow-xl">
-            <div className="overflow-x-auto">
+            {/* Mobile Stacked Card List (< 768px) - Zero Horizontal Scrolling */}
+            <div className="md:hidden flex flex-col divide-y divide-[var(--border)]">
+              {wastageLogs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                  <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
+                    <Flame className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-3">No wastage logged yet</h3>
+                  <button
+                    type="button"
+                    onClick={() => setIsWastageModalOpen(true)}
+                    className="btn-gold px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 cursor-pointer shadow-md"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Log Wastage</span>
+                  </button>
+                </div>
+              ) : filteredWastage.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                  <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
+                    <Flame className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching wastage records</h3>
+                  <p className="text-xs text-[var(--text-lo)] max-w-xs mt-1">No wastage logs matched your search query.</p>
+                </div>
+              ) : (
+                filteredWastage.map((entry) => {
+                  const dateFormatted = entry.created_at
+                    ? new Date(entry.created_at).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : "Just now";
+
+                  return (
+                    <div key={entry.id} className="p-3.5 space-y-2 bg-[var(--surface-base)]/20 hover:bg-[var(--surface-hi)]/30 transition-colors">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <span className="font-bold text-[var(--text-hi)] text-sm block">
+                            {entry.raw_material_name}
+                          </span>
+                          <span className="text-[10px] text-[var(--text-faint)] font-mono">
+                            {dateFormatted} • By {entry.logged_by}
+                          </span>
+                        </div>
+                        <span className="px-2 py-0.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 text-[10px] font-semibold uppercase">
+                          {entry.reason}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs font-mono bg-[var(--surface-hi)]/50 px-2.5 py-1.5 rounded-lg border border-[var(--border)]">
+                        <span className="text-[11px] text-[var(--text-lo)]">
+                          Wasted: <strong className="text-red-400 font-extrabold">{entry.quantity.toFixed(3)} {entry.unit}</strong>
+                        </span>
+                        <span className="font-bold text-red-400 text-xs">
+                          Loss: Rs {entry.cost_loss.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Desktop Table View (>= 768px) */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-[var(--border)] bg-white/[0.02] text-[10px] font-mono text-[var(--text-faint)] uppercase">
@@ -811,10 +1494,10 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
                     <tr>
                       <td colSpan={6} className="p-4">
                         <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
-                          <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+                          <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
                             <Flame className="w-6 h-6" />
                           </div>
-                          <h3 className="text-sm font-semibold text-white tracking-wide mb-4">No wastage logged yet</h3>
+                          <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-4">No wastage logged yet</h3>
                           <button
                             type="button"
                             onClick={() => setIsWastageModalOpen(true)}
@@ -830,11 +1513,11 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
                     <tr>
                       <td colSpan={6} className="p-4">
                         <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
-                          <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+                          <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
                             <Flame className="w-6 h-6" />
                           </div>
-                          <h3 className="text-sm font-semibold text-white tracking-wide">No matching wastage records</h3>
-                          <p className="text-xs text-white/50 max-w-sm mt-1 mb-4">No wastage logs matched your search query.</p>
+                          <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching wastage records</h3>
+                          <p className="text-xs text-[var(--text-lo)] max-w-sm mt-1 mb-4">No wastage logs matched your search query.</p>
                         </div>
                       </td>
                     </tr>
@@ -1216,6 +1899,205 @@ export default function InventoryView({ showToast }: InventoryViewProps) {
                 className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow-md cursor-pointer transition-colors"
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* WASTAGE & SPOILAGE LOGGING MODAL */}
+      {/* ========================================================================= */}
+      {/* ========================================================================= */}
+      {/* RECIPE BOM & INGREDIENT BREAKDOWN INSPECTOR MODAL */}
+      {/* ========================================================================= */}
+      {inspectingDish && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setInspectingDish(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150"
+        >
+          <div className="w-full max-w-2xl bg-[var(--bg-deep)] border border-[var(--border)] rounded-3xl p-5 sm:p-6 space-y-4 shadow-2xl relative animate-in zoom-in-95 duration-150 text-[var(--text-hi)] font-sans">
+            {/* Header */}
+            <div className="flex items-start justify-between pb-3 border-b border-[var(--border)]">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 overflow-hidden shrink-0">
+                  <img
+                    src={getSmartFoodImage(inspectingDish.name, inspectingDish.category, inspectingDish.imageUrl || inspectingDish.image_url)}
+                    alt={inspectingDish.name}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <div>
+                  <span className="text-[10px] font-mono text-[var(--gold)] uppercase font-bold tracking-wider">
+                    Recipe BOM Breakdown &bull; {inspectingDish.category}
+                  </span>
+                  <h3 className="text-base sm:text-lg font-bold text-[var(--text-hi)]">
+                    {inspectingDish.name}
+                  </h3>
+                  <p className="text-[11px] text-[var(--text-lo)] font-mono">
+                    Live integer floor yield calculation &bull; Real-time active POS ledger
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectingDish(null)}
+                className="w-8 h-8 rounded-full bg-[var(--surface-hi)] hover:bg-[var(--surface)] text-[var(--text-lo)] hover:text-[var(--text-hi)] border border-[var(--border)] flex items-center justify-center transition-colors cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* If Item has Multiple Variants: Variant Selector Tabs */}
+            {inspectingDish.variants && inspectingDish.variants.length > 0 && (
+              <div className="space-y-1.5">
+                <span className="text-[10.5px] font-mono text-[var(--text-faint)] uppercase block font-semibold">
+                  Select Size / Variant:
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {inspectingDish.variants.map((v) => {
+                    const isSelected = selectedInspectVariant?.id === v.id || (!selectedInspectVariant && v.isDefault);
+                    const vYield = getVariantPortions
+                      ? getVariantPortions(inspectingDish, v)
+                      : { maxPortions: 0, isOutOfStock: true, stockStatus: "out_of_stock" as const };
+
+                    return (
+                      <button
+                        key={v.id || v.name}
+                        type="button"
+                        onClick={() => setSelectedInspectVariant(v)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-mono transition-all flex items-center gap-2 border cursor-pointer ${
+                          isSelected
+                            ? "bg-[var(--gold-dim)] border-[var(--gold)] text-[var(--gold)] font-bold shadow-xs"
+                            : "bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)] hover:border-[var(--gold)]/40"
+                        }`}
+                      >
+                        <span>{v.name}</span>
+                        <VariantPortionBadge yieldResult={vYield} />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Recipe Ingredients & Real-Time Availability Table */}
+            {(() => {
+              const activeVariant = selectedInspectVariant || (inspectingDish.variants && inspectingDish.variants[0]);
+              const rawItemId = String(inspectingDish.id);
+              const baseId = rawItemId.includes("_") ? rawItemId.split("_")[0] : rawItemId;
+              let dishRecipes = (rawRecipes || []).filter(
+                (r) => String(r.menu_item_id) === baseId || String(r.menu_item_id) === rawItemId
+              );
+              if (dishRecipes.length === 0) {
+                if (Array.isArray((inspectingDish as any).recipe) && (inspectingDish as any).recipe.length > 0) {
+                  dishRecipes = (inspectingDish as any).recipe;
+                } else if (Array.isArray((inspectingDish as any).recipe_items) && (inspectingDish as any).recipe_items.length > 0) {
+                  dishRecipes = (inspectingDish as any).recipe_items;
+                }
+              }
+
+              if (dishRecipes.length === 0) {
+                return (
+                  <div className="py-8 text-center text-xs font-mono text-[var(--text-faint)] bg-[var(--surface-hi)]/30 rounded-2xl border border-[var(--border)]">
+                    No recipe ingredients linked to this item in Supabase yet.
+                  </div>
+                );
+              }
+
+              // Compute yield for this variant
+              const yieldResult = getVariantPortions
+                ? getVariantPortions(inspectingDish, activeVariant)
+                : { maxPortions: 0, isOutOfStock: false, stockStatus: "in_stock" as const };
+
+              return (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-[var(--text-lo)]">
+                      Total BOM Portions Available:{" "}
+                      <strong className={yieldResult.maxPortions > 5 ? "text-emerald-700 dark:text-emerald-400" : yieldResult.maxPortions > 0 ? "text-amber-800 dark:text-amber-400" : "text-rose-700 dark:text-rose-400"}>
+                        {yieldResult.maxPortions}
+                      </strong>
+                    </span>
+                    {yieldResult.limitingIngredient && (
+                      <span className="text-[11px] text-amber-800 dark:text-amber-400 font-semibold">
+                        Bottleneck: {yieldResult.limitingIngredient}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+                    <table className="w-full text-left text-xs font-mono border-collapse">
+                      <thead>
+                        <tr className="bg-[var(--surface-hi)] border-b border-[var(--border)] text-[10px] text-[var(--text-faint)] uppercase whitespace-nowrap">
+                          <th className="py-2.5 px-3">Ingredient</th>
+                          <th className="py-2.5 px-2 text-right">Req Qty</th>
+                          <th className="py-2.5 px-2 text-right">Physical</th>
+                          <th className="py-2.5 px-2 text-right">POS Reserved</th>
+                          <th className="py-2.5 px-2 text-right">Effective</th>
+                          <th className="py-2.5 px-3 text-right">Yield</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--border)]/60">
+                        {dishRecipes.map((r: any, idx: number) => {
+                          const matId = String(r.raw_material_id);
+                          const rawObj = Array.isArray(r.raw_materials) ? r.raw_materials[0] : r.raw_materials;
+                          const matName = rawObj?.name || r.raw_material_name || `Material #${matId}`;
+                          const unit = r.unit || rawObj?.unit || "kg";
+                          const req = Number(r.quantity_required) || 0;
+                          const physical = Number(baseMaterialsMap.get(matId)?.current_stock ?? rawObj?.current_stock ?? 0);
+                          const effective = Number(effectiveLedger.get(matId)?.current_stock ?? physical);
+                          const reserved = Math.max(0, physical - effective);
+                          const yieldForIng = req > 0 ? Math.floor((Math.max(0, effective) + 1e-9) / req) : Infinity;
+                          const isBottleneck = yieldForIng === yieldResult.maxPortions;
+
+                          return (
+                            <tr key={`${matId}_${idx}`} className={`hover:bg-[var(--surface-hi)]/30 ${isBottleneck ? "bg-amber-500/5" : ""}`}>
+                              <td className="py-2 px-3 font-sans font-medium text-[var(--text-hi)]">
+                                <span>{matName}</span>
+                                {isBottleneck && (
+                                  <span className="ml-1.5 px-1.5 py-0.5 rounded text-[8.5px] bg-amber-500/15 text-amber-900 border border-amber-500/30 dark:bg-amber-500/20 dark:text-amber-300 font-mono font-bold">
+                                    LIMITING
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-2 text-right font-bold text-amber-800 dark:text-[var(--gold)]">
+                                {req} {unit}
+                              </td>
+                              <td className="py-2 px-2 text-right text-[var(--text-lo)]">
+                                {physical.toFixed(2)}
+                              </td>
+                              <td className="py-2 px-2 text-right text-amber-800 dark:text-amber-400 font-semibold">
+                                {reserved > 0 ? `-${reserved.toFixed(2)}` : "0"}
+                              </td>
+                              <td className="py-2 px-2 text-right font-bold text-[var(--text-hi)]">
+                                {effective.toFixed(2)} {unit}
+                              </td>
+                              <td className="py-2 px-3 text-right font-black font-mono">
+                                <span className={yieldForIng <= 5 ? (yieldForIng === 0 ? "text-rose-700 dark:text-rose-400" : "text-amber-800 dark:text-amber-400") : "text-emerald-700 dark:text-emerald-400"}>
+                                  {yieldForIng === Infinity ? "∞" : yieldForIng}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Footer */}
+            <div className="pt-2 flex justify-end border-t border-[var(--border)]">
+              <button
+                type="button"
+                onClick={() => setInspectingDish(null)}
+                className="btn-gold px-4 py-2 rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Close
               </button>
             </div>
           </div>

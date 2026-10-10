@@ -318,7 +318,7 @@ export default function RevenueVelocityChart({ orders = [] }: RevenueVelocityCha
               {title}
             </h3>
             {hasOrders && (
-              <span className="inline-flex items-center gap-1 text-[11px] font-mono font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+              <span className="inline-flex items-center gap-1 text-[11px] font-mono font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-500/15 dark:bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/30">
                 <TrendingUp className="w-3 h-3" />
                 Live
               </span>
@@ -328,7 +328,7 @@ export default function RevenueVelocityChart({ orders = [] }: RevenueVelocityCha
         </div>
 
         {/* Financial Trading Ticker Timeframe Switcher (1D, 7D, 1M, 1Y) */}
-        <div className="flex items-center gap-1 bg-[var(--surface-hi)]/80 border border-[var(--border)] p-1 rounded-xl self-start sm:self-auto overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-1 bg-white/80 dark:bg-[var(--surface-hi)]/80 border border-[var(--border)] p-1 rounded-xl self-start sm:self-auto overflow-x-auto no-scrollbar shadow-2xs">
           {(["1D", "7D", "1M", "1Y"] as TimeRange[]).map((tf) => {
             const isActive = timeRange === tf;
             return (
@@ -339,10 +339,10 @@ export default function RevenueVelocityChart({ orders = [] }: RevenueVelocityCha
                   setTimeRange(tf);
                   setHoveredIndex(null);
                 }}
-                className={`transition-all rounded-lg text-xs font-semibold cursor-pointer select-none ${
+                className={`transition-all rounded-lg text-xs cursor-pointer select-none ${
                   isActive
-                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/40 px-2.5 py-1 shadow-sm"
-                    : "text-neutral-400 hover:text-neutral-200 px-2 py-1 border border-transparent font-medium"
+                    ? "bg-amber-500/20 text-amber-900 dark:text-amber-300 border border-amber-500/40 px-2.5 py-1 shadow-2xs font-bold"
+                    : "text-[var(--text-lo)] hover:text-[var(--text-hi)] px-2 py-1 border border-transparent font-medium"
                 }`}
               >
                 {tf}
@@ -355,15 +355,15 @@ export default function RevenueVelocityChart({ orders = [] }: RevenueVelocityCha
       {/* Metric Quick Stats Bar */}
       <div className="flex items-center justify-between text-xs font-mono">
         <div>
-          <span className="text-[var(--text-faint)] uppercase tracking-wider text-[10px]">
+          <span className="text-[var(--text-lo)] dark:text-[var(--text-faint)] uppercase tracking-wider text-[10px]">
             Period Aggregate:
           </span>
-          <span className="ml-2 font-bold text-[var(--gold)] text-sm sm:text-base">
+          <span className="ml-2 font-bold text-amber-800 dark:text-[var(--gold)] text-sm sm:text-base">
             Rs {totalPeriodRevenue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
           </span>
         </div>
         {hasOrders && (
-          <div className="text-[var(--text-faint)] text-[11px]">
+          <div className="text-[var(--text-lo)] dark:text-[var(--text-faint)] text-[11px]">
             Peak: <span className="text-[var(--text-hi)] font-semibold">Rs {maxVal.toLocaleString()}</span>
           </div>
         )}
@@ -374,8 +374,8 @@ export default function RevenueVelocityChart({ orders = [] }: RevenueVelocityCha
         {!hasOrders ? (
           /* Empty State: No settled orders for selected timeframe */
           <div className="h-44 sm:h-52 flex flex-col items-center justify-center rounded-xl bg-[var(--surface-hi)]/20 border border-dashed border-[var(--border)] p-4 text-center">
-            <div className="w-10 h-10 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mb-2">
-              <Receipt className="w-5 h-5 text-amber-400 opacity-80" />
+            <div className="w-10 h-10 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mb-2">
+              <Receipt className="w-5 h-5 text-amber-700 dark:text-amber-400 opacity-80" />
             </div>
             <p className="text-xs sm:text-sm font-mono font-bold text-[var(--text-hi)]">
               No settled orders found for this period
@@ -516,7 +516,7 @@ export default function RevenueVelocityChart({ orders = [] }: RevenueVelocityCha
                   <span
                     key={idx}
                     className={`truncate transition-colors ${
-                      isHovered ? "text-amber-400 font-bold" : "hover:text-[var(--text-hi)]"
+                      isHovered ? "text-amber-800 dark:text-amber-400 font-bold" : "hover:text-[var(--text-hi)]"
                     }`}
                   >
                     {c.label}

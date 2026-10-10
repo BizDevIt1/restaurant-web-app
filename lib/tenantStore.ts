@@ -5,12 +5,15 @@ import {
   clearAllAuthSessions,
   AuthSession,
 } from "./auth";
+import { isShiftForCurrentDayAndValid } from "./shiftSchedule";
 
 // Key Constants for LocalStorage Persistence
 const ACTIVE_USER_KEY = "omni_active_user";
 const FRANCHISE_BRANCHES_KEY = "omni_franchise_branches";
 const BRANCH_ACCOUNTS_KEY = "omni_branch_accounts";
 const MENU_KEY_PREFIX = "omni_menu_";
+const RAW_RECIPES_KEY_PREFIX = "omni_raw_recipes_";
+const BASE_MATERIALS_KEY_PREFIX = "omni_base_materials_";
 const STAFF_KEY_PREFIX = "omni_staff_";
 const ORDERS_KEY_PREFIX = "omni_orders_";
 const KDS_KEY_PREFIX = "omni_kds_";
@@ -170,6 +173,65 @@ export function saveStoredMenu(orgId: string = "default", menu: MenuItem[]): voi
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(`${MENU_KEY_PREFIX}${orgId}`, JSON.stringify(menu));
+    setTimeout(() => {
+      window.dispatchEvent(new Event("storage"));
+      window.dispatchEvent(
+        new CustomEvent("pos_menu_updated", {
+          detail: { orgId, menu, timestamp: Date.now() },
+        })
+      );
+    }, 0);
+  } catch {}
+}
+
+/**
+ * Get tenant-scoped stored raw recipe rows for synchronous hydration.
+ */
+export function getStoredRawRecipes(orgId: string = "default"): any[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(`${RAW_RECIPES_KEY_PREFIX}${orgId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+/**
+ * Save tenant-scoped stored raw recipe rows.
+ */
+export function saveStoredRawRecipes(orgId: string = "default", recipes: any[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(`${RAW_RECIPES_KEY_PREFIX}${orgId}`, JSON.stringify(recipes || []));
+  } catch {}
+}
+
+/**
+ * Get tenant-scoped stored base materials entries for synchronous hydration.
+ */
+export function getStoredBaseMaterials(orgId: string = "default"): [string, any][] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(`${BASE_MATERIALS_KEY_PREFIX}${orgId}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+/**
+ * Save tenant-scoped stored base materials entries.
+ */
+export function saveStoredBaseMaterials(orgId: string = "default", materialsMap: Map<string, any>): void {
+  if (typeof window === "undefined") return;
+  try {
+    const entries = Array.from(materialsMap.entries());
+    localStorage.setItem(`${BASE_MATERIALS_KEY_PREFIX}${orgId}`, JSON.stringify(entries));
   } catch {}
 }
 
@@ -221,7 +283,16 @@ export function getStoredOrders(tenantId: string = "default"): OrderRecord[] {
     const raw = localStorage.getItem(`${ORDERS_KEY_PREFIX}${tenantId}`);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        const map = new Map<string | number, OrderRecord>();
+        parsed.forEach((o: any) => {
+          const key = String(o.id || o.order_number || o.order_id || "").trim();
+          if (key && !map.has(key)) {
+            map.set(key, o);
+          }
+        });
+        return Array.from(map.values());
+      }
     }
   } catch {}
   return [];
@@ -234,7 +305,7 @@ export function saveStoredOrder(tenantId: string = "default", order: OrderRecord
   if (typeof window === "undefined") return;
   try {
     const existing = getStoredOrders(tenantId);
-    const updated = [order, ...existing.filter((o) => o.id !== order.id)];
+    const updated = [order, ...existing.filter((o) => String(o.id) !== String(order.id))];
     localStorage.setItem(`${ORDERS_KEY_PREFIX}${tenantId}`, JSON.stringify(updated));
   } catch {}
 }
@@ -245,8 +316,103 @@ export function saveStoredOrder(tenantId: string = "default", order: OrderRecord
 export function saveStoredOrders(tenantId: string = "default", orders: OrderRecord[]): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(`${ORDERS_KEY_PREFIX}${tenantId}`, JSON.stringify(orders));
+    const map = new Map<string | number, OrderRecord>();
+    orders.forEach((o: any) => {
+      const key = String(o.id || o.order_number || o.order_id || "").trim();
+      if (key && !map.has(key)) {
+        map.set(key, o);
+      }
+    });
+    const cleanOrders = Array.from(map.values());
+    localStorage.setItem(`${ORDERS_KEY_PREFIX}${tenantId}`, JSON.stringify(cleanOrders));
   } catch {}
+}
+
+/**
+ * Purge tenant-scoped local and session storage caches for orders, running KOTs, parked orders, shifts, and tables.
+ * If tenantId is specified, scrubs all order/shift keys for that specific tenant.
+ * If tenantId is omitted or "all", scrubs order/shift keys across all tenants.
+ */
+export function purgeTenantOrderCache(tenantId?: string | number): void {
+  if (typeof window === "undefined") return;
+  try {
+    const tId = tenantId !== undefined && tenantId !== null ? String(tenantId).trim() : null;
+
+    const isTargetKey = (key: string): boolean => {
+      const isOrderRelated =
+        key.startsWith("omni_orders_") ||
+        key.startsWith("pos_running_kot_orders_") ||
+        key.startsWith("omni_terminal_parked_orders_") ||
+        key.startsWith("pos_active_shift_") ||
+        key.startsWith("pos_require_opening_float_") ||
+        key.startsWith("pos_cart_") ||
+        key.startsWith("pos_customer_name_") ||
+        key.startsWith("pos_customer_phone_") ||
+        key.startsWith("pos_tax_rate_") ||
+        key.startsWith("omni_kds_") ||
+        key.startsWith("omni_tables_") ||
+        key.startsWith("tables_list_") ||
+        key.startsWith("pos_session_float_confirmed_");
+
+      if (!isOrderRelated) return false;
+      if (!tId || tId === "all") return true;
+      return key.endsWith(`_${tId}`);
+    };
+
+    // Clean localStorage
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && isTargetKey(key)) {
+        localStorage.removeItem(key);
+      }
+    }
+
+    // Clean sessionStorage
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const key = sessionStorage.key(i);
+      if (key && isTargetKey(key)) {
+        sessionStorage.removeItem(key);
+      }
+    }
+  } catch (err) {
+    console.warn("[tenantStore] purgeTenantOrderCache error:", err);
+  }
+}
+
+/**
+ * Purge order and KOT caches from other tenants to prevent cross-tenant contamination.
+ */
+export function purgeStaleOrderCachesExcept(activeTenantId: string | number): void {
+  if (typeof window === "undefined") return;
+  try {
+    const keepId = String(activeTenantId).trim();
+    if (!keepId) return;
+
+    const isStaleKey = (key: string): boolean => {
+      const isOrderCache =
+        key.startsWith("omni_orders_") ||
+        key.startsWith("pos_running_kot_orders_") ||
+        key.startsWith("omni_terminal_parked_orders_");
+
+      if (!isOrderCache) return false;
+      return !key.endsWith(`_${keepId}`);
+    };
+
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && isStaleKey(key)) {
+        localStorage.removeItem(key);
+      }
+    }
+    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+      const key = sessionStorage.key(i);
+      if (key && isStaleKey(key)) {
+        sessionStorage.removeItem(key);
+      }
+    }
+  } catch (err) {
+    console.warn("[tenantStore] purgeStaleOrderCachesExcept error:", err);
+  }
 }
 
 /**
@@ -294,6 +460,33 @@ export function getStoredTables(
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
     }
+    // Cross-sync with admin tables_list_ storage
+    const adminRaw = localStorage.getItem(`tables_list_${tenantId}`);
+    if (adminRaw) {
+      const parsed = JSON.parse(adminRaw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((t: any, idx: number) => {
+          let resolvedId = idx + 1;
+          const numId = Number(t.id);
+          if (!isNaN(numId) && numId > 0 && numId < 100000) {
+            resolvedId = numId;
+          } else if (t.table_number) {
+            const extracted = parseInt(String(t.table_number).replace(/\D/g, ""), 10);
+            if (!isNaN(extracted) && extracted > 0) resolvedId = extracted;
+          }
+          let label = String(t.table_number || t.label || `Table ${resolvedId}`).trim();
+          if (/^\d+$/.test(label)) label = `Table ${label}`;
+          return {
+            id: resolvedId,
+            label,
+            capacity: Number(t.seating_capacity ?? t.capacity ?? 4),
+            status: String(t.status || "AVAILABLE").toLowerCase() === "occupied" ? "seated" : String(t.status || "AVAILABLE").toLowerCase() === "billed" ? "billing" : String(t.status || "AVAILABLE").toLowerCase() === "reserved" ? "reserved" : "available",
+            section: t.section_name || t.floor_name || t.section || "Main Dining",
+            dbId: t.id || t.dbId,
+          };
+        });
+      }
+    }
   } catch {}
   return fallback;
 }
@@ -308,6 +501,7 @@ export function saveStoredTables(
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(`${TABLES_KEY_PREFIX}${tenantId}`, JSON.stringify(tables));
+    localStorage.setItem(`tables_list_${tenantId}`, JSON.stringify(tables));
   } catch {}
 }
 
@@ -355,8 +549,6 @@ export function playKitchenBuzzer(): void {
 
 export const DEFAULT_CORE_FEATURES = [
   "OVERVIEW",
-  "EXPENSES",
-  "ANALYTICS",
   "STAFF",
   "SETTINGS",
   "SUBSCRIPTION",
@@ -364,36 +556,52 @@ export const DEFAULT_CORE_FEATURES = [
 
 /**
  * Helper to normalize module names into standard feature strings.
- * Core features are always-on; add-on entitlements require explicit assignment.
+ * Core features are always-on; 9 granular enterprise modules require explicit assignment:
+ * 1. POS Terminal -> POS
+ * 2. Menu Management -> MENU
+ * 3. Inventory & Stock -> INVENTORY
+ * 4. KDS Queue -> KDS, KITCHEN
+ * 5. Rider Fleet -> RIDER
+ * 6. Table & Floor Matrix -> TABLES
+ * 7. Procurement -> PROCUREMENT
+ * 8. Expenses -> EXPENSES
+ * 9. Reports -> REPORTS, ANALYTICS
  */
 export function normalizeModules(modules: any): string[] {
   if (!Array.isArray(modules) || modules.length === 0) {
     return [...DEFAULT_CORE_FEATURES];
   }
-  const mapping: Record<string, string> = {
-    pos_terminal: "POS",
-    pos: "POS",
-    kds_system: "KITCHEN",
-    kds: "KITCHEN",
-    kitchen: "KITCHEN",
-    tables: "KITCHEN",
-    rider_app: "RIDER",
-    rider: "RIDER",
-    riders: "RIDER",
-    dispatch: "RIDER",
-    inventory_stock: "INVENTORY",
-    inventory: "INVENTORY",
-    procurement: "INVENTORY",
-    menu: "INVENTORY",
-    branches: "BRANCHES",
+  const mapping: Record<string, string[]> = {
+    pos_terminal: ["POS"],
+    pos: ["POS"],
+    menu: ["MENU"],
+    inventory_stock: ["INVENTORY"],
+    inventory: ["INVENTORY"],
+    kds_system: ["KDS", "KITCHEN"],
+    kds: ["KDS", "KITCHEN"],
+    kitchen: ["KDS", "KITCHEN"],
+    rider_app: ["RIDER"],
+    rider: ["RIDER"],
+    riders: ["RIDER"],
+    dispatch: ["RIDER"],
+    table_matrix: ["TABLES"],
+    tables: ["TABLES"],
+    procurement: ["PROCUREMENT"],
+    expenses: ["EXPENSES"],
+    reports: ["REPORTS", "ANALYTICS"],
+    analytics: ["REPORTS", "ANALYTICS"],
+    branches: ["BRANCHES"],
   };
 
-  const assigned = modules
-    .map((m: any) => {
-      const lower = String(m || "").toLowerCase().trim();
-      return mapping[lower] || null;
-    })
-    .filter(Boolean) as string[];
+  const assigned: string[] = [];
+  modules.forEach((m: any) => {
+    const lower = String(m || "").toLowerCase().trim();
+    if (mapping[lower]) {
+      assigned.push(...mapping[lower]);
+    } else if (typeof m === "string" && m.trim()) {
+      assigned.push(m.toUpperCase().trim());
+    }
+  });
 
   return Array.from(new Set([...DEFAULT_CORE_FEATURES, ...assigned]));
 }
@@ -578,6 +786,10 @@ export function authenticateLocalAccount(email: string, pass?: string): Authenti
             restaurantType: isFranchise ? "FRANCHISE" : "STANDALONE",
             branchesCount: isFranchise ? branchesList.length : 1,
             organizationId: String(matchedSa.id),
+            enableKitchenKds: matchedSa.enable_kitchen_kds ?? matchedSa.enableKitchenKds ?? true,
+            enableTableService: matchedSa.enable_table_service ?? matchedSa.enableTableService ?? true,
+            enableDirectThermalPrint: matchedSa.enable_direct_thermal_print ?? matchedSa.enableDirectThermalPrint ?? true,
+            enableOfflineSync: matchedSa.enable_offline_sync ?? matchedSa.enableOfflineSync ?? true,
           };
 
           return sanitizeUserSession(saUser);
@@ -663,6 +875,11 @@ export function getActiveUserSession(): AuthenticatedUser | null {
       restaurantId: String(session.organizationId),
       terminalAccess: session.terminalAccess,
       staffRole: session.staffRole || (session.userType === "STAFF" ? (session.role as any) : undefined),
+      assignedShift: session.assignedShift || (session as any).shift,
+      enableKitchenKds: (session as any).enableKitchenKds ?? (session as any).enable_kitchen_kds ?? true,
+      enableTableService: (session as any).enableTableService ?? (session as any).enable_table_service ?? true,
+      enableDirectThermalPrint: (session as any).enableDirectThermalPrint ?? (session as any).enable_direct_thermal_print ?? true,
+      enableOfflineSync: (session as any).enableOfflineSync ?? (session as any).enable_offline_sync ?? true,
     };
 
     return sanitizeUserSession(user);
@@ -679,14 +896,34 @@ export function setActiveUserSession(user: AuthenticatedUser | null): void {
   if (typeof window === "undefined") return;
   try {
     if (!user) {
+      purgeTenantOrderCache();
       clearAllAuthSessions();
       return;
     }
 
+    const previousSession = getActiveAuthSession();
+    const prevOrgId = previousSession ? String(previousSession.organizationId) : "";
+    const prevUserId = previousSession ? String(previousSession.id) : "";
+
     const sanitized = sanitizeUserSession(user);
     if (!sanitized) {
+      purgeTenantOrderCache();
       clearAllAuthSessions();
       return;
+    }
+
+    const newOrgId = String(sanitized.organizationId || sanitized.restaurantId || "");
+    const newUserId = String(sanitized.id || "");
+
+    // Clear stale state on tenant change or staff profile switch
+    if (prevOrgId && newOrgId && prevOrgId !== newOrgId) {
+      purgeTenantOrderCache(prevOrgId);
+      purgeStaleOrderCachesExcept(newOrgId);
+    } else if (prevUserId && newUserId && prevUserId !== newUserId) {
+      // Staff profile switch: clear session shift/cart state
+      purgeTenantOrderCache(newOrgId);
+    } else if (!prevOrgId && newOrgId) {
+      purgeStaleOrderCachesExcept(newOrgId);
     }
 
     const isStaff =
@@ -716,9 +953,39 @@ export function setActiveUserSession(user: AuthenticatedUser | null): void {
       branchesCount: sanitized.branchesCount,
       branches: sanitized.branches,
       staffRole: sanitized.staffRole,
+      assignedShift: sanitized.assignedShift,
     };
 
     setAuthSession(session);
+
+    // Maintain session confirmation state strictly for active current-day shifts
+    if (typeof window !== "undefined") {
+      try {
+        const staffKey = String(sanitized.id || sanitized.email || sanitized.name || "cashier").toLowerCase().replace(/[^a-z0-9]/g, "_");
+        const rawShift = sessionStorage.getItem(`pos_active_shift_${sanitized.organizationId || "default"}`) ||
+          localStorage.getItem(`pos_active_shift_${sanitized.organizationId || "default"}`);
+        let isValidTodayShift = false;
+        if (rawShift) {
+          try {
+            const parsed = JSON.parse(rawShift);
+            isValidTodayShift = isShiftForCurrentDayAndValid(parsed);
+          } catch {}
+        }
+
+        if (isValidTodayShift) {
+          sessionStorage.setItem(`pos_session_float_confirmed_${staffKey}`, "true");
+          localStorage.setItem(`pos_session_float_confirmed_${staffKey}`, "true");
+        } else {
+          // If no shift or stale shift from previous date, clear confirmed flags so opening float is required
+          sessionStorage.removeItem(`pos_session_float_confirmed_${staffKey}`);
+          localStorage.removeItem(`pos_session_float_confirmed_${staffKey}`);
+          sessionStorage.removeItem("pos_session_float_confirmed_global");
+          localStorage.removeItem("pos_session_float_confirmed_global");
+          sessionStorage.removeItem(`pos_active_shift_${sanitized.organizationId || "default"}`);
+          localStorage.removeItem(`pos_active_shift_${sanitized.organizationId || "default"}`);
+        }
+      } catch {}
+    }
   } catch (err) {
     console.error("[tenantStore] Error setting active user session:", err);
   }
@@ -728,6 +995,33 @@ export function setActiveUserSession(user: AuthenticatedUser | null): void {
  * Clear user session (Logout).
  */
 export function clearUserSession(): void {
+  if (typeof window !== "undefined") {
+    try {
+      purgeTenantOrderCache();
+      for (let i = sessionStorage.length - 1; i >= 0; i--) {
+        const key = sessionStorage.key(i);
+        if (
+          key &&
+          (key.startsWith("pos_session_float_confirmed_") ||
+            key.startsWith("pos_active_shift_") ||
+            key.startsWith("pos_require_opening_float_"))
+        ) {
+          sessionStorage.removeItem(key);
+        }
+      }
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (
+          key &&
+          (key.startsWith("pos_session_float_confirmed_") ||
+            key.startsWith("pos_active_shift_") ||
+            key.startsWith("pos_require_opening_float_"))
+        ) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch {}
+  }
   clearAllAuthSessions();
 }
 
@@ -754,14 +1048,27 @@ export function getStoredBranchSettings(
   try {
     const key = `${SETTINGS_KEY_PREFIX}${restaurantId}_${branchId}`;
     const raw = localStorage.getItem(key);
+    let resolvedTax: number | undefined;
+    const directTax = localStorage.getItem(`pos_tax_rate_${restaurantId}`);
+    if (directTax !== null && !isNaN(Number(directTax))) {
+      resolvedTax = Number(directTax);
+    }
+
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object") {
         return {
           ...defaultSettings,
           ...parsed,
+          taxRatePercent: resolvedTax !== undefined ? resolvedTax : (parsed.taxRatePercent ?? defaultSettings.taxRatePercent),
         };
       }
+    }
+    if (resolvedTax !== undefined) {
+      return {
+        ...defaultSettings,
+        taxRatePercent: resolvedTax,
+      };
     }
   } catch {}
   return defaultSettings;
@@ -773,12 +1080,14 @@ export function getStoredBranchSettings(
 export function saveStoredBranchSettings(
   restaurantId: string = "default",
   branchId: string = "main",
-  settings: BranchSettings
+  settings: Partial<BranchSettings>
 ): void {
   if (typeof window === "undefined") return;
   try {
+    const existing = getStoredBranchSettings(restaurantId, branchId);
+    const merged = { ...existing, ...settings };
     const key = `${SETTINGS_KEY_PREFIX}${restaurantId}_${branchId}`;
-    localStorage.setItem(key, JSON.stringify(settings));
+    localStorage.setItem(key, JSON.stringify(merged));
   } catch {}
 }
 

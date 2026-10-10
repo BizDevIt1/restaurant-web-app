@@ -22,6 +22,7 @@ import {
   Building2,
   Phone,
   Mail,
+  User,
   Calendar,
   Layers,
   ArrowRight,
@@ -180,6 +181,69 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
 
   useEffect(() => {
     fetchData();
+
+    const handleStockDeducted = () => {
+      fetchData();
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("inventory_stock_deducted", handleStockDeducted);
+    }
+
+    let channel: any = null;
+    let isMounted = true;
+
+    (async () => {
+      try {
+        const supabase = createClient();
+        const { restId } = await getValidTenantContext(user);
+        if (restId && isMounted) {
+          const subId = Math.random().toString(36).substring(2, 7);
+          channel = supabase
+            .channel(`admin_procurement_realtime_${restId}_${subId}`)
+            .on(
+              "postgres_changes",
+              {
+                event: "*",
+                schema: "public",
+                table: "purchase_orders",
+                filter: `restaurant_id=eq.${restId}`,
+              },
+              () => {
+                if (isMounted) fetchData();
+              }
+            )
+            .on(
+              "postgres_changes",
+              {
+                event: "*",
+                schema: "public",
+                table: "suppliers",
+                filter: `restaurant_id=eq.${restId}`,
+              },
+              () => {
+                if (isMounted) fetchData();
+              }
+            )
+            .subscribe();
+        }
+      } catch (err) {
+        console.warn("[ProcurementView] Realtime subscription error:", err);
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+      if (typeof window !== "undefined") {
+        window.removeEventListener("inventory_stock_deducted", handleStockDeducted);
+      }
+      if (channel) {
+        try {
+          const supabase = createClient();
+          supabase.removeChannel(channel);
+        } catch { }
+      }
+    };
   }, [user]);
 
   // Quick Stats Computations (3 Cards)
@@ -293,6 +357,7 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
   // Save Supplier (Create or Update)
   const handleSaveSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingSupplier) return;
     if (!supName.trim()) {
       showToast("Supplier name is required.");
       return;
@@ -475,6 +540,7 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
   // Submit Create PO
   const handleCreatePoSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isCreatingPo) return;
     const vendorName = (poSupplierName || "").trim();
     if (!vendorName) {
       showToast("Please enter or select a vendor / supplier.");
@@ -667,6 +733,7 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
     challanNumber: string,
     receiverNotes: string
   ) => {
+    if (isInwardingStock) return;
     // 1. Prevent Duplicate Receiving: Ensure only POs with status !== 'RECEIVED' can trigger stock increment
     if (po.status === "RECEIVED") {
       showToast("This purchase order has already been received and inwarded.");
@@ -891,26 +958,18 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
   };
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* ========================================================================= */}
       {/* A. TOP BAR */}
       {/* ========================================================================= */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--gold)] animate-pulse" />
-            <Truck className="w-3.5 h-3.5" />
-            <span>PROCUREMENT &amp; SUPPLY CHAIN</span>
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
             Procurement{" "}
             <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
               Hub
             </span>
           </h1>
-          <p className="text-xs sm:text-sm text-[var(--text-lo)] mt-1 font-medium">
-            Manage verified suppliers, issue purchase orders, and monitor vendor deliverables
-          </p>
         </div>
 
         <div className="flex items-center gap-2.5">
@@ -1094,9 +1153,162 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
       {/* D. TAB CONTENT */}
       {/* ========================================================================= */}
       {activeTab === "pos" ? (
-        /* PURCHASE ORDERS TABLE */
+        /* PURCHASE ORDERS TABLE & RESPONSIVE STACK */
         <div className="glass-panel rounded-2xl overflow-hidden shadow-xl">
-          <div className="overflow-x-auto">
+          {/* Mobile Stacked Card List (< 768px) - Zero Horizontal Scrolling */}
+          <div className="md:hidden flex flex-col divide-y divide-[var(--border)]">
+            {purchaseOrders.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-center text-[var(--gold)] mb-3">
+                  <FileText className="w-6 h-6" />
+                </div>
+                <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-3">No purchase orders found</h3>
+                <button
+                  type="button"
+                  onClick={handleOpenCreatePo}
+                  className="btn-gold px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 cursor-pointer shadow-md"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Create PO</span>
+                </button>
+              </div>
+            ) : filteredPurchaseOrders.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-center text-[var(--gold)] mb-3">
+                  <FileText className="w-6 h-6" />
+                </div>
+                <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching purchase orders</h3>
+                <p className="text-xs text-[var(--text-lo)] max-w-xs mt-1">Try adjusting your status filter or search term.</p>
+              </div>
+            ) : (
+              filteredPurchaseOrders.map((po) => {
+                const itemsArr = Array.isArray(po.items) ? po.items : [];
+                const itemsSummary = itemsArr
+                  .map((i) => `${i.name} (${i.quantity} ${i.unit})`)
+                  .join(", ");
+
+                return (
+                  <div key={po.id} className="p-3.5 space-y-3 bg-[var(--surface-base)]/20 hover:bg-[var(--surface-hi)]/30 transition-colors">
+                    {/* Top Row: PO Number + Status Badge */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <span className="font-bold text-[var(--gold)] font-mono text-sm block">
+                          {po.po_number}
+                        </span>
+                        <span className="text-[10px] text-[var(--text-faint)] font-mono">
+                          {po.created_at ? new Date(po.created_at).toLocaleDateString() : "Today"}
+                        </span>
+                      </div>
+                      <span
+                        className={`badge-pill ${
+                          po.status === "PENDING"
+                            ? "badge-warning"
+                            : po.status === "APPROVED"
+                            ? "badge-info"
+                            : po.status === "RECEIVED"
+                            ? "badge-success"
+                            : "badge-danger"
+                        }`}
+                      >
+                        <span className="badge-dot" />
+                        {po.status}
+                      </span>
+                    </div>
+
+                    {/* Supplier & Items */}
+                    <div className="space-y-1">
+                      <div className="text-xs font-semibold text-[var(--text-hi)] font-sans">
+                        Supplier: <span className="text-[var(--gold)]">{po.supplier_name}</span>
+                      </div>
+                      <div className="text-[11px] text-[var(--text-lo)] font-sans line-clamp-2">
+                        <span className="font-mono text-[10px] text-[var(--text-faint)] mr-1">
+                          [{itemsArr.length} items]
+                        </span>
+                        {itemsSummary || "No items listed"}
+                      </div>
+                    </div>
+
+                    {/* Delivery & Total Amount */}
+                    <div className="flex items-center justify-between text-xs font-mono bg-[var(--surface-hi)]/50 px-2.5 py-1.5 rounded-lg border border-[var(--border)]">
+                      <span className="text-[11px] text-[var(--text-lo)]">
+                        Delivery: <strong className="text-[var(--text-hi)]">{po.expected_delivery || "Immediate"}</strong>
+                      </span>
+                      <span className="font-bold text-[var(--text-hi)]">
+                        Rs {Number(po.total_cost || 0).toLocaleString()}
+                      </span>
+                    </div>
+
+                    {/* Actions Row */}
+                    <div className="flex items-center justify-end gap-2 pt-1 border-t border-[var(--border)]/40">
+                      {po.status === "PENDING" && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdatePoStatus(po, "APPROVED")}
+                            className="px-2.5 py-1 rounded-lg bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 border border-blue-500/30 text-[10px] font-bold font-mono transition-all cursor-pointer inline-flex items-center gap-1 shadow-sm"
+                          >
+                            <Check className="w-3 h-3" />
+                            <span>Approve</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenGrnModal(po)}
+                            className="p-1.5 rounded-lg bg-[var(--surface)] hover:bg-[var(--gold-dim)] text-[var(--text-lo)] hover:text-[var(--gold)] border border-[var(--border)] cursor-pointer"
+                            title="Direct Stock Inward (GRN)"
+                          >
+                            <PackageCheck className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+
+                      {po.status === "APPROVED" && (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenGrnModal(po)}
+                          className="btn-gold px-2.5 py-1 rounded-lg text-[10.5px] font-bold font-mono cursor-pointer inline-flex items-center gap-1 shadow-sm"
+                        >
+                          <PackageCheck className="w-3 h-3 text-[#1a1400]" />
+                          <span>Receive Stock</span>
+                        </button>
+                      )}
+
+                      {po.status === "RECEIVED" && (
+                        <span className="px-2 py-0.5 rounded-lg bg-[#25d366]/15 border border-[#25d366]/30 text-[#25d366] text-[10px] font-bold font-mono inline-flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" />
+                          <span>Received</span>
+                        </span>
+                      )}
+
+                      {/* View Slip */}
+                      <button
+                        type="button"
+                        onClick={() => setViewingPo(po)}
+                        className="p-1.5 rounded-lg bg-[var(--surface)] hover:bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-[var(--gold)] border border-[var(--border)] cursor-pointer"
+                        title="View PO Details"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Delete */}
+                      {po.status !== "RECEIVED" && (
+                        <button
+                          type="button"
+                          onClick={() => setPoToDelete(po)}
+                          className="p-1.5 rounded-lg bg-[var(--surface)] hover:bg-red-500/20 text-[var(--text-lo)] hover:text-red-400 border border-[var(--border)] cursor-pointer"
+                          title="Delete PO"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Desktop Table View (>= 768px) */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-xs font-mono border-collapse">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-white/[0.02] text-[var(--text-faint)] uppercase text-[10px] tracking-wider font-semibold font-mono">
@@ -1114,10 +1326,10 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
                   <tr>
                     <td colSpan={7} className="p-4">
                       <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
-                        <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+                        <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-center text-[var(--gold)] mb-3">
                           <FileText className="w-6 h-6" />
                         </div>
-                        <h3 className="text-sm font-semibold text-white tracking-wide mb-4">No purchase orders found</h3>
+                        <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-4">No purchase orders found</h3>
                         <button
                           type="button"
                           onClick={handleOpenCreatePo}
@@ -1133,11 +1345,11 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
                   <tr>
                     <td colSpan={7} className="p-4">
                       <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
-                        <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+                        <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-center text-[var(--gold)] mb-3">
                           <FileText className="w-6 h-6" />
                         </div>
-                        <h3 className="text-sm font-semibold text-white tracking-wide">No matching purchase orders</h3>
-                        <p className="text-xs text-white/50 max-w-sm mt-1 mb-4">Try adjusting your status filter or search term.</p>
+                        <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching purchase orders</h3>
+                        <p className="text-xs text-[var(--text-lo)] max-w-sm mt-1 mb-4">Try adjusting your status filter or search term.</p>
                       </div>
                     </td>
                   </tr>
@@ -1176,16 +1388,17 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
                         </td>
                         <td className="py-3 px-4">
                           <span
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider ${po.status === "PENDING"
-                                ? "bg-amber-500/15 border border-amber-500/30 text-amber-400"
+                            className={`badge-pill ${
+                              po.status === "PENDING"
+                                ? "badge-warning"
                                 : po.status === "APPROVED"
-                                  ? "bg-blue-500/15 border border-blue-500/30 text-blue-400"
-                                  : po.status === "RECEIVED"
-                                    ? "bg-[#25d366]/15 border border-[#25d366]/30 text-[#25d366]"
-                                    : "bg-red-500/15 border border-red-500/30 text-red-400"
-                              }`}
+                                ? "badge-info"
+                                : po.status === "RECEIVED"
+                                ? "badge-success"
+                                : "badge-danger"
+                            }`}
                           >
-                            <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                            <span className="badge-dot" />
                             {po.status}
                           </span>
                         </td>
@@ -1274,9 +1487,108 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
           </div>
         </div>
       ) : (
-        /* SUPPLIERS DIRECTORY TABLE */
+        /* SUPPLIERS DIRECTORY TABLE & RESPONSIVE STACK */
         <div className="glass-panel rounded-2xl overflow-hidden shadow-xl">
-          <div className="overflow-x-auto">
+          {/* Mobile Stacked Card List (< 768px) - Zero Horizontal Scrolling */}
+          <div className="md:hidden flex flex-col divide-y divide-[var(--border)]">
+            {suppliers.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-center text-[var(--gold)] mb-3">
+                  <Building2 className="w-6 h-6" />
+                </div>
+                <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-3">No suppliers registered yet</h3>
+                <button
+                  type="button"
+                  onClick={handleOpenAddSupplier}
+                  className="btn-gold px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 cursor-pointer shadow-md"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Supplier</span>
+                </button>
+              </div>
+            ) : filteredSuppliers.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-center text-[var(--gold)] mb-3">
+                  <Building2 className="w-6 h-6" />
+                </div>
+                <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching suppliers</h3>
+                <p className="text-xs text-[var(--text-lo)] max-w-xs mt-1">Try adjusting your category filter or search query.</p>
+              </div>
+            ) : (
+              filteredSuppliers.map((sup) => (
+                <div key={sup.id} className="p-3.5 space-y-2.5 bg-[var(--surface-base)]/20 hover:bg-[var(--surface-hi)]/30 transition-colors">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="font-bold text-[var(--text-hi)] text-sm block">
+                        {sup.name}
+                      </span>
+                      <span className="text-[10px] text-[var(--gold)] font-mono font-semibold uppercase">
+                        {sup.category}
+                      </span>
+                    </div>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] font-bold ${
+                        sup.is_active
+                          ? "bg-[#25d366]/15 text-[#25d366] border border-[#25d366]/30"
+                          : "bg-[var(--surface)] text-[var(--text-faint)] border border-[var(--border)]"
+                      }`}
+                    >
+                      {sup.is_active ? "ACTIVE" : "INACTIVE"}
+                    </span>
+                  </div>
+
+                  <div className="text-xs text-[var(--text-lo)] space-y-1">
+                    {sup.contact_person && (
+                      <div className="flex items-center gap-1.5">
+                        <User className="w-3 h-3 text-[var(--text-faint)]" />
+                        <span>{sup.contact_person}</span>
+                      </div>
+                    )}
+                    {sup.phone && (
+                      <div className="flex items-center gap-1.5 text-[var(--text-faint)]">
+                        <Phone className="w-3 h-3" />
+                        <span>{sup.phone}</span>
+                      </div>
+                    )}
+                    {sup.email && (
+                      <div className="flex items-center gap-1.5 text-[var(--text-faint)]">
+                        <Mail className="w-3 h-3" />
+                        <span className="truncate">{sup.email}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1 border-t border-[var(--border)]/40 text-xs">
+                    <span className="px-2 py-0.5 rounded-md bg-[var(--gold-dim)] border border-[var(--gold)]/20 text-[var(--gold)] text-[10px] font-semibold">
+                      {sup.payment_terms || "Cash on Delivery"}
+                    </span>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditSupplier(sup)}
+                        className="p-1.5 rounded-lg bg-[var(--surface)] hover:bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-[var(--gold)] border border-[var(--border)] transition-colors cursor-pointer"
+                        title="Edit Supplier"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSupplierToDelete(sup)}
+                        className="p-1.5 rounded-lg bg-[var(--surface)] hover:bg-red-500/20 text-[var(--text-lo)] hover:text-red-400 border border-[var(--border)] transition-colors cursor-pointer"
+                        title="Delete Supplier"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Desktop Table View (>= 768px) */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-xs font-mono border-collapse">
               <thead>
                 <tr className="border-b border-[var(--border)] bg-white/[0.02] text-[var(--text-faint)] uppercase text-[10px] tracking-wider font-semibold font-mono">
@@ -1294,10 +1606,10 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
                   <tr>
                     <td colSpan={7} className="p-4">
                       <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
-                        <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+                        <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-center text-[var(--gold)] mb-3">
                           <Building2 className="w-6 h-6" />
                         </div>
-                        <h3 className="text-sm font-semibold text-white tracking-wide mb-4">No suppliers registered yet</h3>
+                        <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-4">No suppliers registered yet</h3>
                         <button
                           type="button"
                           onClick={handleOpenAddSupplier}
@@ -1313,11 +1625,11 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
                   <tr>
                     <td colSpan={7} className="p-4">
                       <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
-                        <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+                        <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-center text-[var(--gold)] mb-3">
                           <Building2 className="w-6 h-6" />
                         </div>
-                        <h3 className="text-sm font-semibold text-white tracking-wide">No matching suppliers</h3>
-                        <p className="text-xs text-white/50 max-w-sm mt-1 mb-4">Try adjusting your category filter or search query.</p>
+                        <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching suppliers</h3>
+                        <p className="text-xs text-[var(--text-lo)] max-w-sm mt-1 mb-4">Try adjusting your category filter or search query.</p>
                       </div>
                     </td>
                   </tr>
@@ -1874,20 +2186,6 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
                 </div>
               </div>
 
-              {/* Notes */}
-              <div>
-                <label className="block text-xs font-medium text-[var(--text-lo)] mb-1.5">
-                  Special Delivery Instructions / Notes
-                </label>
-                <textarea
-                  rows={2}
-                  value={poNotes}
-                  onChange={(e) => setPoNotes(e.target.value)}
-                  placeholder="e.g. Deliver to rear loading bay before 11:00 AM..."
-                  className="w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)]/60 focus:ring-1 focus:ring-[var(--gold)]/30 rounded-xl p-3.5 text-xs text-[var(--text-hi)] placeholder:text-[var(--text-lo)]/40 focus:outline-none transition-all font-sans resize-none"
-                />
-              </div>
-
               <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[var(--border)]">
                 <button
                   type="button"
@@ -1987,7 +2285,7 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
               {/* Slip Header */}
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 border-b border-[var(--border)] pb-5">
                 <div>
-                  <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight font-display">
+                  <h2 className="text-xl sm:text-2xl font-black text-[var(--text-hi)] tracking-tight font-display">
                     {user?.restaurantName || "OmniBites Enterprise"}
                   </h2>
                   <p className="text-xs text-[var(--text-lo)] mt-0.5 font-sans">
@@ -2007,15 +2305,17 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
                   </div>
                   <div className="mt-2">
                     <span
-                      className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider ${viewingPo.status === "PENDING"
-                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                      className={`badge-pill ${
+                        viewingPo.status === "PENDING"
+                          ? "badge-warning"
                           : viewingPo.status === "APPROVED"
-                            ? "bg-blue-500/20 text-blue-300 border border-blue-500/40"
-                            : viewingPo.status === "RECEIVED"
-                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                              : "bg-red-500/20 text-red-300 border border-red-500/40"
-                        }`}
+                          ? "badge-info"
+                          : viewingPo.status === "RECEIVED"
+                          ? "badge-success"
+                          : "badge-danger"
+                      }`}
                     >
+                      <span className="badge-dot" />
                       {viewingPo.status}
                     </span>
                   </div>
@@ -2028,7 +2328,7 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
                   <div className="text-[10px] uppercase font-bold text-[var(--text-faint)] tracking-wider mb-1">
                     Vendor / Supplier
                   </div>
-                  <div className="text-sm font-bold text-white font-sans">
+                  <div className="text-sm font-bold text-[var(--text-hi)] font-sans">
                     {viewingPo.supplier_name}
                   </div>
                   <div className="text-[var(--text-lo)] mt-1">
@@ -2041,7 +2341,7 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
                     Issue Details
                   </div>
                   <div className="text-[var(--text-lo)]">
-                    Issued By: <span className="text-white font-semibold">{viewingPo.created_by || "Admin"}</span>
+                    Issued By: <span className="text-[var(--text-hi)] font-semibold">{viewingPo.created_by || "Admin"}</span>
                   </div>
                   <div className="text-[var(--text-lo)] mt-1">
                     Order Ref: #{viewingPo.id}
@@ -2065,13 +2365,13 @@ export default function ProcurementView({ showToast }: ProcurementViewProps) {
                   <tbody className="divide-y divide-[var(--border)]/40">
                     {Array.isArray(viewingPo.items) && viewingPo.items.length > 0 ? (
                       viewingPo.items.map((item, i) => (
-                        <tr key={i} className="text-zinc-300 hover:bg-white/5 transition-colors">
+                        <tr key={i} className="text-[var(--text-lo)] hover:bg-[var(--surface-hi)]/30 transition-colors">
                           <td className="py-2.5 px-3 text-[var(--text-faint)]">{i + 1}</td>
-                          <td className="py-2.5 px-3 font-sans font-medium text-white">{item.name}</td>
+                          <td className="py-2.5 px-3 font-sans font-medium text-[var(--text-hi)]">{item.name}</td>
                           <td className="py-2.5 px-3 text-center text-[var(--text-lo)]">{item.unit}</td>
                           <td className="py-2.5 px-3 text-right">{item.quantity}</td>
                           <td className="py-2.5 px-3 text-right">Rs {Number(item.unit_price || 0).toLocaleString()}</td>
-                          <td className="py-2.5 px-3 text-right font-bold text-white">
+                          <td className="py-2.5 px-3 text-right font-bold text-[var(--text-hi)]">
                             Rs {Number(item.subtotal || 0).toLocaleString()}
                           </td>
                         </tr>

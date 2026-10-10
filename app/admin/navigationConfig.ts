@@ -56,12 +56,22 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
     tooltip: "Point of Sale & Instant Thermal Billing",
   },
   {
+    id: "menu",
+    label: "Menu Management",
+    icon: UtensilsCrossed,
+    path: "/admin/menu",
+    allowedRoles: ["STANDALONE_ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
+    requiredFeature: "MENU",
+    badgeKey: "menu",
+    tooltip: "Catalog, Pricing & 86'd Stock Control",
+  },
+  {
     id: "kds",
     label: "Kitchen (KDS)",
     icon: Flame,
     path: "/admin/kitchen",
     allowedRoles: ["STANDALONE_ADMIN", "BRANCH_ADMIN"], // Strictly Branch/Standalone Admin - Hidden for Franchise Owner
-    requiredFeature: "KITCHEN",
+    requiredFeature: "KDS",
     badgeKey: "kds",
     tooltip: "Kitchen Display System & Chef Tickets",
   },
@@ -71,7 +81,7 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
     icon: LayoutGrid,
     path: "/admin/tables",
     allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
-    requiredFeature: "KITCHEN", // Nested under Kitchen & Floor Operations bundle
+    requiredFeature: "TABLES",
     tooltip: "Real-time table occupancy & floor sections",
   },
   {
@@ -80,7 +90,7 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
     icon: Boxes,
     path: "/admin/inventory",
     allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
-    requiredFeature: "INVENTORY", // Parent of Inventory Suite
+    requiredFeature: "INVENTORY",
     tooltip: "Raw material balances and stock thresholds",
   },
   {
@@ -89,18 +99,8 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
     icon: Truck,
     path: "/admin/procurement",
     allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
-    requiredFeature: "INVENTORY", // Sub-route of Inventory Suite
+    requiredFeature: "PROCUREMENT",
     tooltip: "Suppliers Directory & Purchase Orders",
-  },
-  {
-    id: "menu",
-    label: "Menu Management",
-    icon: UtensilsCrossed,
-    path: "/admin/menu",
-    allowedRoles: ["STANDALONE_ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
-    requiredFeature: "INVENTORY", // Sub-route of Inventory Suite
-    badgeKey: "menu",
-    tooltip: "Catalog, Pricing & 86'd Stock Control",
   },
   {
     id: "riders",
@@ -127,6 +127,7 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
     icon: Receipt,
     path: "/admin/expenses",
     allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
+    requiredFeature: "EXPENSES",
     tooltip: "Operating expenses and overheads",
   },
   {
@@ -135,6 +136,7 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
     icon: BarChart3,
     path: "/admin/reports",
     allowedRoles: ["STANDALONE_ADMIN", "ADMIN", "FRANCHISE_OWNER", "BRANCH_ADMIN"],
+    requiredFeature: "REPORTS",
     tooltip: "Revenue Trends, Sales Insights & Order History",
   },
   {
@@ -162,7 +164,7 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
 export function getPermittedNavigation(
   role: UserRole,
   assignedFeatures: string[],
-  terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY"
+  terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY" | "MANAGER_ONLY"
 ): NavigationItem[] {
   const roleStr = String(role || "").toUpperCase();
   const isAnyAdmin =
@@ -206,11 +208,25 @@ export function getPermittedNavigation(
       return false;
     }
     // 2. If a specific feature is required, verify user has it
-    if (
-      item.requiredFeature &&
-      !normalizedFeatures.includes(item.requiredFeature.toUpperCase().trim())
-    ) {
-      return false;
+    if (item.requiredFeature) {
+      const required = item.requiredFeature.toUpperCase().trim();
+      let hasDirect = normalizedFeatures.includes(required);
+
+      // Handle standard feature aliases
+      if (!hasDirect) {
+        if (required === "KDS" && normalizedFeatures.includes("KITCHEN")) hasDirect = true;
+        if (required === "KITCHEN" && normalizedFeatures.includes("KDS")) hasDirect = true;
+        if (required === "REPORTS" && normalizedFeatures.includes("ANALYTICS")) hasDirect = true;
+        if (required === "ANALYTICS" && normalizedFeatures.includes("REPORTS")) hasDirect = true;
+        if (required === "POS" && normalizedFeatures.includes("POS_TERMINAL")) hasDirect = true;
+        if (required === "TABLES" && (normalizedFeatures.includes("TABLE_MATRIX") || normalizedFeatures.includes("DINE_IN"))) hasDirect = true;
+        if (required === "RIDER" && (normalizedFeatures.includes("RIDERS") || normalizedFeatures.includes("DISPATCH") || normalizedFeatures.includes("RIDER_APP"))) hasDirect = true;
+        if (required === "INVENTORY" && normalizedFeatures.includes("INVENTORY_STOCK")) hasDirect = true;
+      }
+
+      if (!hasDirect) {
+        return false;
+      }
     }
     return true;
   });

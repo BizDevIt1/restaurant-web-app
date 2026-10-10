@@ -1,4 +1,4 @@
-export type UserRole = "STANDALONE_ADMIN" | "FRANCHISE_OWNER" | "BRANCH_ADMIN" | "STAFF_MEMBER" | "ADMIN";
+export type UserRole = "STANDALONE_ADMIN" | "FRANCHISE_OWNER" | "BRANCH_ADMIN" | "STAFF_MEMBER" | "ADMIN" | "SUPER_ADMIN";
 
 export interface BranchData {
   id: string;
@@ -38,8 +38,13 @@ export interface AuthenticatedUser {
   branchesCount?: number;
   organizationId?: string;
   restaurantId?: string;
-  terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY";
+  terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY" | "MANAGER_ONLY";
   staffRole?: "manager" | "cashier" | "chef" | "rider" | "waiter";
+  assignedShift?: string;
+  enableKitchenKds?: boolean;
+  enableTableService?: boolean;
+  enableDirectThermalPrint?: boolean;
+  enableOfflineSync?: boolean;
 }
 
 // Backwards compatibility aliases
@@ -139,7 +144,16 @@ export interface StaffMember {
   branchId: string;
   branchName: string;
   phone: string;
-  shift: "Morning" | "Evening" | "Night" | "Evening Rush" | "Night Owl";
+  shift:
+    | "First Shift (Morning)"
+    | "Second Shift (Evening)"
+    | "Third Shift (Night / Closing)"
+    | "Morning"
+    | "Evening"
+    | "Night"
+    | "Evening Rush"
+    | "Night Owl"
+    | string;
   status: "active" | "on_break" | "offline" | "inactive" | "suspended";
   assignedScreen: "POS Counter" | "Kitchen (KDS)" | "Rider Dispatch" | "Full Admin";
   terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY";
@@ -183,10 +197,38 @@ export interface BranchSettings {
   address: string;
   phone: string;
   printerIp: string;
+  printerPaperWidth?: string;
   kitchenBuzzerEnabled: boolean;
   openingTime: string;
   closingTime: string;
   taxRatePercent?: number;
+  currencySymbol?: string;
+}
+
+export interface VariantRecipeItem {
+  raw_material_id: string | number;
+  raw_material_name?: string;
+  quantity_required: number;
+  unit?: string;
+  cost_per_unit?: number;
+}
+
+export interface ItemVariant {
+  id: string;
+  name: string; // e.g. "Small", "Medium", "Large", "Half", "Full", "Single Petti", "Double Petti"
+  price: number;
+  isDefault?: boolean;
+  image_url?: string;
+  imageUrl?: string;
+  recipe?: VariantRecipeItem[];
+  quantity_multiplier?: number;
+  raw_material_id?: string | number;
+  raw_material_qty?: number;
+  maxPortions?: number;
+  availablePortions?: number;
+  isOutOfStock?: boolean;
+  stockStatus?: "in_stock" | "low_stock" | "out_of_stock";
+  limitingIngredient?: string;
 }
 
 export interface MenuItem {
@@ -204,11 +246,16 @@ export interface MenuItem {
   recipeCost?: number;
   recipeMargin?: number;
   hasRecipe?: boolean;
+  variants?: ItemVariant[];
+  image_url?: string;
+  imageUrl?: string;
+  selectedVariant?: ItemVariant;
   // Dynamic Recipe Availability & Stock Persistence helpers:
   is_available?: boolean;
   in_stock?: boolean;
   isAutoOutOfStock?: boolean;
   maxPortions?: number;
+  availablePortions?: number;
   missingIngredients?: string[];
 }
 
@@ -216,12 +263,14 @@ export interface CartItem {
   item: MenuItem;
   quantity: number;
   notes?: string;
+  selectedVariant?: ItemVariant;
 }
 
 export interface TableStatus {
   id: number;
   label: string;
   capacity: number;
+  seats?: number;
   status: "available" | "seated" | "billing" | "reserved" | "occupied" | string;
   section?: string;
   sectionName?: string;
@@ -236,8 +285,19 @@ export interface KitchenTicket {
   tableOrChannel: string;
   orderType: "dine_in" | "takeaway" | "delivery";
   elapsedMinutes: number;
-  items: { id?: string; name: string; qty: number; notes?: string; prepTime?: string; preparation_time?: number }[];
-  status: "queued" | "preparing" | "ready" | "completed" | "cancelled";
+  items: {
+    id?: string;
+    name: string;
+    qty: number;
+    notes?: string;
+    prepTime?: string;
+    preparation_time?: number;
+    selectedVariant?: ItemVariant;
+    variant?: ItemVariant;
+    variant_id?: string | number | null;
+    variant_name?: string | null;
+  }[];
+  status: "queued" | "preparing" | "ready" | "completed" | "cancelled" | "archived" | "fulfilled" | string;
   serverName: string;
   priority?: "urgent" | "normal";
   createdAt?: string;
@@ -271,25 +331,32 @@ export interface OrderRecord {
     notes?: string;
     prepTime?: string;
     preparation_time?: number;
+    selectedVariant?: ItemVariant;
+    variant?: ItemVariant;
+    variant_id?: string | number | null;
+    variant_name?: string | null;
   }[];
   subtotal: number;
   taxAmount: number;
   discountPercent: number;
   discountAmount: number;
   total: number;
-  paymentMethod: "cash" | "card" | "raast";
+  paymentMethod: "cash" | "card" | "raast" | "split";
   cashierName: string;
   timestamp: string;
   created_at?: string;
   createdAt?: string;
   kotId?: string;
   status: "completed" | "cancelled" | "active" | "queued" | "preparing" | "ready" | "out_for_delivery" | string;
+  payment_status?: "paid" | "pending" | "refunded" | string;
+  paymentStatus?: "paid" | "pending" | "refunded" | string;
   isDeducted?: boolean;
   deductedAt?: string;
   estimatedPrepTime?: number;
   estimated_prep_time?: number;
   prepStartedAt?: string;
   prep_started_at?: string;
+  shift_id?: number | string | null;
 }
 
 export interface BillingInvoice {
@@ -324,6 +391,9 @@ export interface ShiftSettlement {
   total_orders_count: number;
   actual_cash_counted: number;
   cash_variance: number;
+  expected_drawer_cash?: number | null;
+  cash_handover_to_next_shift?: number | null;
+  shift_type?: string | null;
   status: "OPEN" | "CLOSED" | "AUDITED" | string;
   closing_notes?: string | null;
   created_at?: string;

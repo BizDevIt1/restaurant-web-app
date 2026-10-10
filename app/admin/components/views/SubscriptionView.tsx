@@ -310,26 +310,18 @@ export default function SubscriptionView({
   };
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* ========================================================================= */}
       {/* A. TOP HEADER */}
       {/* ========================================================================= */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
-            <CreditCard className="w-3.5 h-3.5" />
-            <span>SAAS SUBSCRIPTION &amp; QUOTAS</span>
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
             Subscription{" "}
             <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
               &amp; Quotas
             </span>
           </h1>
-          <p className="text-xs sm:text-sm text-[var(--text-lo)] mt-1 font-medium">
-            Active subscription plan, license quotas, and operational limits
-          </p>
         </div>
 
         <div className="flex items-center gap-2.5">

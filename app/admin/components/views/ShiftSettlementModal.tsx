@@ -28,8 +28,11 @@ import {
 } from "lucide-react";
 import { OrderRecord, ShiftSettlement } from "../../types";
 import { useAuth } from "../../context/AuthContext";
+import { getActiveUserSession, sanitizeUserSession } from "../../../../lib/tenantStore";
 import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
+import { evaluateActiveShiftDetails } from "../../../../lib/shiftSchedule";
+import { dispatchShiftSettlementAlert } from "../../../../lib/shiftAuditNotifications";
 
 interface ShiftSettlementModalProps {
   isOpen: boolean;
@@ -50,8 +53,43 @@ export default function ShiftSettlementModal({
 }: ShiftSettlementModalProps) {
   const { user } = useAuth();
 
-  // Dynamic Session & Cashier Identity
-  const cashierName = propCashierName || user?.name || user?.email || "Terminal Cashier";
+  const activeSessionUser = useMemo(() => {
+    return sanitizeUserSession(getActiveUserSession()) || user;
+  }, [user]);
+
+  // Dynamic Session & Cashier Identity (Prioritizes explicit prop, authenticated user 'Bilal')
+  const cashierName = useMemo(() => {
+    if (propCashierName && propCashierName.trim() && propCashierName.toLowerCase() !== "cashier" && propCashierName.toLowerCase() !== "terminal cashier") {
+      return propCashierName.trim();
+    }
+    const uName = user?.name?.trim();
+    if (uName && uName.toLowerCase() !== "user" && uName.toLowerCase() !== "terminal cashier") {
+      return uName;
+    }
+    const sName = activeSessionUser?.name?.trim();
+    if (sName && sName.toLowerCase() !== "user" && sName.toLowerCase() !== "terminal cashier") {
+      return sName;
+    }
+    const rawEmail = user?.email || activeSessionUser?.email;
+    if (rawEmail && rawEmail.includes("@")) {
+      const prefix = rawEmail.split("@")[0].replace(/[._-]/g, " ").trim();
+      if (prefix) {
+        return prefix
+          .split(" ")
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+          .join(" ");
+      }
+    }
+    return user?.name || "Bilal";
+  }, [propCashierName, user, activeSessionUser]);
+
+  const activeShiftDetails = useMemo(() => {
+    return evaluateActiveShiftDetails(
+      user?.assignedShift || activeSessionUser?.assignedShift,
+      null,
+      new Date()
+    );
+  }, [user?.assignedShift, activeSessionUser?.assignedShift]);
 
   // Dynamic Branch Settings State (for currency, restaurant name, fraud threshold)
   const [branchSettings, setBranchSettings] = useState<{
@@ -198,23 +236,29 @@ export default function ShiftSettlementModal({
         }
 
         if (data && isMounted) {
-          const mapped: OrderRecord[] = data.map((o: any) => ({
-            id: o.order_number || o.id,
-            orderChannel: o.order_channel || "dine_in",
-            tableId: o.table_id ? 1 : undefined,
-            tableName: o.customer_name || `Order ${o.order_number || o.id}`,
-            items: Array.isArray(o.items) ? o.items : [],
-            subtotal: Number(o.subtotal || o.total_amount || 0),
-            taxAmount: Number(o.tax_amount || 0),
-            discountPercent: 0,
-            discountAmount: Number(o.discount_amount || 0),
-            total: Number(o.total_amount || o.subtotal || 0),
-            paymentMethod: (o.payment_method || "cash").toLowerCase(),
-            cashierName: o.cashier_name || cashierName,
-            timestamp: o.created_at || new Date().toISOString(),
-            status: o.order_status || "completed",
-          }));
-          setLiveOrders(mapped);
+          const map = new Map<string | number, OrderRecord>();
+          data.forEach((o: any) => {
+            const key = String(o.order_number || o.id || "").trim();
+            if (key && !map.has(key)) {
+              map.set(key, {
+                id: o.order_number || o.id,
+                orderChannel: o.order_channel || "dine_in",
+                tableId: o.table_id ? 1 : undefined,
+                tableName: o.customer_name || `Order ${o.order_number || o.id}`,
+                items: Array.isArray(o.items) ? o.items : [],
+                subtotal: Number(o.subtotal || o.total_amount || 0),
+                taxAmount: Number(o.tax_amount || 0),
+                discountPercent: 0,
+                discountAmount: Number(o.discount_amount || 0),
+                total: Number(o.total_amount || o.subtotal || 0),
+                paymentMethod: (o.payment_method || "cash").toLowerCase(),
+                cashierName: o.cashier_name || cashierName,
+                timestamp: o.created_at || new Date().toISOString(),
+                status: o.order_status || "completed",
+              });
+            }
+          });
+          setLiveOrders(Array.from(map.values()));
         }
       } catch (err) {
         console.error("[ShiftSettlementModal] Live order fetch error:", err);
@@ -522,6 +566,18 @@ export default function ShiftSettlementModal({
           ? `+${currencySymbol} ${cashVariance.toLocaleString()} Excess`
           : `-${currencySymbol} ${Math.abs(cashVariance).toLocaleString()} Shortage`;
 
+      // Dispatch Automated Z-Report & Financial Audit Alert to Admin
+      dispatchShiftSettlementAlert(String(restId || "default"), {
+        cashierName: cashierName,
+        shiftType: activeShiftDetails?.shiftType || "Standard Shift",
+        grossSales: Number(shiftMetrics.grossSales) || 0,
+        actualCash: Number(numericActualCash) || 0,
+        expectedCash: Number(expectedCashInDrawer) || 0,
+        cashVariance: Number(cashVariance) || 0,
+        branchName: user?.branchName || "Main Register",
+        threshold: FRAUD_LIMIT,
+      });
+
       showToast(`Shift closed successfully. Variance: ${varianceFormatted}.`);
       onClose();
     } catch (err: any) {
@@ -590,6 +646,11 @@ export default function ShiftSettlementModal({
                   <span>Cashier: {cashierName}</span>
                 </span>
                 <span className="text-[var(--text-faint)]">•</span>
+                <span className="flex items-center gap-1 text-[var(--gold)] font-medium">
+                  <Sparkles className="w-3 h-3" />
+                  <span>{activeShiftDetails.shiftType} ({activeShiftDetails.windowLabel})</span>
+                </span>
+                <span className="text-[var(--text-faint)]">•</span>
                 <span className="flex items-center gap-1 text-[var(--text-muted)]">
                   <Clock className="w-3 h-3 text-[var(--text-faint)]" />
                   <span>Started: {shiftStartTimeFormatted}</span>
@@ -641,73 +702,73 @@ export default function ShiftSettlementModal({
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               
               {/* 1. Opening Float Input */}
-              <div className="p-2.5 rounded-xl bg-[var(--surface-hi)]/70 border border-[var(--border)] space-y-1.5 flex flex-col justify-between">
+              <div className="p-2.5 rounded-xl bg-[var(--surface-hi)]/60 dark:bg-[var(--surface-hi)]/70 border border-[var(--border)] space-y-1.5 flex flex-col justify-between shadow-xs">
                 <div>
-                  <label className="text-[10px] font-mono text-[var(--text-muted)] uppercase block font-bold tracking-wider">
-                    Opening Float <span className="text-amber-400">*</span>
+                  <label className="text-[10px] font-mono text-amber-800 dark:text-[var(--gold)] uppercase block font-bold tracking-wider">
+                    Opening Float <span className="text-amber-700 dark:text-[var(--gold)]">*</span>
                   </label>
                 </div>
                 <div className="relative mt-1">
-                  <span className="absolute left-2 top-1/2 -translate-y-1/2 font-mono font-bold text-xs text-[var(--text-muted)]">
+                  <span className="absolute left-2 top-1/2 -translate-y-1/2 font-mono font-bold text-xs text-amber-800 dark:text-[var(--gold)]">
                     {currencySymbol}
                   </span>
                   <input
                     type="number"
                     min="0"
-                    step="50"
+                    step="any"
                     value={openingFloat}
                     onChange={(e) => setOpeningFloat(e.target.value)}
                     required
                     placeholder="5000"
-                    className="w-full bg-[var(--surface)] border border-[var(--border)] rounded-lg pl-6 pr-2 py-1 text-xs font-mono font-bold text-[var(--text-hi)] focus:border-[var(--gold)] focus:outline-none transition-all shadow-inner"
+                    className="w-full bg-[var(--surface)] hover:bg-[var(--surface-hi)]/50 focus:bg-[var(--surface-hi)]/80 border border-[var(--border)] rounded-lg pl-6 pr-2 py-1 text-xs font-mono font-bold text-[var(--text-hi)] focus:border-[var(--gold)] focus:outline-none transition-all"
                   />
                 </div>
               </div>
 
               {/* 2. System Cash Sales */}
-              <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-1 flex flex-col justify-between">
+              <div className="p-2.5 rounded-xl bg-emerald-500/[0.08] dark:bg-emerald-950/20 border border-emerald-600/25 dark:border-emerald-800/40 space-y-1 flex flex-col justify-between shadow-xs">
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold tracking-wider">
+                    <span className="text-[10px] font-mono text-emerald-800 dark:text-emerald-400 uppercase font-bold tracking-wider">
                       Cash Sales (+)
                     </span>
-                    <Banknote className="w-3.5 h-3.5 text-emerald-400" />
+                    <Banknote className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
                   </div>
                 </div>
-                <div className="text-sm sm:text-base font-black font-mono text-emerald-400 mt-1 truncate">
+                <div className="text-sm sm:text-base font-black font-mono text-emerald-700 dark:text-emerald-400 mt-1 truncate">
                   {currencySymbol} {shiftMetrics.systemCashSales.toLocaleString()}
                 </div>
               </div>
 
               {/* 3. Cash Expenses Deducted */}
-              <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/30 space-y-1 flex flex-col justify-between">
+              <div className="p-2.5 rounded-xl bg-rose-500/[0.08] dark:bg-rose-950/20 border border-rose-600/25 dark:border-rose-800/40 space-y-1 flex flex-col justify-between shadow-xs">
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono text-red-400 uppercase font-bold tracking-wider">
+                    <span className="text-[10px] font-mono text-rose-800 dark:text-rose-400 uppercase font-bold tracking-wider">
                       Cash Paid Out (-)
                     </span>
-                    <TrendingDown className="w-3.5 h-3.5 text-red-400" />
+                    <TrendingDown className="w-3.5 h-3.5 text-rose-700 dark:text-rose-400" />
                   </div>
                 </div>
-                <div className="text-sm sm:text-base font-black font-mono text-red-400 mt-1 truncate">
+                <div className="text-sm sm:text-base font-black font-mono text-rose-700 dark:text-rose-400 mt-1 truncate">
                   -{currencySymbol} {shiftCashExpenses.toLocaleString()}
                 </div>
               </div>
 
               {/* 4. Expected Total Drawer Cash */}
-              <div className="p-2.5 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 space-y-1 flex flex-col justify-between">
+              <div className="p-2.5 rounded-xl bg-amber-500/[0.08] dark:bg-amber-950/20 border border-amber-600/25 dark:border-amber-800/40 space-y-1 flex flex-col justify-between shadow-xs">
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono text-[var(--gold)] uppercase font-bold tracking-wider">
+                    <span className="text-[10px] font-mono text-amber-800 dark:text-[var(--gold)] uppercase font-bold tracking-wider">
                       Expected Cash (=)
                     </span>
-                    <Sparkles className="w-3.5 h-3.5 text-[var(--gold)]" />
+                    <Sparkles className="w-3.5 h-3.5 text-amber-700 dark:text-[var(--gold)]" />
                   </div>
-                  <p className="text-[9px] text-[var(--gold)]/80 mt-0.5 truncate">
+                  <p className="text-[9px] text-amber-800/80 dark:text-[var(--gold)]/80 mt-0.5 truncate font-semibold">
                     Float + Sales - Exp
                   </p>
                 </div>
-                <div className="text-sm sm:text-base font-black font-mono text-[var(--gold)] mt-1 truncate">
+                <div className="text-sm sm:text-base font-black font-mono text-amber-800 dark:text-[var(--gold)] mt-1 truncate">
                   {currencySymbol} {expectedCashInDrawer.toLocaleString()}
                 </div>
               </div>
@@ -715,30 +776,30 @@ export default function ShiftSettlementModal({
             </div>
 
             {/* Non-Cash Channels & Turnover Summary */}
-            <div className="p-2.5 rounded-xl bg-[var(--surface-hi)]/40 border border-[var(--border)] grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-xs">
+            <div className="p-2.5 rounded-xl bg-[var(--surface-hi)]/50 dark:bg-[var(--surface-hi)]/40 border border-[var(--border)] grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-xs shadow-xs">
               <div>
-                <span className="text-[9.5px] text-[var(--text-faint)] uppercase block font-semibold">Card Terminals</span>
+                <span className="text-[9.5px] text-[var(--text-muted)] dark:text-[var(--text-faint)] uppercase block font-semibold">Card Terminals</span>
                 <span className="font-bold text-[var(--text-hi)] text-xs sm:text-sm flex items-center gap-1 mt-0.5 truncate">
-                  <CreditCard className="w-3 h-3 text-blue-400 shrink-0" />
+                  <CreditCard className="w-3 h-3 text-blue-600 dark:text-blue-400 shrink-0" />
                   <span>{currencySymbol} {shiftMetrics.systemCardSales.toLocaleString()}</span>
                 </span>
               </div>
               <div>
-                <span className="text-[9.5px] text-[var(--text-faint)] uppercase block font-semibold">Online / Raast QR</span>
+                <span className="text-[9.5px] text-[var(--text-muted)] dark:text-[var(--text-faint)] uppercase block font-semibold">Online / Raast QR</span>
                 <span className="font-bold text-[var(--text-hi)] text-xs sm:text-sm flex items-center gap-1 mt-0.5 truncate">
-                  <QrCode className="w-3 h-3 text-purple-400 shrink-0" />
+                  <QrCode className="w-3 h-3 text-purple-700 dark:text-purple-400 shrink-0" />
                   <span>{currencySymbol} {shiftMetrics.systemDigitalSales.toLocaleString()}</span>
                 </span>
               </div>
               <div>
-                <span className="text-[9.5px] text-[var(--text-faint)] uppercase block font-semibold">Tax Collected</span>
-                <span className="font-bold text-[var(--text-muted)] text-xs sm:text-sm mt-0.5 block truncate">
+                <span className="text-[9.5px] text-[var(--text-muted)] dark:text-[var(--text-faint)] uppercase block font-semibold">Tax Collected</span>
+                <span className="font-bold text-[var(--text-hi)] text-xs sm:text-sm mt-0.5 block truncate">
                   {currencySymbol} {shiftMetrics.totalTaxCollected.toLocaleString()}
                 </span>
               </div>
               <div>
-                <span className="text-[9.5px] text-[var(--gold)] uppercase block font-bold">Gross Turnover</span>
-                <span className="font-extrabold text-[var(--gold)] text-xs sm:text-sm mt-0.5 block truncate">
+                <span className="text-[9.5px] text-amber-800 dark:text-[var(--gold)] uppercase block font-bold">Gross Turnover</span>
+                <span className="font-extrabold text-amber-800 dark:text-[var(--gold)] text-xs sm:text-sm mt-0.5 block truncate">
                   {currencySymbol} {shiftMetrics.grossSales.toLocaleString()}
                 </span>
               </div>
@@ -748,11 +809,11 @@ export default function ShiftSettlementModal({
           {/* STEP 2: PHYSICAL CASH DRAWER RECONCILIATION */}
           <div className="space-y-2.5 pt-1">
             <div className="flex items-center justify-between border-b border-[var(--border)] pb-1.5">
-              <span className="font-bold text-[var(--text-hi)] uppercase tracking-wider text-[11px] flex items-center gap-1.5 font-mono">
-                <Banknote className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="font-bold text-zinc-800 dark:text-[var(--text-hi)] uppercase tracking-wider text-[11px] flex items-center gap-1.5 font-mono">
+                <Banknote className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                 <span>Step 2: Physical Cash Drawer Reconciliation</span>
               </span>
-              <span className="font-mono text-[10.5px] text-[var(--text-muted)]">
+              <span className="font-mono text-[10.5px] text-zinc-500 dark:text-[var(--text-muted)] font-medium">
                 Count notes &amp; coins
               </span>
             </div>
@@ -760,16 +821,16 @@ export default function ShiftSettlementModal({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               
               {/* Physical Cash Input Box */}
-              <div className="p-3 rounded-xl bg-[var(--surface-hi)]/70 border border-[var(--border)] space-y-2.5">
+              <div className="p-3.5 rounded-2xl bg-[var(--surface-hi)]/60 dark:bg-[var(--surface-hi)]/70 border border-[var(--border)] space-y-2.5 shadow-xs">
                 <div>
                   <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-[var(--text-hi)] block uppercase font-mono tracking-wider">
-                      Physical Cash Counted <span className="text-red-400">*</span>
+                    <label className="text-xs font-bold text-amber-800 dark:text-[var(--gold)] block uppercase font-mono tracking-wider">
+                      Physical Cash Counted <span className="text-rose-600 dark:text-rose-400">*</span>
                     </label>
                     <button
                       type="button"
                       onClick={handleQuickMatchExpected}
-                      className="text-[11px] font-mono text-[var(--gold)] hover:underline flex items-center gap-1 font-semibold cursor-pointer"
+                      className="text-[11px] font-mono text-amber-800 hover:text-amber-700 dark:text-[var(--gold)] dark:hover:text-amber-400 hover:underline flex items-center gap-1 font-bold cursor-pointer"
                     >
                       <Sparkles className="w-3 h-3" />
                       <span>Quick Match</span>
@@ -778,18 +839,18 @@ export default function ShiftSettlementModal({
                 </div>
 
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 font-mono font-black text-sm text-[var(--gold)]">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 font-mono font-black text-sm text-amber-800 dark:text-[var(--gold)]">
                     {currencySymbol}
                   </span>
                   <input
                     type="number"
-                    step="1"
+                    step="any"
                     min="0"
                     value={actualCashCounted}
                     onChange={(e) => setActualCashCounted(e.target.value)}
                     placeholder="Counted cash amount"
                     required
-                    className="w-full bg-[var(--surface)] border border-[var(--border)] focus:border-[var(--gold)] rounded-xl pl-10 pr-3 py-2 font-mono font-black text-base text-[var(--text-hi)] focus:outline-none transition-all shadow-inner"
+                    className="w-full bg-[var(--surface)] hover:bg-[var(--surface-hi)]/50 focus:bg-[var(--surface-hi)]/80 border border-[var(--border)] focus:border-[var(--gold)] rounded-xl pl-10 pr-3 py-2 font-mono font-black text-base text-[var(--text-hi)] focus:outline-none transition-all placeholder:text-[var(--text-muted)]/50"
                   />
                 </div>
 
@@ -797,9 +858,9 @@ export default function ShiftSettlementModal({
                 <button
                   type="button"
                   onClick={() => setShowDenominations(!showDenominations)}
-                  className="w-full py-1.5 px-3 rounded-lg bg-[var(--surface)] hover:bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-mono text-[var(--text-muted)] hover:text-[var(--text-hi)] flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  className="w-full py-1.5 px-3 rounded-lg bg-[var(--surface)] hover:bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-mono font-bold text-[var(--text-hi)] flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-xs"
                 >
-                  <Calculator className="w-3.5 h-3.5 text-[var(--gold)]" />
+                  <Calculator className="w-3.5 h-3.5 text-amber-800 dark:text-[var(--gold)]" />
                   <span>{showDenominations ? "Hide Note Breakdown" : "Open Note Breakdown"}</span>
                   {showDenominations ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                 </button>
@@ -807,47 +868,47 @@ export default function ShiftSettlementModal({
 
               {/* Reconciliation Variance Card */}
               <div
-                className={`p-3 rounded-xl border flex flex-col justify-between space-y-2.5 transition-all ${
+                className={`p-3.5 rounded-2xl border flex flex-col justify-between space-y-2.5 transition-all shadow-xs ${
                   cashVariance === 0
-                    ? "bg-emerald-500/10 border-emerald-500/30"
+                    ? "bg-emerald-500/[0.08] dark:bg-emerald-950/20 border-emerald-600/25 dark:border-emerald-800/40"
                     : cashVariance > 0
-                    ? "bg-[var(--gold-dim)] border border-[var(--gold)]/30"
-                    : "bg-red-500/10 border-red-500/30"
+                    ? "bg-amber-500/[0.08] dark:bg-amber-950/20 border-amber-600/25 dark:border-amber-800/40"
+                    : "bg-rose-500/[0.08] dark:bg-rose-950/20 border-rose-600/25 dark:border-rose-800/40"
                 }`}
               >
                 <div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase font-bold tracking-wider">
+                    <span className="text-[10px] font-mono text-[var(--text-muted)] dark:text-zinc-400 uppercase font-bold tracking-wider">
                       Reconciliation Variance
                     </span>
 
                     {/* Status Badge */}
                     {cashVariance === 0 ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold font-mono bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-                        <CheckCircle2 className="w-3 h-3" />
+                      <span className="badge-pill badge-success">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
                         <span>Balanced</span>
                       </span>
                     ) : cashVariance > 0 ? (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold font-mono bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/30">
-                        <TrendingUp className="w-3 h-3" />
+                      <span className="badge-pill badge-warning">
+                        <TrendingUp className="w-3.5 h-3.5" />
                         <span>Surplus</span>
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold font-mono bg-red-500/15 text-red-400 border border-red-500/30">
-                        <AlertTriangle className="w-3 h-3" />
+                      <span className="badge-pill badge-danger">
+                        <AlertTriangle className="w-3.5 h-3.5" />
                         <span>Shortage</span>
                       </span>
                     )}
                   </div>
 
-                  <div className="mt-1.5 text-xl font-black font-mono tracking-tight">
+                  <div className="mt-1.5 text-2xl font-black font-mono tracking-tight">
                     <span
                       className={
                         cashVariance === 0
-                          ? "text-emerald-400"
+                          ? "text-emerald-700 dark:text-emerald-400"
                           : cashVariance > 0
-                          ? "text-[var(--gold)]"
-                          : "text-red-400"
+                          ? "text-amber-800 dark:text-amber-400"
+                          : "text-rose-700 dark:text-rose-400"
                       }
                     >
                       {cashVariance >= 0 ? "+" : ""}{currencySymbol} {cashVariance.toLocaleString()}
@@ -855,8 +916,16 @@ export default function ShiftSettlementModal({
                   </div>
                 </div>
 
-                <div className="text-[11px] text-[var(--text-lo)] border-t border-[var(--border)]/60 pt-1.5 space-y-1">
-                  <p>
+                <div className="text-[11.5px] border-t border-[var(--border)] pt-2 space-y-1">
+                  <p
+                    className={
+                      cashVariance === 0
+                        ? "text-emerald-800 dark:text-emerald-300 font-medium"
+                        : cashVariance > 0
+                        ? "text-amber-900 dark:text-amber-300 font-medium"
+                        : "text-rose-850 dark:text-rose-300 font-medium"
+                    }
+                  >
                     {cashVariance === 0
                       ? "Drawer is perfectly balanced with expected cash sales."
                       : cashVariance > 0
@@ -864,7 +933,7 @@ export default function ShiftSettlementModal({
                       : "Cash shortage detected against system records."}
                   </p>
                   {Math.abs(cashVariance) > FRAUD_LIMIT && (
-                    <p className="text-[10px] font-mono text-[var(--gold)] flex items-center gap-1">
+                    <p className="text-[10px] font-mono text-rose-700 dark:text-rose-400 flex items-center gap-1 font-bold">
                       <AlertTriangle className="w-3 h-3 shrink-0" />
                       <span>Exceeds audit threshold ({currencySymbol} {FRAUD_LIMIT}).</span>
                     </p>
@@ -898,8 +967,8 @@ export default function ShiftSettlementModal({
                     { label: `${currencySymbol} 10`, key: "n10" },
                     { label: `Coins (${currencySymbol})`, key: "coins" },
                   ].map((denom) => (
-                    <div key={denom.key} className="p-1.5 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
-                      <span className="text-[10px] text-[var(--text-faint)] font-bold block">
+                    <div key={denom.key} className="p-1.5 rounded-lg bg-[var(--surface)] hover:bg-[var(--surface-hi)]/50 border border-[var(--border)] shadow-xs">
+                      <span className="text-[10px] text-[var(--text-muted)] font-bold block">
                         {denom.label}
                       </span>
                       <input
@@ -910,7 +979,7 @@ export default function ShiftSettlementModal({
                         onChange={(e) =>
                           handleDenominationChange(denom.key as keyof typeof denominations, e.target.value)
                         }
-                        className="w-full bg-transparent font-bold text-xs text-[var(--text-hi)] focus:outline-none mt-0.5"
+                        className="w-full bg-transparent font-black text-xs text-[var(--text-hi)] focus:outline-none mt-0.5"
                       />
                     </div>
                   ))}
@@ -921,7 +990,7 @@ export default function ShiftSettlementModal({
             {/* STEP 3: CLOSING REMARKS */}
             <div className="space-y-1.5 pt-1">
               <label className="text-xs font-bold text-[var(--text-hi)] uppercase flex items-center gap-1.5 font-mono">
-                <FileText className="w-3.5 h-3.5 text-[var(--text-muted)]" />
+                <FileText className="w-3.5 h-3.5 text-amber-800 dark:text-[var(--text-muted)]" />
                 <span>Closing Remarks / Discrepancy Explanation</span>
               </label>
               <textarea
@@ -929,7 +998,7 @@ export default function ShiftSettlementModal({
                 onChange={(e) => setClosingNotes(e.target.value)}
                 placeholder="Optional shift notes or reconciliation remarks..."
                 rows={2}
-                className="w-full bg-[var(--surface-hi)]/70 border border-[var(--border)] focus:border-[var(--gold)] rounded-xl p-2.5 text-xs text-[var(--text-hi)] focus:outline-none transition-all placeholder:text-[var(--text-faint)] font-sans"
+                className="w-full bg-[var(--surface)] hover:bg-[var(--surface-hi)]/50 focus:bg-[var(--surface-hi)]/80 border border-[var(--border)] focus:border-[var(--gold)] rounded-xl p-2.5 text-xs text-[var(--text-hi)] focus:outline-none transition-all placeholder:text-[var(--text-muted)]/50 font-sans shadow-xs"
               />
             </div>
 
@@ -961,7 +1030,7 @@ export default function ShiftSettlementModal({
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-1/2 sm:w-auto px-4 py-2 rounded-xl bg-[var(--gold)] hover:bg-[#d4a017] text-black text-xs font-bold font-mono tracking-wide shadow-md hover:brightness-105 active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="w-1/2 sm:w-auto px-4 py-2 rounded-xl btn-gold text-[#342c14] text-xs font-bold font-mono tracking-wide shadow-md active:scale-[0.98] transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
                 <Lock className="w-3.5 h-3.5" />
                 <span className="truncate">{isSubmitting ? "Settling..." : "Confirm & Close"}</span>

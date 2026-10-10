@@ -27,12 +27,14 @@ import {
   Lock,
   AlertTriangle,
   ChevronDown,
+  Clock,
+  Users,
 } from "lucide-react";
-import { AuthenticatedUser, OrderRecord, OperatingExpense, ShiftSettlement } from "../../types";
+import { AuthenticatedUser, OrderRecord, OperatingExpense } from "../../types";
 import { useAuth } from "../../context/AuthContext";
 import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
-import ShiftSettlementModal from "./ShiftSettlementModal";
+import { resolveVariantBOM } from "../../../../lib/recipePortions";
 
 interface AnalyticsViewProps {
   user?: AuthenticatedUser;
@@ -69,8 +71,6 @@ export default function AnalyticsView({
   const [dishNameCostMap, setDishNameCostMap] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
-  const [settlements, setSettlements] = useState<ShiftSettlement[]>([]);
   const isFetchingRef = useRef(false);
   const lastFetchedRef = useRef(0);
 
@@ -90,36 +90,102 @@ export default function AnalyticsView({
       try {
         const { data: recipeRows, error: recipeErr } = await supabase
           .from("recipe_items")
-          .select("menu_item_id, quantity_required, raw_materials(id, name, cost_per_unit)")
+          .select("id, menu_item_id, variant_id, variant_name, quantity_required, unit, raw_materials(id, name, cost_per_unit)")
+          .eq("restaurant_id", restId);
+
+        const { data: menuItems } = await supabase
+          .from("menu_items")
+          .select("id, name, variants, price")
           .eq("restaurant_id", restId);
 
         if (!recipeErr && recipeRows && recipeRows.length > 0) {
           const byId: Record<string, number> = {};
           const byName: Record<string, number> = {};
 
+          // Group recipe rows by menu_item_id
+          const recipeByMenuId: Record<string, any[]> = {};
           recipeRows.forEach((r: any) => {
             const mId = String(r.menu_item_id);
-            const qtyReq = Number(r.quantity_required) || 0;
-            const unitCost = Number(r.raw_materials?.cost_per_unit) || 0;
-            const cost = qtyReq * unitCost;
-
-            byId[mId] = (byId[mId] || 0) + cost;
+            if (!recipeByMenuId[mId]) recipeByMenuId[mId] = [];
+            recipeByMenuId[mId].push(r);
           });
 
-          // Fetch menu item names to correlate with item names in orders
-          const { data: menuItems } = await supabase
-            .from("menu_items")
-            .select("id, name")
-            .eq("restaurant_id", restId);
+          // Compute base dish and variant recipe costs
+          (menuItems || []).forEach((m: any) => {
+            const mId = String(m.id);
+            const mNameClean = (m.name || "").trim().toLowerCase();
+            const dishRows = recipeByMenuId[mId] || [];
 
-          if (menuItems) {
-            menuItems.forEach((m) => {
-              const mId = String(m.id);
-              if (byId[mId] !== undefined) {
-                byName[m.name.toLowerCase().trim()] = byId[mId];
+            if (dishRows.length > 0) {
+              // 1. Base dish cost (rows without variant_id or variant_name, or all if no variants)
+              const baseRows = dishRows.filter((r: any) => !r.variant_id && !r.variant_name);
+              const activeBaseRows = baseRows.length > 0 ? baseRows : dishRows;
+              const baseCost = activeBaseRows.reduce((sum: number, r: any) => {
+                const qtyReq = Number(r.quantity_required) || 0;
+                const unitCost = Number(r.raw_materials?.cost_per_unit) || 0;
+                return sum + qtyReq * unitCost;
+              }, 0);
+
+              byId[mId] = baseCost;
+              if (mNameClean) byName[mNameClean] = baseCost;
+
+              // 2. Parse variants
+              let variantsList: any[] = [];
+              if (Array.isArray(m.variants)) {
+                variantsList = m.variants;
+              } else if (typeof m.variants === "string") {
+                try {
+                  const parsed = JSON.parse(m.variants);
+                  if (Array.isArray(parsed)) variantsList = parsed;
+                } catch {}
               }
-            });
-          }
+
+              // Also collect any variant names directly from recipeRows if not in menu.variants
+              const distinctRecipeVariants = Array.from(
+                new Set(dishRows.map((r: any) => r.variant_name).filter(Boolean))
+              );
+              distinctRecipeVariants.forEach((vName) => {
+                if (!variantsList.some((v: any) => v.name && v.name.toLowerCase() === vName.toLowerCase())) {
+                  variantsList.push({ name: vName });
+                }
+              });
+
+              // 3. For each variant, compute exact variant BOM cost
+              variantsList.forEach((v: any) => {
+                const bom = resolveVariantBOM(v, dishRows, m.price);
+                const variantCost = bom.reduce((sum: number, ing: any) => {
+                  const reqQty = Number(ing.quantity_required) || 0;
+                  const unitCost = Number(ing.cost_per_unit) || 0;
+                  return sum + reqQty * unitCost;
+                }, 0);
+
+                if (variantCost > 0) {
+                  const vNameClean = (v.name || "").trim().toLowerCase();
+                  const vIdStr = v.id ? String(v.id).trim().toLowerCase() : "";
+
+                  if (vIdStr) byId[`${mId}_${vIdStr}`] = variantCost;
+                  if (vNameClean) {
+                    byId[`${mId}_${vNameClean}`] = variantCost;
+                    byId[`${mId}_${vNameClean.replace(/\s+/g, "_")}`] = variantCost;
+                    if (mNameClean) {
+                      byName[`${mNameClean} (${vNameClean})`] = variantCost;
+                      byName[`${mNameClean} - ${vNameClean}`] = variantCost;
+                    }
+                  }
+                }
+              });
+            }
+          });
+
+          // Also populate any recipe rows that might belong to dishes not in menuItems
+          recipeRows.forEach((r: any) => {
+            const mId = String(r.menu_item_id);
+            if (byId[mId] === undefined) {
+              const qtyReq = Number(r.quantity_required) || 0;
+              const unitCost = Number(r.raw_materials?.cost_per_unit) || 0;
+              byId[mId] = (byId[mId] || 0) + qtyReq * unitCost;
+            }
+          });
 
           setRecipeCostMap(byId);
           setDishNameCostMap(byName);
@@ -187,22 +253,6 @@ export default function AnalyticsView({
         console.warn("[AnalyticsView] Operating expenses fetch error:", expEx);
       }
 
-      // 4. Fetch recent Shift Settlements (Z-Reports) strictly from Supabase
-      try {
-        const { data: shiftData, error: shiftErr } = await supabase
-          .from("shift_settlements")
-          .select("*")
-          .eq("restaurant_id", restId)
-          .order("created_at", { ascending: false })
-          .limit(8);
-
-        if (!shiftErr && shiftData) {
-          setSettlements(shiftData);
-        }
-      } catch (shErr) {
-        console.warn("[AnalyticsView] Shift settlements fetch error:", shErr);
-      }
-
       if (isManualRefresh) showToast("Financial dataset synchronized.");
     } catch (err) {
       console.error("[AnalyticsView] Fetch error:", err);
@@ -242,6 +292,7 @@ export default function AnalyticsView({
       return true;
     });
   }, [orders, datePreset]);
+
 
   // Filter expenses by selected Date Preset
   const filteredExpenses = useMemo(() => {
@@ -338,20 +389,72 @@ export default function AnalyticsView({
 
       // Line items COGS computation
       if (Array.isArray(order.items)) {
-        order.items.forEach((item) => {
-          const qty = Number(item.quantity) || 1;
+        order.items.forEach((item: any) => {
+          const qty = Number(item.quantity ?? item.qty ?? 1);
           const price = Number(item.price) || 0;
           const itemId = String(item.id || "");
           const cleanName = (item.name || "Special Item").trim();
           const cleanKey = cleanName.toLowerCase();
 
           // Resolve unit recipe cost
-          const unitCost =
-            recipeCostMap[itemId] !== undefined
-              ? recipeCostMap[itemId]
-              : dishNameCostMap[cleanKey] !== undefined
-              ? dishNameCostMap[cleanKey]
-              : 0;
+          let unitCost = 0;
+
+          // 1. Direct match by itemId (e.g. "uuid", "uuid_var_1")
+          if (recipeCostMap[itemId] !== undefined && recipeCostMap[itemId] > 0) {
+            unitCost = recipeCostMap[itemId];
+          }
+          // 2. Direct match by clean dish / variant name (e.g. "Zinger Burger (Double Patty)")
+          else if (dishNameCostMap[cleanKey] !== undefined && dishNameCostMap[cleanKey] > 0) {
+            unitCost = dishNameCostMap[cleanKey];
+          }
+          // 3. Match from item's variant object if present
+          else if (item.selectedVariant || item.variant) {
+            const vObj = item.selectedVariant || item.variant;
+            const vId = vObj?.id ? String(vObj.id).toLowerCase() : "";
+            const vName = (vObj?.name || "").trim().toLowerCase();
+            const baseId = itemId.includes("_") ? itemId.split("_")[0] : itemId;
+
+            if (vId && recipeCostMap[`${baseId}_${vId}`] !== undefined) {
+              unitCost = recipeCostMap[`${baseId}_${vId}`];
+            } else if (vName && recipeCostMap[`${baseId}_${vName}`] !== undefined) {
+              unitCost = recipeCostMap[`${baseId}_${vName}`];
+            } else if (vName) {
+              const parentName = cleanName.replace(/\s*\([^)]*\)$/, "").trim().toLowerCase();
+              if (dishNameCostMap[`${parentName} (${vName})`] !== undefined) {
+                unitCost = dishNameCostMap[`${parentName} (${vName})`];
+              }
+            }
+          }
+
+          // 4. If cleanName has "Dish (Variant)" format
+          if (unitCost === 0 && cleanName.includes("(") && cleanName.endsWith(")")) {
+            const match = cleanName.match(/^(.+?)\s*\(([^)]+)\)$/);
+            if (match) {
+              const baseName = match[1].trim().toLowerCase();
+              const varName = match[2].trim().toLowerCase();
+              if (dishNameCostMap[`${baseName} (${varName})`] !== undefined) {
+                unitCost = dishNameCostMap[`${baseName} (${varName})`];
+              } else if (dishNameCostMap[baseName] !== undefined) {
+                unitCost = dishNameCostMap[baseName];
+              }
+            }
+          }
+
+          // 5. Fallback to baseId if itemId contains an underscore
+          if (unitCost === 0 && itemId.includes("_")) {
+            const baseId = itemId.split("_")[0];
+            if (recipeCostMap[baseId] !== undefined && recipeCostMap[baseId] > 0) {
+              unitCost = recipeCostMap[baseId];
+            }
+          }
+
+          // 6. Fallback to base dish name
+          if (unitCost === 0) {
+            const baseName = cleanName.replace(/\s*\([^)]*\)$/, "").trim().toLowerCase();
+            if (dishNameCostMap[baseName] !== undefined && dishNameCostMap[baseName] > 0) {
+              unitCost = dishNameCostMap[baseName];
+            }
+          }
 
           if (unitCost === 0) {
             uncostedItemsFound = true;
@@ -467,14 +570,6 @@ export default function AnalyticsView({
     };
   }, [filteredOrders, filteredExpenses, recipeCostMap, dishNameCostMap]);
 
-  // Thermal Z-Report Print Handler
-  const handlePrintZReport = () => {
-    if (typeof window !== "undefined") {
-      showToast("Printing Shift Financial Z-Report...");
-      window.print();
-    }
-  };
-
   // Tax Authority Name based on user city
   const city = user?.city || "";
   const taxAuthorityName = /karachi|hyderabad|sukkur|larkana/i.test(city)
@@ -484,24 +579,16 @@ export default function AnalyticsView({
     : "PRA (16%)";
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* Tier 1: Top Banner & Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
-            <DollarSign className="w-3.5 h-3.5" />
-            FINANCIAL LEDGER &amp; P&amp;L PERFORMANCE
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
             Financials &amp;{" "}
             <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
               Analytics
             </span>
           </h1>
-          <p className="text-xs sm:text-sm text-[var(--text-lo)] mt-1 font-medium">
-            Live gross turnover, recipe-based COGS, and operational net profit margins.
-          </p>
         </div>
 
         <div className="flex items-center gap-2.5 w-full sm:w-auto">
@@ -525,15 +612,6 @@ export default function AnalyticsView({
             </select>
             <ChevronDown className="w-3.5 h-3.5 text-[var(--text-faint)] pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2" />
           </div>
-
-          <button
-            onClick={() => setIsShiftModalOpen(true)}
-            className="inline-flex items-center gap-2 px-3.5 py-2.5 h-10 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] hover:border-[var(--gold)] text-xs font-semibold text-[var(--text-lo)] hover:text-[var(--text-hi)] transition-all cursor-pointer shrink-0"
-            title="Print Shift Z-Report & Reconcile Register"
-          >
-            <Printer className="w-3.5 h-3.5 text-[var(--gold)]" />
-            <span>Z-Report</span>
-          </button>
         </div>
       </div>
 
@@ -1037,16 +1115,18 @@ export default function AnalyticsView({
                         <td className="py-3 px-2 text-center">
                           {dish.hasRecipe ? (
                             <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              className={`badge-pill ${
                                 dish.marginPct >= 50
-                                  ? "bg-[#25d366]/15 text-[#25d366] border border-[#25d366]/30"
-                                  : "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                                  ? "badge-success"
+                                  : dish.marginPct >= 30
+                                  ? "badge-warning"
+                                  : "badge-danger"
                               }`}
                             >
                               {dish.marginPct.toFixed(0)}%
                             </span>
                           ) : (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-white/5 text-[var(--text-faint)]">
+                            <span className="badge-pill badge-neutral">
                               —
                             </span>
                           )}
@@ -1071,135 +1151,6 @@ export default function AnalyticsView({
           )}
         </div>
       </div>
-
-      {/* Tier 4: Shift Settlements & Z-Report Audit Trail */}
-      <div className="glass-panel p-6 sm:p-8 rounded-2xl border border-[var(--border)] space-y-5 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[var(--border)]">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[var(--gold)]/10 text-[var(--gold)] border border-[var(--gold)]/20 flex items-center justify-center">
-              <Lock className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-[var(--text-hi)]">
-                Cash Drawer Settlements &amp; Z-Report Audit Trail
-              </h3>
-              <p className="text-[11px] font-mono text-[var(--text-lo)]">
-                Shift reconciliation history and cashier end-of-day reports
-              </p>
-            </div>
-          </div>
-
-          <button
-            onClick={() => setIsShiftModalOpen(true)}
-            className="btn-gold animate-sheen px-4 py-2 rounded-xl text-xs font-bold font-mono inline-flex items-center gap-2 cursor-pointer shadow-md self-start sm:self-auto"
-          >
-            <Lock className="w-3.5 h-3.5" />
-            <span>End Shift / Z-Report</span>
-          </button>
-        </div>
-
-        {settlements.length === 0 ? (
-          <div className="py-8 text-center text-xs font-mono text-[var(--text-faint)] space-y-2">
-            <Lock className="w-6 h-6 mx-auto opacity-40 text-[var(--gold)]" />
-            <p>No shift settlements logged yet for this restaurant.</p>
-            <p className="text-[10px]">Close a cashier register from POS to record the first Z-report.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left font-mono text-xs">
-              <thead>
-                <tr className="border-b border-[var(--border)] text-[10.5px] uppercase tracking-wider text-[var(--text-faint)]">
-                  <th className="py-2.5 px-3">Date &amp; Time</th>
-                  <th className="py-2.5 px-3">Cashier</th>
-                  <th className="py-2.5 px-3 text-right">Opening Float</th>
-                  <th className="py-2.5 px-3 text-right">Cash Sales</th>
-                  <th className="py-2.5 px-3 text-right">Expected Cash</th>
-                  <th className="py-2.5 px-3 text-right">Actual Counted</th>
-                  <th className="py-2.5 px-3 text-right">Variance</th>
-                  <th className="py-2.5 px-3 text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--border)]/40">
-                {settlements.map((s, idx) => {
-                  const floatAmt = Number(s.opening_float) || 0;
-                  const cashSalesAmt = Number(s.system_cash_sales) || 0;
-                  const expCash = floatAmt + cashSalesAmt;
-                  const actCash = Number(s.actual_cash_counted) || 0;
-                  const varAmt = Number(s.cash_variance) || 0;
-                  const isBalanced = varAmt === 0;
-                  const isSurplus = varAmt > 0;
-                  const dateStr = s.shift_end || s.created_at;
-                  const formattedDate = dateStr
-                    ? new Date(dateStr).toLocaleString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })
-                    : "Recent";
-
-                  return (
-                    <tr key={s.id || idx} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="py-3 px-3 font-semibold text-[var(--text-hi)]">
-                        {formattedDate}
-                      </td>
-                      <td className="py-3 px-3 text-[var(--text-lo)] font-sans font-medium">
-                        {s.cashier_name || "Cashier"}
-                      </td>
-                      <td className="py-3 px-3 text-right text-[var(--text-lo)]">
-                        Rs {floatAmt.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-3 text-right text-[#25d366] font-bold">
-                        Rs {cashSalesAmt.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-3 text-right text-[var(--gold)] font-bold">
-                        Rs {expCash.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-3 text-right text-[var(--text-hi)] font-black">
-                        Rs {actCash.toLocaleString()}
-                      </td>
-                      <td
-                        className={`py-3 px-3 text-right font-bold ${
-                          isBalanced
-                            ? "text-[#25d366]"
-                            : isSurplus
-                            ? "text-amber-400"
-                            : "text-red-400"
-                        }`}
-                      >
-                        {varAmt >= 0 ? "+" : ""}Rs {varAmt.toLocaleString()}
-                      </td>
-                      <td className="py-3 px-3 text-center">
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            s.status === "FLAGGED"
-                              ? "bg-red-500/15 text-red-400 border border-red-500/30"
-                              : "bg-[#25d366]/15 text-[#25d366] border border-[#25d366]/30"
-                          }`}
-                        >
-                          {s.status || "CLOSED"}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* Shift Settlement & Z-Report Modal */}
-      <ShiftSettlementModal
-        isOpen={isShiftModalOpen}
-        onClose={() => setIsShiftModalOpen(false)}
-        showToast={showToast}
-        orders={orders}
-        cashierName={user?.name || "Terminal Cashier"}
-        onSettled={(newSettlement) => {
-          setSettlements((prev) => [newSettlement, ...prev]);
-        }}
-      />
     </div>
   );
 }

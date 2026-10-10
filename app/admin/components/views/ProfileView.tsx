@@ -223,14 +223,10 @@ export default function ProfileView({ user, showToast }: ProfileViewProps) {
   const brandInitials = cleanBrandName.substring(0, 2).toUpperCase() || "OM";
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* Top Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
-            • RESTAURANT PROFILE &amp; WHITE-LABEL BRANDING
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
             Restaurant Identity &amp;{" "}
             <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
@@ -365,9 +361,6 @@ export default function ProfileView({ user, showToast }: ProfileViewProps) {
                         <Upload className="w-3.5 h-3.5" />
                         <span>Upload Logo File</span>
                       </button>
-                      <span className="text-[11px] font-mono text-[var(--text-faint)] block">
-                        PNG, SVG, or JPG (Max 2MB)
-                      </span>
                     </div>
                   </div>
                 </div>
@@ -583,14 +576,14 @@ export default function ProfileView({ user, showToast }: ProfileViewProps) {
               </div>
 
               {/* Mockup Terminal Top Bar */}
-              <div className="p-3.5 rounded-xl bg-[#0e0a07] border border-[var(--gold)]/30 shadow-inner space-y-2">
+              <div className="p-3.5 rounded-xl bg-white/80 dark:bg-[#0e0a07] border border-[var(--border)] dark:border-[var(--gold)]/30 shadow-xs dark:shadow-inner space-y-2">
                 <div className="flex items-center justify-between text-[10px] font-mono text-[var(--text-faint)]">
-                  <span>TERMINAL BAR PREVIEW</span>
-                  <span className="text-[#25d366]">LIVE SYNC</span>
+                  <span className="font-semibold">TERMINAL BAR PREVIEW</span>
+                  <span className="text-emerald-600 dark:text-[#25d366] font-bold">LIVE SYNC</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-black/60 border border-[var(--gold)]/40 flex items-center justify-center overflow-hidden shrink-0">
+                    <div className="w-8 h-8 rounded-lg bg-[var(--surface-hi)] border border-[var(--gold)]/40 flex items-center justify-center overflow-hidden shrink-0">
                       {logoUrl && !imageError ? (
                         <img src={logoUrl} alt="Logo" className="w-full h-full object-contain" />
                       ) : (
@@ -608,10 +601,10 @@ export default function ProfileView({ user, showToast }: ProfileViewProps) {
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 text-[10px] font-mono text-[var(--gold)]">
-                    {previewTab === "pos" && <Receipt className="w-3.5 h-3.5 text-[#25d366]" />}
-                    {previewTab === "kds" && <Flame className="w-3.5 h-3.5 text-amber-400" />}
-                    {previewTab === "dispatch" && <Bike className="w-3.5 h-3.5 text-blue-400" />}
+                  <div className="flex items-center gap-1.5 text-[10px] font-mono font-bold bg-emerald-50 text-emerald-800 border border-emerald-200/80 px-2.5 py-0.5 rounded-full shadow-xs dark:bg-transparent dark:border-0 dark:text-[var(--gold)]">
+                    {previewTab === "pos" && <Receipt className="w-3.5 h-3.5 text-emerald-600 dark:text-[#25d366]" />}
+                    {previewTab === "kds" && <Flame className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />}
+                    {previewTab === "dispatch" && <Bike className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />}
                     <span>ACTIVE</span>
                   </div>
                 </div>

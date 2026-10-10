@@ -6,29 +6,18 @@ import { AdminTab } from "../types";
 
 interface ModuleLockedViewProps {
   moduleName: string;
-  requiredFeature: string;
+  requiredFeature?: string;
+  requiredFeatureKey?: string;
+  bundleName?: string;
   description?: string;
-  onNavigate: (tab: AdminTab) => void;
+  onNavigate?: (tab: AdminTab) => void;
+  onNavigateOverview?: () => void;
 }
 
 const FEATURE_BUNDLE_METADATA: Record<
   string,
   { bundleName: string; entitlementKey: string; details: string; included: string[] }
 > = {
-  INVENTORY: {
-    bundleName: "Inventory & Stock Suite",
-    entitlementKey: "inventory_stock",
-    details:
-      "Enterprise inventory tracking, supplier procurement purchase orders, raw ingredient recipe costing, and menu catalog management.",
-    included: ["Raw Materials & Real-time Stock", "Suppliers Directory & POs", "Menu Catalog & Dish Pricing", "Automatic Recipe Stock Deduction"],
-  },
-  KITCHEN: {
-    bundleName: "Kitchen & Floor Operations",
-    entitlementKey: "kds_system",
-    details:
-      "Multi-station kitchen display routing, chef ticket management, prep timers, and dynamic floor section table status matrix.",
-    included: ["Multi-Station Kitchen KDS Display", "Live KOT Ticket Sequencing & Cook Timers", "Interactive Floor Matrix & Table Occupancy", "Dine-in Floor Reservations"],
-  },
   POS: {
     bundleName: "Cloud POS Counter",
     entitlementKey: "pos_terminal",
@@ -36,11 +25,74 @@ const FEATURE_BUNDLE_METADATA: Record<
       "High-speed point of sale terminal, instant thermal receipt printing, cash drawer reconciliations, and split payments.",
     included: ["Instant Dine-in / Takeaway / Delivery Billing", "Thermal Printing & Custom Receipt Branding", "Discount & Surcharge Controls", "Shift Cash Drawer Auditing"],
   },
+  MENU: {
+    bundleName: "Menu Management",
+    entitlementKey: "menu",
+    details:
+      "Digital dish catalog, custom portion sizing, real-time 86'd stock controls, and modifier matrix.",
+    included: ["Dish Catalog & Categories", "Portion Sizing & Pricing", "Modifiers & Add-ons", "86'd Stock Availability Controls"],
+  },
+  INVENTORY: {
+    bundleName: "Inventory & Stock Suite",
+    entitlementKey: "inventory_stock",
+    details:
+      "Enterprise inventory tracking, real-time stock balances, threshold re-order alerts, and automated recipe consumption.",
+    included: ["Raw Materials & Real-time Stock", "Recipe Item Costing", "Stock Level Alerts & Thresholds", "Automatic Recipe Stock Deduction"],
+  },
+  KDS: {
+    bundleName: "Kitchen Display System (KDS)",
+    entitlementKey: "kds_system",
+    details:
+      "Multi-station kitchen display routing, live KOT ticket sequencing, chef cook timers, and order preparation tracking.",
+    included: ["Live KOT Ticket Sequencing & Cook Timers", "Multi-Station Kitchen KDS Display", "Chef Station Routing", "Visual Prep Warning Indicators"],
+  },
+  KITCHEN: {
+    bundleName: "Kitchen Display System (KDS)",
+    entitlementKey: "kds_system",
+    details:
+      "Multi-station kitchen display routing, live KOT ticket sequencing, chef cook timers, and order preparation tracking.",
+    included: ["Live KOT Ticket Sequencing & Cook Timers", "Multi-Station Kitchen KDS Display", "Chef Station Routing", "Visual Prep Warning Indicators"],
+  },
+  TABLES: {
+    bundleName: "Floor & Table Matrix",
+    entitlementKey: "table_matrix",
+    details:
+      "Interactive restaurant floor plans, table occupancy tracking, seat allocation, and live dining status.",
+    included: ["Interactive Floor Plan Layout", "Real-time Seated/Billing Occupancy", "Table Section Assignments", "Dine-in Order Linking"],
+  },
+  PROCUREMENT: {
+    bundleName: "Procurement & Purchase Orders",
+    entitlementKey: "procurement",
+    details:
+      "Vendor directory, formal purchase orders, receiving logs, and ingredient cost tracking.",
+    included: ["Vendor & Supplier Directory", "Purchase Order Generation", "Delivery Receiving & Inward Audits", "Unit Price Cost History"],
+  },
+  EXPENSES: {
+    bundleName: "Expenses & OPEX Management",
+    entitlementKey: "expenses",
+    details:
+      "Daily operational expenditures, overhead tracking, recurring bills, and petty cash logs.",
+    included: ["OPEX & Petty Cash Logs", "Vendor Payment Tracking", "Category Breakdown & Auditing", "Overhead Cost Allocation"],
+  },
+  REPORTS: {
+    bundleName: "Analytics & Executive Reports",
+    entitlementKey: "reports",
+    details:
+      "Financial auditing, hourly revenue trends, product mix velocity, and tax breakdowns.",
+    included: ["Revenue Trends & Sales Insights", "Order Channel Velocity", "Tax & Discount Audits", "Historical Settlement Exports"],
+  },
+  ANALYTICS: {
+    bundleName: "Analytics & Executive Reports",
+    entitlementKey: "reports",
+    details:
+      "Financial auditing, hourly revenue trends, product mix velocity, and tax breakdowns.",
+    included: ["Revenue Trends & Sales Insights", "Order Channel Velocity", "Tax & Discount Audits", "Historical Settlement Exports"],
+  },
   RIDER: {
-    bundleName: "Rider Dispatch & Fleet Telemetry",
+    bundleName: "Rider Dispatch & Fleet Logistics",
     entitlementKey: "rider_app",
     details:
-      "Dedicated courier dispatching, live courier geo-telemetry, customer ETA tracking, and digital COD collection settlements.",
+      "Dedicated courier dispatching, driver fleet tracking, zone delivery mapping, and COD collection settlements.",
     included: ["Live Delivery Courier Dispatch Engine", "Driver Fleet Console & Onboarding", "Zone & Sector Delivery Mapping", "Digital Cash on Delivery (COD) Settlements"],
   },
 };
@@ -48,14 +100,29 @@ const FEATURE_BUNDLE_METADATA: Record<
 export default function ModuleLockedView({
   moduleName,
   requiredFeature,
+  requiredFeatureKey,
+  bundleName,
   description,
   onNavigate,
+  onNavigateOverview,
 }: ModuleLockedViewProps) {
-  const bundle = FEATURE_BUNDLE_METADATA[requiredFeature.toUpperCase()] || {
-    bundleName: `${requiredFeature} Module`,
-    entitlementKey: requiredFeature.toLowerCase(),
-    details: "This operational module is not included in your active restaurant subscription plan.",
+  const resolvedFeature = (
+    requiredFeature ||
+    (requiredFeatureKey === "pos_terminal" ? "POS" : requiredFeatureKey) ||
+    "POS"
+  ).toUpperCase();
+
+  const baseBundle = FEATURE_BUNDLE_METADATA[resolvedFeature] || {
+    bundleName: bundleName || `${resolvedFeature} Module`,
+    entitlementKey: requiredFeatureKey || resolvedFeature.toLowerCase(),
+    details: description || "This operational module is not included in your active restaurant subscription plan.",
     included: [],
+  };
+
+  const bundle = {
+    ...baseBundle,
+    bundleName: bundleName || baseBundle.bundleName,
+    entitlementKey: requiredFeatureKey || baseBundle.entitlementKey,
   };
 
   return (
@@ -134,7 +201,13 @@ export default function ModuleLockedView({
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
           <button
             type="button"
-            onClick={() => onNavigate("overview")}
+            onClick={() => {
+              if (onNavigateOverview) {
+                onNavigateOverview();
+              } else if (onNavigate) {
+                onNavigate("overview");
+              }
+            }}
             className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface)] border border-[var(--border)] text-[var(--text-hi)] font-bold text-xs font-mono transition-all flex items-center justify-center gap-2 cursor-pointer"
           >
             <ArrowLeft className="w-4 h-4 text-[var(--text-lo)]" />
@@ -143,7 +216,7 @@ export default function ModuleLockedView({
 
           <button
             type="button"
-            onClick={() => onNavigate("subscription")}
+            onClick={() => onNavigate?.("subscription")}
             className="w-full sm:w-auto btn-gold animate-sheen px-6 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-lg"
           >
             <CreditCard className="w-4 h-4" />

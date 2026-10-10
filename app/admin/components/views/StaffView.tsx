@@ -32,6 +32,8 @@ import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
 import { useRouter } from "next/navigation";
 import StaffProvisioningView from "./StaffProvisioningView";
+import StaffShiftAuditTable from "../StaffShiftAuditTable";
+import { analyzeStaffMultiShifts } from "../../../../lib/shiftAuditNotifications";
 
 interface StaffViewProps {
   staffList: StaffMember[];
@@ -73,6 +75,11 @@ export default function StaffView({
 
   // Local roster synchronized with Supabase & deduplicated
   const [roster, setRoster] = useState<StaffMember[]>(() => deduplicateStaff(staffList));
+  const [shiftSettlements, setShiftSettlements] = useState<any[]>([]);
+
+  const staffShiftStats = useMemo(() => {
+    return analyzeStaffMultiShifts(shiftSettlements);
+  }, [shiftSettlements]);
 
   useEffect(() => {
     if (staffList) {
@@ -130,6 +137,31 @@ export default function StaffView({
             setStaffList(cleanList);
             saveStoredStaff(currentOrgId, cleanList);
           }
+        }
+
+        // Fetch shift settlements to calculate multi-shift performance and hours
+        const { data: shifts } = await supabase
+          .from("shift_settlements")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .order("created_at", { ascending: false })
+          .limit(40);
+
+        if (shifts && isMounted) {
+          // Admin shifts are excluded: register shift audit trail is strictly for cashier terminals
+          const staffOnlyShifts = shifts.filter((s: any) => {
+            const name = (s.cashier_name || "").toLowerCase().trim();
+            const role = (s.cashier_role || s.role || "").toLowerCase().trim();
+            const notes = (s.closing_notes || "").toLowerCase();
+            return !(
+              name === "admin" ||
+              role === "admin" ||
+              name.startsWith("admin ") ||
+              name.endsWith(" admin") ||
+              notes.includes("admin pos session")
+            );
+          });
+          setShiftSettlements(staffOnlyShifts);
         }
       } catch (err) {
         console.error("[StaffView] Supabase fetch exception:", err);
@@ -419,24 +451,16 @@ export default function StaffView({
   }
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* Header & Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--gold)] animate-pulse" />
-            <Users className="w-3.5 h-3.5" />
-            <span>WORKFORCE &amp; TERMINAL ROLES</span>
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
             Staff Delegation &amp;{" "}
             <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
               Terminal Access
             </span>
           </h1>
-          <p className="text-xs sm:text-sm text-[var(--text-lo)] font-medium mt-1">
-            Assign staff to dedicated terminal screens (Cashier -&gt; POS only, Chef -&gt; KDS only, Rider -&gt; Dispatch).
-          </p>
         </div>
 
         <button
@@ -479,11 +503,11 @@ export default function StaffView({
 
         {hasFeature("KITCHEN") && (
           <div className="glass-panel p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-[var(--border)] space-y-1">
-            <div className="flex items-center justify-between text-[10.5px] sm:text-[11px] font-mono text-[var(--text-faint)] uppercase">
+            <div className="flex items-center justify-between text-[10.5px] sm:text-[11px] font-mono text-[var(--text-lo)] dark:text-[var(--text-faint)] uppercase">
               <span>Chefs</span>
-              <Flame className="w-3.5 h-3.5 text-amber-400" />
+              <Flame className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
             </div>
-            <p className="text-lg sm:text-2xl font-display font-black text-amber-400">{chefsCount}</p>
+            <p className="text-lg sm:text-2xl font-display font-black text-amber-800 dark:text-amber-400">{chefsCount}</p>
           </div>
         )}
 
@@ -535,11 +559,11 @@ export default function StaffView({
 
       {/* Staff Roster Grid */}
       {roster.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 px-4 text-center bg-[var(--surface-hi)] border border-white/10 rounded-xl">
-          <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+        <div className="flex flex-col items-center justify-center py-16 px-4 text-center bg-[var(--surface-hi)] border border-[var(--border)] rounded-xl">
+          <div className="w-12 h-12 rounded-full bg-[var(--surface-base)] border border-[var(--border)] flex items-center justify-center text-[var(--gold)] mb-3">
             <Users className="w-6 h-6" />
           </div>
-          <h3 className="text-sm font-semibold text-white tracking-wide mb-4">No staff members added yet</h3>
+          <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-4">No staff members added yet</h3>
           <button
             type="button"
             onClick={handleStartAddStaff}
@@ -550,12 +574,12 @@ export default function StaffView({
           </button>
         </div>
       ) : uniqueFilteredStaff.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 px-4 text-center bg-[var(--surface-hi)] border border-white/10 rounded-xl">
-          <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+        <div className="flex flex-col items-center justify-center py-16 px-4 text-center bg-[var(--surface-hi)] border border-[var(--border)] rounded-xl">
+          <div className="w-12 h-12 rounded-full bg-[var(--surface-base)] border border-[var(--border)] flex items-center justify-center text-[var(--gold)] mb-3">
             <Users className="w-6 h-6" />
           </div>
-          <h3 className="text-sm font-semibold text-white tracking-wide">No team members match the search</h3>
-          <p className="text-xs text-white/50 max-w-sm mt-1 mb-4">Try adjusting your search query or role filter tab.</p>
+          <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No team members match the search</h3>
+          <p className="text-xs text-[var(--text-lo)] max-w-sm mt-1 mb-4">Try adjusting your search query or role filter tab.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5 sm:gap-5">
@@ -612,16 +636,16 @@ export default function StaffView({
                   {/* Role Pill & Status Toggle */}
                   <div className="flex flex-col items-end gap-1.5 shrink-0">
                     <span
-                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider ${
+                      className={`badge-pill uppercase ${
                         staff.role === "cashier"
-                          ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                          ? "badge-success"
                           : staff.role === "chef"
-                          ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                          ? "badge-warning"
                           : staff.role === "rider"
-                          ? "bg-blue-500/15 text-blue-400 border border-blue-500/30"
+                          ? "badge-info"
                           : staff.role === "waiter"
-                          ? "bg-teal-500/15 text-teal-400 border border-teal-500/30"
-                          : "bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/30"
+                          ? "badge-info"
+                          : "badge-gold"
                       }`}
                     >
                       {staff.role}
@@ -631,24 +655,16 @@ export default function StaffView({
                     <button
                       type="button"
                       onClick={() => handleToggleStatus(staff)}
-                      className={`px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase tracking-wider cursor-pointer transition-all hover:scale-105 flex items-center gap-1 ${
+                      className={`badge-pill uppercase cursor-pointer transition-all hover:scale-105 ${
                         staff.status === "active"
-                          ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/25"
+                          ? "badge-success"
                           : staff.status === "on_break"
-                          ? "bg-amber-500/15 text-amber-400 border border-amber-500/25 hover:bg-amber-500/25"
-                          : "bg-rose-500/15 text-rose-400 border border-rose-500/25 hover:bg-rose-500/25"
+                          ? "badge-warning"
+                          : "badge-danger"
                       }`}
                       title="Cycle status"
                     >
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          staff.status === "active"
-                            ? "bg-emerald-400 animate-pulse"
-                            : staff.status === "on_break"
-                            ? "bg-amber-400"
-                            : "bg-rose-400"
-                        }`}
-                      />
+                      <span className="badge-dot" />
                       <span>{staff.status === "on_break" ? "On Break" : staff.status}</span>
                     </button>
                   </div>
@@ -678,6 +694,23 @@ export default function StaffView({
                       </span>
                     )}
                   </div>
+
+                  {/* Multi-Shift & Consecutive Hours Badge */}
+                  {staffShiftStats[staff.name] && (
+                    <div className="col-span-2 p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-between text-[11px] font-mono">
+                      <span className="flex items-center gap-1.5 font-bold">
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>
+                          {staffShiftStats[staff.name].totalShiftsCount > 1
+                            ? `Consecutive (${staffShiftStats[staff.name].totalShiftsCount} Shifts)`
+                            : "1 Shift Logged"}
+                        </span>
+                      </span>
+                      <span className="font-bold text-emerald-300">
+                        {staffShiftStats[staff.name].totalHoursWorked.toFixed(1)} hrs worked
+                      </span>
+                    </div>
+                  )}
 
                   {staff.role === "rider" && (
                     <div className="col-span-2 space-y-1.5 p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400">
@@ -723,7 +756,7 @@ export default function StaffView({
                       <Receipt className="w-4 h-4 text-emerald-400 shrink-0" />
                     )}
                     {staff.assignedScreen === "Kitchen (KDS)" && (
-                      <Flame className="w-4 h-4 text-amber-400 shrink-0" />
+                      <Flame className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
                     )}
                     {staff.assignedScreen === "Rider Dispatch" && (
                       <Bike className="w-4 h-4 text-blue-400 shrink-0" />
@@ -760,6 +793,30 @@ export default function StaffView({
           ))}
         </div>
       )}
+
+      {/* Staff Shift Audit Trail & Drawer Settlements */}
+      <div className="glass-panel p-6 sm:p-8 rounded-2xl border border-[var(--border)] space-y-5 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[var(--border)]">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-[var(--gold)]/10 text-[var(--gold)] border border-[var(--gold)]/20 flex items-center justify-center">
+              <Clock className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-[var(--text-hi)]">
+                Staff Shift Audit Trail &amp; Daily Reconciliation
+              </h3>
+              <p className="text-[11px] font-mono text-[var(--text-lo)]">
+                Consolidated daily staff shift windows, cash collections, and closing drawer balances
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <StaffShiftAuditTable
+          settlements={shiftSettlements}
+          currencySymbol="Rs"
+        />
+      </div>
 
       {/* ========================================================================= */}
       {/* DELETE STAFF CONFIRMATION DIALOG (Pure Supabase DB Delete)                 */}

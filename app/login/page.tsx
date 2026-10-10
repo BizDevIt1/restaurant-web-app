@@ -9,8 +9,16 @@ import Navbar from "../components/Navbar";
 import WhatsAppFloat from "../components/WhatsAppFloat";
 import { useSplash } from "../components/SplashScreen";
 
-import { authenticateLocalAccount, setActiveUserSession } from "../../lib/tenantStore";
+import { authenticateLocalAccount, setActiveUserSession, clearUserSession, normalizeModules } from "../../lib/tenantStore";
 import { AuthenticatedUser, UserRole } from "../admin/types";
+import StartShiftModal, { ShiftTypeOption } from "../terminal/pos/components/StartShiftModal";
+import {
+  validateCashierShiftWindow,
+  isShiftFromPreviousDate,
+  isShiftForCurrentDayAndValid,
+  clearStaleShiftStorage,
+} from "../../lib/shiftSchedule";
+import { dispatchShiftOpenedAlert } from "../../lib/shiftAuditNotifications";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -28,6 +36,288 @@ export default function LoginPage() {
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotSuccess, setForgotSuccess] = useState<string | null>(null);
   const [forgotError, setForgotError] = useState<string | null>(null);
+
+  // Shift initialization & float declaration strictly at login sequence
+  const [pendingShiftStaffUser, setPendingShiftStaffUser] = useState<AuthenticatedUser | null>(null);
+  const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
+  const [previousHandover, setPreviousHandover] = useState<{
+    amount: number;
+    cashierName: string;
+    shiftType: string;
+  } | null>(null);
+
+  // Handle staff login with strict login-time shift initialization
+  const proceedWithStaffLogin = async (authUser: AuthenticatedUser) => {
+    const rawRole = (authUser.staffRole || "cashier").toLowerCase().trim();
+    const isCashier = rawRole === "cashier" || authUser.terminalAccess === "POS_ONLY";
+
+    if (isCashier) {
+      try {
+        const supabase = createClient();
+        const restId = authUser.restaurantId || authUser.organizationId || "27";
+        const staffKey = String(authUser.id || authUser.email || authUser.name || "cashier")
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, "_");
+
+        // Query if an active OPEN shift already exists for this restaurant
+        const { data: openShift } = await supabase
+          .from("shift_settlements")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .eq("status", "OPEN")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const isStaleShift = openShift ? isShiftFromPreviousDate(openShift) : false;
+
+        // If open shift belongs to a prior calendar date, cleanly close it so it never blocks or bypasses today's float
+        if (openShift && isStaleShift) {
+          try {
+            await supabase
+              .from("shift_settlements")
+              .update({
+                status: "CLOSED",
+                shift_end: new Date().toISOString(),
+                closing_notes: `System rollover: unclosed prior-day shift auto-closed on ${new Date().toLocaleDateString()} login.`,
+              })
+              .eq("id", openShift.id);
+          } catch (closeErr) {
+            console.warn("[LoginPage] Auto-close stale shift note:", closeErr);
+          }
+          clearStaleShiftStorage(restId, staffKey);
+        }
+
+        const isCurrentDayShift = openShift && !isStaleShift;
+        const isStaffActiveOnOpenShift = Boolean(
+          isCurrentDayShift && (
+            openShift.cashier_id === authUser.id ||
+            openShift.cashier_name?.toLowerCase() === (authUser.name || "").toLowerCase() ||
+            openShift.cashier_name?.toLowerCase() === (authUser.email || "").toLowerCase()
+          )
+        );
+
+        if (isCurrentDayShift && isStaffActiveOnOpenShift) {
+          // Valid open shift started TODAY for this specific cashier: persist session state and resume
+          sessionStorage.setItem(`pos_session_float_confirmed_${staffKey}`, "true");
+          localStorage.setItem(`pos_session_float_confirmed_${staffKey}`, "true");
+          sessionStorage.setItem("pos_session_float_confirmed_global", "true");
+          localStorage.setItem("pos_session_float_confirmed_global", "true");
+          sessionStorage.setItem(`pos_active_shift_${restId}`, JSON.stringify(openShift));
+          localStorage.setItem(`pos_active_shift_${restId}`, JSON.stringify(openShift));
+          sessionStorage.setItem(`pos_active_shift_${authUser.organizationId || restId}`, JSON.stringify(openShift));
+          localStorage.setItem(`pos_active_shift_${authUser.organizationId || restId}`, JSON.stringify(openShift));
+          sessionStorage.removeItem(`pos_require_opening_float_${staffKey}`);
+          localStorage.removeItem(`pos_require_opening_float_${staffKey}`);
+
+          // Mandatory Real-Time Shift Sign-In Alert Dispatch
+          const targetTenantIds = Array.from(
+            new Set(
+              [
+                String(restId || ""),
+                authUser.organizationId ? String(authUser.organizationId) : "",
+                authUser.restaurantId ? String(authUser.restaurantId) : "",
+                "default",
+              ].filter(Boolean)
+            )
+          );
+          targetTenantIds.forEach((tId) => {
+            dispatchShiftOpenedAlert(tId, {
+              cashierName: authUser.name || openShift.cashier_name || "Cashier",
+              shiftType: openShift.shift_type || "Active Shift",
+              openingFloat: Number(openShift.opening_float) || 0,
+              branchName: authUser.branchName || "Counter POS",
+            });
+          });
+
+          setActiveUserSession(authUser);
+          router.push("/terminal/pos");
+          router.refresh();
+          return;
+        }
+
+        // Fresh sign-in without a current-day active shift: MUST NOT bypass opening float modal
+        clearStaleShiftStorage(restId, staffKey);
+
+        // Strict Time Window Enforcement: Block staff members attempting to log in outside their assigned shift window
+        if (!isStaffActiveOnOpenShift && authUser.assignedShift) {
+          const shiftValidation = validateCashierShiftWindow(authUser.assignedShift);
+          if (!shiftValidation.isValid) {
+            hideSplash();
+            setErrorMessage(
+              shiftValidation.errorMessage ||
+              `Access Denied: Your assigned shift is ${shiftValidation.shiftShortName} (${shiftValidation.windowLabel}). You cannot log in during this shift window.`
+            );
+            setTimeout(() => setErrorMessage(null), 5000);
+            return;
+          }
+        }
+
+        // Query previous shift handover to display in the start shift modal
+        const { data: lastShift } = await supabase
+          .from("shift_settlements")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .neq("status", "OPEN")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const handoverSource = (!isStaleShift && openShift) ? openShift : lastShift;
+        if (handoverSource) {
+          setPreviousHandover({
+            amount: Number(
+              handoverSource.cash_handover_to_next_shift ??
+              handoverSource.actual_cash_counted ??
+              handoverSource.opening_float ??
+              0
+            ),
+            cashierName: handoverSource.cashier_name || "Previous Cashier",
+            shiftType: handoverSource.shift_type || "Previous Shift",
+          });
+        }
+
+        // Trigger shift start modal strictly at login
+        setPendingShiftStaffUser(authUser);
+        setIsShiftModalOpen(true);
+        return;
+      } catch (err) {
+        console.warn("[LoginPage] Shift check warning:", err);
+        if (authUser.assignedShift) {
+          const shiftValidation = validateCashierShiftWindow(authUser.assignedShift);
+          if (!shiftValidation.isValid) {
+            hideSplash();
+            setErrorMessage(
+              shiftValidation.errorMessage ||
+              `Access Denied: Your assigned shift is ${shiftValidation.shiftShortName} (${shiftValidation.windowLabel}). You cannot log in during this shift window.`
+            );
+            setTimeout(() => setErrorMessage(null), 5000);
+            return;
+          }
+        }
+        setPendingShiftStaffUser(authUser);
+        setIsShiftModalOpen(true);
+        return;
+      }
+    }
+
+    // Non-cashier roles (KDS, Rider, Manager, etc.)
+    setActiveUserSession(authUser);
+    if (rawRole === "chef" || rawRole === "kitchen") {
+      router.push("/terminal/kitchen");
+    } else if (rawRole === "rider") {
+      router.push("/terminal/rider");
+    } else {
+      router.push("/terminal");
+    }
+    router.refresh();
+  };
+
+  const handleConfirmStartShiftOnLogin = async (payload: {
+    shiftType: ShiftTypeOption;
+    openingFloat: number;
+    notes?: string;
+  }) => {
+    if (!pendingShiftStaffUser) return;
+    const authUser = pendingShiftStaffUser;
+    const supabase = createClient();
+    const restId = authUser.restaurantId || authUser.organizationId || "27";
+    const numericRestId = !isNaN(Number(restId)) ? Number(restId) : null;
+    const branchId = authUser.branchId;
+    const numericBranchId =
+      typeof branchId === "number" && branchId > 0
+        ? branchId
+        : /^\d+$/.test(String(branchId || ""))
+          ? parseInt(String(branchId), 10)
+          : null;
+
+    const cashierName = authUser.name || authUser.email || "Terminal Cashier";
+
+    const shiftPayload: any = {
+      restaurant_id: numericRestId,
+      cashier_name: cashierName,
+      shift_start: new Date().toISOString(),
+      opening_float: payload.openingFloat,
+      actual_cash_counted: 0,
+      status: "OPEN",
+      closing_notes: `Shift: ${payload.shiftType}${payload.notes ? " | " + payload.notes : ""}`,
+      created_at: new Date().toISOString(),
+    };
+
+    if (numericBranchId) {
+      shiftPayload.branch_id = numericBranchId;
+    }
+
+    let { data, error } = await supabase
+      .from("shift_settlements")
+      .insert([{ ...shiftPayload, shift_type: payload.shiftType }])
+      .select()
+      .single();
+
+    if (error && (error.code === "PGRST204" || error.message?.includes("shift_type"))) {
+      const retry = await supabase
+        .from("shift_settlements")
+        .insert([shiftPayload])
+        .select()
+        .single();
+      data = retry.data;
+      error = retry.error;
+    }
+
+    const shiftRecord = data || {
+      id: "shift_" + Date.now(),
+      ...shiftPayload,
+      shift_type: payload.shiftType,
+    };
+
+    // Store in both sessionStorage and localStorage for permanent session immunity
+    const staffKey = String(authUser.id || authUser.email || authUser.name || "cashier")
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "_");
+    sessionStorage.setItem(`pos_session_float_confirmed_${staffKey}`, "true");
+    localStorage.setItem(`pos_session_float_confirmed_${staffKey}`, "true");
+    sessionStorage.setItem("pos_session_float_confirmed_global", "true");
+    localStorage.setItem("pos_session_float_confirmed_global", "true");
+    sessionStorage.setItem(`pos_active_shift_${restId}`, JSON.stringify(shiftRecord));
+    localStorage.setItem(`pos_active_shift_${restId}`, JSON.stringify(shiftRecord));
+    sessionStorage.setItem(`pos_active_shift_${authUser.organizationId || restId}`, JSON.stringify(shiftRecord));
+    localStorage.setItem(`pos_active_shift_${authUser.organizationId || restId}`, JSON.stringify(shiftRecord));
+    sessionStorage.removeItem(`pos_require_opening_float_${staffKey}`);
+    localStorage.removeItem(`pos_require_opening_float_${staffKey}`);
+
+    // Mandatory Real-Time Shift Started Alert Dispatch
+    const targetTenantIds = Array.from(
+      new Set(
+        [
+          String(numericRestId || restId || ""),
+          authUser.organizationId ? String(authUser.organizationId) : "",
+          authUser.restaurantId ? String(authUser.restaurantId) : "",
+          "default",
+        ].filter(Boolean)
+      )
+    );
+    targetTenantIds.forEach((tId) => {
+      dispatchShiftOpenedAlert(tId, {
+        cashierName: cashierName,
+        shiftType: payload.shiftType,
+        openingFloat: Number(payload.openingFloat) || 0,
+        branchName: authUser.branchName || "Counter POS",
+      });
+    });
+
+    setActiveUserSession(authUser);
+    setIsShiftModalOpen(false);
+    setPendingShiftStaffUser(null);
+
+    router.push("/terminal/pos");
+    router.refresh();
+  };
+
+  const handleCancelShiftModalOnLogin = () => {
+    setIsShiftModalOpen(false);
+    setPendingShiftStaffUser(null);
+    clearUserSession();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,23 +337,63 @@ export default function LoginPage() {
     // 1. Check if user is an operational staff member in Supabase (Cashier, Chef, Rider, Branch Manager)
     try {
       const supabase = createClient();
-      const { data: staffData } = await supabase
+      let staffQuery = supabase
         .from("staff_members")
-        .select("*, restaurants(*)")
-        .eq("email", trimmedEmail)
-        .maybeSingle();
+        .select("*, restaurants(*)");
+
+      if (trimmedEmail.includes("@")) {
+        staffQuery = staffQuery.eq("email", trimmedEmail);
+      } else {
+        staffQuery = staffQuery.or(`email.eq.${trimmedEmail},phone.eq.${trimmedEmail}`);
+      }
+
+      const { data: staffData } = await staffQuery.maybeSingle();
 
       if (staffData) {
         if (staffData.password_hash === trimmedPassword || staffData.password_hash === password) {
           hideSplash();
           if (staffData.status !== "active") {
             setErrorMessage("This staff account is currently suspended or inactive. Contact branch manager.");
-          } else {
-            // Staff members are strictly restricted from the Web Admin Dashboard.
-            // Stay right on login page and show message without redirecting or wiping admin session.
-            setErrorMessage("Staff member accounts cannot log in to the web admin portal. Please access via your dedicated terminal.");
+            setTimeout(() => setErrorMessage(null), 4000);
+            return;
           }
-          setTimeout(() => setErrorMessage(null), 4000);
+
+          // Authenticate staff member session
+          const rest = staffData.restaurants || {};
+          const rawRole = (staffData.role || "cashier").toLowerCase().trim();
+          const authUser: AuthenticatedUser = {
+            id: String(staffData.id),
+            email: staffData.email || trimmedEmail,
+            name: staffData.full_name || "Staff Member",
+            role: "STAFF_MEMBER",
+            userType: "STAFF",
+            staffRole: rawRole as any,
+            terminalAccess:
+              staffData.terminal_access ||
+              (rawRole === "cashier"
+                ? "POS_ONLY"
+                : rawRole === "chef"
+                ? "KDS_ONLY"
+                : rawRole === "rider"
+                ? "RIDER_ONLY"
+                : "FULL_ADMIN"),
+            restaurantName: rest.brand_name || staffData.branch_name || "Restaurant",
+            branchId: staffData.branch_id ? String(staffData.branch_id) : undefined,
+            branchName: staffData.branch_name || undefined,
+            city: rest.city || "",
+            address: rest.hq_address || "",
+            phone: staffData.phone || rest.phone || "",
+            assignedFeatures: normalizeModules(rest.enabled_modules || ["pos_terminal", "kds_system", "rider_app"]),
+            organizationId: String(staffData.restaurant_id || rest.id || "27"),
+            restaurantId: String(staffData.restaurant_id || rest.id || "27"),
+            assignedShift: staffData.shift || undefined,
+            enableKitchenKds: rest.enable_kitchen_kds !== undefined ? Boolean(rest.enable_kitchen_kds) : (Array.isArray(rest.enabled_modules) ? rest.enabled_modules.includes("kds_system") : true),
+            enableTableService: rest.enable_table_service !== undefined ? Boolean(rest.enable_table_service) : true,
+            enableDirectThermalPrint: rest.enable_direct_thermal_print !== undefined ? Boolean(rest.enable_direct_thermal_print) : true,
+            enableOfflineSync: rest.enable_offline_sync !== undefined ? Boolean(rest.enable_offline_sync) : true,
+          };
+
+          await proceedWithStaffLogin(authUser);
           return;
         } else {
           hideSplash();
@@ -86,8 +416,28 @@ export default function LoginPage() {
       if (matchedLocalStaff) {
         if (matchedLocalStaff.password === trimmedPassword || matchedLocalStaff.password === password) {
           hideSplash();
-          setErrorMessage("Staff member accounts cannot log in to the web admin portal. Please access via your dedicated terminal.");
-          setTimeout(() => setErrorMessage(null), 4000);
+          const rawRole = (matchedLocalStaff.role || "cashier").toLowerCase().trim();
+          const authUser: AuthenticatedUser = {
+            id: String(matchedLocalStaff.id),
+            email: matchedLocalStaff.email || trimmedEmail,
+            name: matchedLocalStaff.name || "Staff Member",
+            role: "STAFF_MEMBER",
+            userType: "STAFF",
+            staffRole: rawRole as any,
+            terminalAccess:
+              matchedLocalStaff.terminalAccess ||
+              (rawRole === "cashier" ? "POS_ONLY" : rawRole === "chef" ? "KDS_ONLY" : "FULL_ADMIN"),
+            restaurantName: matchedLocalStaff.branchName || "Restaurant",
+            branchId: matchedLocalStaff.branchId ? String(matchedLocalStaff.branchId) : undefined,
+            branchName: matchedLocalStaff.branchName,
+            phone: matchedLocalStaff.phone || "",
+            assignedFeatures: ["POS", "KITCHEN", "INVENTORY"],
+            organizationId: "27",
+            restaurantId: "27",
+            assignedShift: (matchedLocalStaff as any).shift || undefined,
+          };
+
+          await proceedWithStaffLogin(authUser);
           return;
         } else {
           hideSplash();
@@ -396,49 +746,6 @@ export default function LoginPage() {
 
           const mappedRole: UserRole = isFranchise ? "FRANCHISE_OWNER" : "STANDALONE_ADMIN";
 
-          // Normalize feature modules helper: Strict Bundled Entitlements
-          const normalizeModules = (modules: any): string[] => {
-            // Always-On Core modules available to all authenticated Admins
-            const DEFAULT_FEATURES = [
-              "OVERVIEW",
-              "EXPENSES",
-              "ANALYTICS",
-              "STAFF",
-              "SETTINGS",
-              "SUBSCRIPTION",
-            ];
-
-            if (!Array.isArray(modules) || modules.length === 0) {
-              return DEFAULT_FEATURES;
-            }
-
-            const mapping: Record<string, string> = {
-              pos_terminal: "POS",
-              pos: "POS",
-              kds_system: "KITCHEN",
-              kds: "KITCHEN",
-              kitchen: "KITCHEN",
-              tables: "KITCHEN",
-              rider_app: "RIDER",
-              rider: "RIDER",
-              riders: "RIDER",
-              dispatch: "RIDER",
-              inventory_stock: "INVENTORY",
-              inventory: "INVENTORY",
-              procurement: "INVENTORY",
-              menu: "INVENTORY",
-              branches: "BRANCHES",
-            };
-
-            const assigned = modules
-              .map((m: any) => {
-                const lower = String(m || "").toLowerCase().trim();
-                return mapping[lower] || null;
-              })
-              .filter(Boolean) as string[];
-
-            return Array.from(new Set([...DEFAULT_FEATURES, ...assigned]));
-          };
 
           let parsedBranches: any[] = [];
           if (isFranchise) {
@@ -513,6 +820,10 @@ export default function LoginPage() {
             branchesCount: isFranchise ? parsedBranches.length : 1,
             organizationId: String(targetRest.id),
             restaurantId: String(targetRest.id),
+            enableKitchenKds: targetRest.enable_kitchen_kds !== undefined ? Boolean(targetRest.enable_kitchen_kds) : (Array.isArray(targetRest.enabled_modules) ? targetRest.enabled_modules.includes("kds_system") : true),
+            enableTableService: targetRest.enable_table_service !== undefined ? Boolean(targetRest.enable_table_service) : true,
+            enableDirectThermalPrint: targetRest.enable_direct_thermal_print !== undefined ? Boolean(targetRest.enable_direct_thermal_print) : true,
+            enableOfflineSync: targetRest.enable_offline_sync !== undefined ? Boolean(targetRest.enable_offline_sync) : true,
           };
 
           setActiveUserSession(authUser);
@@ -646,14 +957,14 @@ export default function LoginPage() {
               {/* Email */}
               <div className="space-y-1.5">
                 <label className="block text-xs font-semibold text-[var(--text-hi)] uppercase tracking-wider">
-                  Email Address
+                  Email
                 </label>
                 <input
-                  type="email"
+                  type="text"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="owner@restaurant.pk"
+                  placeholder="Enter your email"
                   className="w-full px-4 py-3 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-sm text-[var(--text-hi)] placeholder-[var(--text-faint)] focus:outline-none focus:border-[var(--gold)] focus:ring-1 focus:ring-[var(--gold)] transition-colors"
                 />
               </div>
@@ -813,6 +1124,27 @@ export default function LoginPage() {
               </form>
             </div>
           </div>
+        )}
+
+        {/* Strict Login-Time Shift Start & Opening Float Modal */}
+        {pendingShiftStaffUser && (
+          <StartShiftModal
+            isOpen={isShiftModalOpen}
+            user={pendingShiftStaffUser}
+            cashierName={pendingShiftStaffUser.name || "Terminal Cashier"}
+            branchName={
+              pendingShiftStaffUser.restaurantName ||
+              pendingShiftStaffUser.branchName ||
+              "Main Branch • Register #01"
+            }
+            currencySymbol="Rs"
+            assignedShift={pendingShiftStaffUser.assignedShift as any}
+            previousHandoverAmount={previousHandover?.amount}
+            previousCashierName={previousHandover?.cashierName}
+            previousShiftType={previousHandover?.shiftType}
+            onConfirmStartShift={handleConfirmStartShiftOnLogin}
+            onLogOut={handleCancelShiftModalOnLogin}
+          />
         )}
       </main>
 

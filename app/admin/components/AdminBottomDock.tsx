@@ -49,69 +49,50 @@ export default function AdminBottomDock({
         </div>
       </div>
 
-      {/* Dock Navigation Items */}
-      <div className="flex-1 flex items-center justify-around gap-1 max-w-md mx-auto">
-        {/* Tab 1: Dashboard / Overview */}
+      {/* Dock Navigation Items: Exactly 2 Core Tabs + 1 Menu Trigger Button */}
+      <div className="flex-1 flex items-center justify-around gap-2 max-w-sm mx-auto">
+        {/* Core Tab 1: Dashboard / Overview */}
         <button
           type="button"
           onClick={() => setActiveTab("overview")}
-          className={`flex flex-col items-center justify-center gap-1 min-w-[64px] py-1 transition-all cursor-pointer ${
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 max-w-[90px] transition-all cursor-pointer ${
             isDashboardActive
-              ? "border border-[var(--gold)] bg-[var(--gold-dim)] text-[var(--gold)] font-semibold text-[11px] rounded-xl px-3 py-1.5 shadow-sm"
+              ? "border border-[var(--gold)] bg-[var(--gold-dim)] text-[var(--gold)] font-bold text-[11px] rounded-xl px-3 py-1.5 shadow-sm"
               : "text-[var(--text-lo)] hover:text-[var(--gold)] text-[11px] font-medium px-2"
           }`}
         >
           <LayoutGrid className="w-4 h-4 shrink-0" />
-          <span className="leading-none text-[11px]">Dashboard</span>
+          <span className="leading-none text-[11px] truncate">Dashboard</span>
         </button>
 
-        {/* Tab 2: POS Counter (only if entitled) */}
-        {hasPos && (
-          <button
-            type="button"
-            onClick={() => setActiveTab("pos")}
-            className={`flex flex-col items-center justify-center gap-1 min-w-[64px] py-1 transition-all cursor-pointer ${
-              isPosActive
-                ? "border border-[var(--gold)] bg-[var(--gold-dim)] text-[var(--gold)] font-semibold text-[11px] rounded-xl px-3 py-1.5 shadow-sm"
-                : "text-[var(--text-lo)] hover:text-[var(--gold)] text-[11px] font-medium px-2"
-            }`}
-          >
+        {/* Core Tab 2: POS Counter (or Kitchen if POS disabled) */}
+        <button
+          type="button"
+          onClick={() => setActiveTab(hasPos ? "pos" : "kds")}
+          className={`flex-1 flex flex-col items-center justify-center gap-1 py-1 max-w-[90px] transition-all cursor-pointer ${
+            (hasPos ? isPosActive : isKdsActive)
+              ? "border border-[var(--gold)] bg-[var(--gold-dim)] text-[var(--gold)] font-bold text-[11px] rounded-xl px-3 py-1.5 shadow-sm"
+              : "text-[var(--text-lo)] hover:text-[var(--gold)] text-[11px] font-medium px-2"
+          }`}
+        >
+          {hasPos ? (
             <Receipt className="w-4 h-4 shrink-0" />
-            <span className="leading-none text-[11px]">POS</span>
-          </button>
-        )}
+          ) : (
+            <Flame className="w-4 h-4 shrink-0" />
+          )}
+          <span className="leading-none text-[11px] truncate">
+            {hasPos ? "POS Counter" : "Kitchen"}
+          </span>
+        </button>
 
-        {/* Tab 3: Kitchen KDS (only if entitled) */}
-        {hasKitchen && (
-          <button
-            type="button"
-            onClick={() => setActiveTab("kds")}
-            className={`flex flex-col items-center justify-center gap-1 min-w-[64px] py-1 transition-all cursor-pointer relative ${
-              isKdsActive
-                ? "border border-[var(--gold)] bg-[var(--gold-dim)] text-[var(--gold)] font-semibold text-[11px] rounded-xl px-3 py-1.5 shadow-sm"
-                : "text-[var(--text-lo)] hover:text-[var(--gold)] text-[11px] font-medium px-2"
-            }`}
-          >
-            <div className="relative">
-              <Flame className="w-4 h-4 shrink-0" />
-              {kdsCount > 0 && (
-                <span className="absolute -top-1.5 -right-2 w-3.5 h-3.5 rounded-full bg-[var(--gold)] text-[var(--bg-deep)] text-[9px] font-mono font-bold flex items-center justify-center">
-                  {kdsCount > 9 ? "9+" : kdsCount}
-                </span>
-              )}
-            </div>
-            <span className="leading-none text-[11px]">Kitchen</span>
-          </button>
-        )}
-
-        {/* Tab 4: Menu Trigger Button */}
+        {/* Dedicated Menu Trigger Button */}
         <button
           type="button"
           onClick={onOpenMenuDrawer}
-          className="flex flex-col items-center justify-center gap-1 min-w-[64px] py-1 transition-all cursor-pointer text-[var(--text-lo)] hover:text-[var(--gold)] text-[11px] font-medium px-2"
+          className="flex-1 flex flex-col items-center justify-center gap-1 py-1 max-w-[90px] transition-all cursor-pointer text-[var(--text-lo)] hover:text-[var(--gold)] text-[11px] font-medium px-2"
         >
           <Menu className="w-4 h-4 shrink-0" />
-          <span className="leading-none text-[11px]">Menu</span>
+          <span className="leading-none text-[11px] truncate">Menu</span>
         </button>
       </div>
     </nav>

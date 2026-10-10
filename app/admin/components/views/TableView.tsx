@@ -25,9 +25,10 @@ import {
 import { RestaurantTable } from "../../types";
 import ResponsiveSelect from "../ResponsiveSelect";
 import { useAuth } from "../../context/AuthContext";
-import { useAdminCache, mapRowToRestaurantTable } from "../../context/AdminCacheContext";
+import { useAdminCache, mapRowToRestaurantTable, mapRowToTableStatus } from "../../context/AdminCacheContext";
 import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
+import { saveStoredTables } from "../../../../lib/tenantStore";
 
 interface TableViewProps {
   showToast: (msg: string) => void;
@@ -55,29 +56,29 @@ const STATUS_CONFIG: Record<
 > = {
   AVAILABLE: {
     label: "Available",
-    pillClass: "bg-[#25d366]/15 text-[#25d366] border border-[#25d366]/30",
-    dotClass: "bg-[#25d366]",
-    borderHover: "hover:border-[#25d366]/40",
-    bgGlow: "bg-[#25d366]/5",
+    pillClass: "badge-pill badge-success",
+    dotClass: "badge-dot",
+    borderHover: "hover:border-emerald-500/40 dark:hover:border-[#25d366]/40",
+    bgGlow: "bg-emerald-500/5 dark:bg-[#25d366]/5",
   },
   OCCUPIED: {
     label: "Occupied",
-    pillClass: "bg-red-500/15 text-red-400 border border-red-500/30",
-    dotClass: "bg-red-500 animate-pulse",
-    borderHover: "hover:border-red-500/40",
-    bgGlow: "bg-red-500/5",
+    pillClass: "badge-pill badge-danger",
+    dotClass: "badge-dot animate-pulse",
+    borderHover: "hover:border-rose-500/40 dark:hover:border-red-500/40",
+    bgGlow: "bg-rose-500/5 dark:bg-red-500/5",
   },
   BILLED: {
     label: "Billed",
-    pillClass: "bg-amber-500/15 text-amber-400 border border-amber-500/30",
-    dotClass: "bg-amber-500",
+    pillClass: "badge-pill badge-warning",
+    dotClass: "badge-dot",
     borderHover: "hover:border-amber-500/40",
     bgGlow: "bg-amber-500/5",
   },
   RESERVED: {
     label: "Reserved",
-    pillClass: "bg-blue-500/15 text-blue-400 border border-blue-500/30",
-    dotClass: "bg-blue-500",
+    pillClass: "badge-pill badge-info",
+    dotClass: "badge-dot",
     borderHover: "hover:border-blue-500/40",
     bgGlow: "bg-blue-500/5",
   },
@@ -375,6 +376,9 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
       const supabase = createClient();
       const { restId } = await getValidTenantContext(user);
       localStorage.setItem(`tables_list_${restId}`, JSON.stringify(updatedTables));
+      saveStoredTables(String(restId), updatedTables.map((t, i) => mapRowToTableStatus(t, i)));
+      window.dispatchEvent(new CustomEvent("pos_tables_updated", { detail: { restId, tables: updatedTables } }));
+      window.dispatchEvent(new Event("storage"));
 
       const updatePayload: Record<string, any> = {
         status: newStatus.toLowerCase(),
@@ -438,6 +442,9 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
         );
         setTables(updated);
         localStorage.setItem(`tables_list_${restId}`, JSON.stringify(updated));
+        saveStoredTables(String(restId), updated.map((t, i) => mapRowToTableStatus(t, i)));
+        window.dispatchEvent(new CustomEvent("pos_tables_updated", { detail: { restId, tables: updated } }));
+        window.dispatchEvent(new Event("storage"));
 
         // Supabase update
         const { error } = await supabase
@@ -502,9 +509,13 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
             updated_at: data.updated_at,
           };
 
-          setTables((prev) => [...prev.filter((t) => t.id !== newRecord.id), newRecord]);
+          const updatedList = [...tables.filter((t) => t.id !== newRecord.id), newRecord];
+          setTables(updatedList);
           try {
-            localStorage.setItem(`tables_list_${restId}`, JSON.stringify([...tables, newRecord]));
+            localStorage.setItem(`tables_list_${restId}`, JSON.stringify(updatedList));
+            saveStoredTables(String(restId), updatedList.map((t, i) => mapRowToTableStatus(t, i)));
+            window.dispatchEvent(new CustomEvent("pos_tables_updated", { detail: { restId, tables: updatedList } }));
+            window.dispatchEvent(new Event("storage"));
           } catch {}
           showToast(`Table "${formTableNumber.trim()}" added to floor successfully.`);
         }
@@ -534,6 +545,9 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
       const updated = tables.filter((t) => t.id !== id);
       setTables(updated);
       localStorage.setItem(`tables_list_${restId}`, JSON.stringify(updated));
+      saveStoredTables(String(restId), updated.map((t, i) => mapRowToTableStatus(t, i)));
+      window.dispatchEvent(new CustomEvent("pos_tables_updated", { detail: { restId, tables: updated } }));
+      window.dispatchEvent(new Event("storage"));
 
       const { error } = await supabase
         .from("restaurant_tables")
@@ -556,25 +570,18 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
   };
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* ========================================================================= */}
       {/* A. TOP HEADER */}
       {/* ========================================================================= */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
-            <span>FLOOR &amp; SEATING MATRIX</span>
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
             Floor &amp; Tables{" "}
             <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
               Layout
             </span>
           </h1>
-          <p className="text-xs sm:text-sm text-[var(--text-lo)] mt-1 font-medium">
-            Live dining room layout, table statuses &amp; reservations
-          </p>
         </div>
 
         <div className="flex items-center gap-2.5">
@@ -639,7 +646,7 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
           </div>
           <div className="mt-2.5 sm:mt-3 pt-2 sm:pt-2.5 border-t border-[var(--border)]/60 text-[10px] font-mono text-[var(--text-faint)] flex items-center justify-between">
             <span>{stats.occupiedTables} Occupied</span>
-            <span className="text-amber-400">{stats.billedTables} Billed Out</span>
+            <span className="text-amber-800 dark:text-amber-400 font-bold">{stats.billedTables} Billed Out</span>
           </div>
         </div>
 
@@ -649,8 +656,9 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
             <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-[#25d366]/15 border border-[#25d366]/30 text-[#25d366] flex items-center justify-center group-hover:scale-110 transition-transform shrink-0">
               <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#25d366]/15 text-[#25d366] font-mono text-[10px] sm:text-[11px] font-bold border border-[#25d366]/30">
-              Ready to Seat
+            <span className="badge-pill badge-success">
+              <span className="badge-dot" />
+              <span>Ready to Seat</span>
             </span>
           </div>
           <div>
@@ -788,9 +796,9 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
 
                     {/* Status Pill */}
                     <div
-                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wide shrink-0 ${statusCfg.pillClass}`}
+                      className={`shrink-0 ${statusCfg.pillClass}`}
                     >
-                      <span className={`w-1.5 h-1.5 rounded-full ${statusCfg.dotClass}`} />
+                      <span className={statusCfg.dotClass} />
                       <span>{statusCfg.label}</span>
                     </div>
                   </div>
@@ -856,7 +864,7 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
                         <button
                           type="button"
                           onClick={() => handleQuickStatusChange(table, "BILLED")}
-                          className="flex-1 flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/25 text-[10px] font-bold transition-colors cursor-pointer truncate"
+                          className="flex-1 flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-900 dark:text-amber-300 border border-amber-500/30 text-[10px] font-bold transition-colors cursor-pointer truncate shadow-2xs"
                           title="Mark as Billed"
                         >
                           <span className="truncate">Bill Out</span>
@@ -864,7 +872,7 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
                         <button
                           type="button"
                           onClick={() => handleQuickStatusChange(table, "AVAILABLE")}
-                          className="flex-1 flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-[#25d366]/10 hover:bg-[#25d366]/20 text-[#25d366] border border-[#25d366]/25 text-[10px] font-bold transition-colors cursor-pointer truncate"
+                          className="flex-1 flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-900 dark:text-[#25d366] border border-emerald-500/30 text-[10px] font-bold transition-colors cursor-pointer truncate shadow-2xs"
                           title="Clear & Release Table"
                         >
                           <CheckCircle2 className="w-3 h-3 shrink-0" />

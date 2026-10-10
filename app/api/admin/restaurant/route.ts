@@ -56,6 +56,10 @@ export async function GET(request: Request) {
           assigned_plan: data.assigned_plan || "Enterprise Plus",
           initial_status: data.initial_status || "Active",
           enabled_modules: data.enabled_modules || [],
+          enable_kitchen_kds: data.enable_kitchen_kds !== undefined ? Boolean(data.enable_kitchen_kds) : (Array.isArray(data.enabled_modules) ? data.enabled_modules.includes("kds_system") : true),
+          enable_table_service: data.enable_table_service !== undefined ? Boolean(data.enable_table_service) : true,
+          enable_direct_thermal_print: data.enable_direct_thermal_print !== undefined ? Boolean(data.enable_direct_thermal_print) : true,
+          enable_offline_sync: data.enable_offline_sync !== undefined ? Boolean(data.enable_offline_sync) : true,
         },
       },
       {

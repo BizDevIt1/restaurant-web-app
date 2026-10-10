@@ -66,13 +66,18 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${manrope.variable} ${inter.variable} ${jetbrainsMono.variable} scroll-smooth`}
+      suppressHydrationWarning
+      data-scroll-behavior="smooth"
     >
       <head>
         <link rel="icon" href="/favicon.png" type="image/png" sizes="any" />
         <link rel="shortcut icon" href="/favicon.png" type="image/png" />
         <link rel="apple-touch-icon" href="/favicon.png" />
       </head>
-      <body className="min-h-screen text-[var(--text-hi)] bg-[var(--bg)] font-[family-name:var(--font-body)] antialiased selection:bg-[var(--gold)] selection:text-[var(--bg-deep)] overflow-x-hidden">
+      <body
+        suppressHydrationWarning
+        className="min-h-screen text-[var(--text-hi)] bg-[var(--bg)] font-[family-name:var(--font-body)] antialiased selection:bg-[var(--gold)] selection:text-[var(--bg-deep)] overflow-x-hidden"
+      >
         <SplashProvider defaultDuration={1200} autoPlayOnMount={true}>
           <CustomAlertProvider>
             {children}

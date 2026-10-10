@@ -176,14 +176,10 @@ export default function BranchesView({
     .reduce((acc, b) => acc + (b.activeOrders || 0), 0);
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* Top Banner & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
-            {isFranchiseOwner ? "• BRANCH NETWORK MANAGEMENT" : "• OUTLET OPERATIONAL HUB"}
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
             {isFranchiseOwner ? (
               <>
@@ -201,11 +197,6 @@ export default function BranchesView({
               </>
             )}
           </h1>
-          <p className="text-xs sm:text-sm text-[var(--text-lo)] font-medium mt-1">
-            {isFranchiseOwner
-              ? "Provision new branches and selectively allocate features (POS, Kitchen, Rider, Inventory)."
-              : "View your branch credentials, active features, and local operational health."}
-          </p>
         </div>
 
         {/* Action Button: Add Branch (for Franchiser) */}
@@ -229,7 +220,7 @@ export default function BranchesView({
               <div className="w-10 h-10 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] flex items-center justify-center group-hover:scale-110 transition-transform">
                 <TrendingUp className="w-5 h-5" />
               </div>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] font-mono text-[11px] font-bold border border-[var(--gold)]/30">
+              <span className="badge-pill badge-gold">
                 <ArrowUpRight className="w-3 h-3" /> +14.8% mo
               </span>
             </div>
@@ -253,8 +244,8 @@ export default function BranchesView({
               <div className="w-10 h-10 rounded-xl bg-[var(--orange-dim)] border border-[var(--orange)]/30 text-[var(--orange)] flex items-center justify-center group-hover:scale-110 transition-transform">
                 <Receipt className="w-5 h-5" />
               </div>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--orange-dim)] text-[var(--orange)] font-mono text-[11px] font-bold border border-[var(--orange)]/30">
-                <span className="w-1.5 h-1.5 rounded-full bg-[var(--orange)] animate-pulse" /> Live Orders
+              <span className="badge-pill badge-warning">
+                <span className="badge-dot animate-pulse" /> Live Orders
               </span>
             </div>
             <div>
@@ -349,21 +340,17 @@ export default function BranchesView({
 
                   {/* Status indicator */}
                   <span
-                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider flex items-center gap-1 shrink-0 ${
+                    className={`badge-pill uppercase ${
                       branch.status === "open"
-                        ? "bg-[#25d366]/15 text-[#25d366] border border-[#25d366]/30"
+                        ? "badge-success"
                         : branch.status === "rush"
-                        ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
-                        : "bg-red-500/15 text-red-400 border border-red-500/30"
+                        ? "badge-warning"
+                        : "badge-danger"
                     }`}
                   >
                     <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        branch.status === "open"
-                          ? "bg-[#25d366] animate-pulse"
-                          : branch.status === "rush"
-                          ? "bg-amber-400"
-                          : "bg-red-400"
+                      className={`badge-dot ${
+                        branch.status === "open" ? "animate-pulse" : ""
                       }`}
                     />
                     {branch.status}

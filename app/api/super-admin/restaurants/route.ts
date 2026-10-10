@@ -156,8 +156,16 @@ export async function GET() {
       return NextResponse.json({ restaurants: [], error: error.message }, { status: 200 });
     }
 
+    const formattedRestaurants = (data || []).map((r: any) => ({
+      ...r,
+      enable_kitchen_kds: r.enable_kitchen_kds !== undefined ? Boolean(r.enable_kitchen_kds) : (Array.isArray(r.enabled_modules) ? r.enabled_modules.includes("kds_system") : true),
+      enable_table_service: r.enable_table_service !== undefined ? Boolean(r.enable_table_service) : true,
+      enable_direct_thermal_print: r.enable_direct_thermal_print !== undefined ? Boolean(r.enable_direct_thermal_print) : true,
+      enable_offline_sync: r.enable_offline_sync !== undefined ? Boolean(r.enable_offline_sync) : true,
+    }));
+
     return NextResponse.json(
-      { restaurants: data || [] },
+      { restaurants: formattedRestaurants },
       {
         headers: {
           "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
@@ -199,6 +207,10 @@ export async function POST(request: Request) {
       initial_status,
       branches,
       enabled_modules,
+      enable_kitchen_kds,
+      enable_table_service,
+      enable_direct_thermal_print,
+      enable_offline_sync,
       restaurant_type,
       business_type,
       logo_url,
@@ -373,15 +385,30 @@ export async function POST(request: Request) {
       initial_status: String(initial_status || "Active").trim(),
       branches: branchesArray,
       enabled_modules: modulesArray,
+      enable_kitchen_kds: enable_kitchen_kds !== undefined ? Boolean(enable_kitchen_kds) : (modulesArray.includes("kds_system")),
+      enable_table_service: enable_table_service !== undefined ? Boolean(enable_table_service) : true,
+      enable_direct_thermal_print: enable_direct_thermal_print !== undefined ? Boolean(enable_direct_thermal_print) : true,
+      enable_offline_sync: enable_offline_sync !== undefined ? Boolean(enable_offline_sync) : true,
       owner_id: owner_id,
       logo_url: finalLogoUrl ? String(finalLogoUrl).trim() : null,
     };
 
-    const { data, error: dbError } = await supabase
+    let { data, error: dbError } = await supabase
       .from("restaurants")
       .insert([payload])
       .select()
       .single();
+
+    if (dbError && (dbError.message?.includes("enable_") || dbError.code === "PGRST204")) {
+      const stripped = { ...payload };
+      delete (stripped as any).enable_kitchen_kds;
+      delete (stripped as any).enable_table_service;
+      delete (stripped as any).enable_direct_thermal_print;
+      delete (stripped as any).enable_offline_sync;
+      const retry = await supabase.from("restaurants").insert([stripped]).select().single();
+      data = retry.data;
+      dbError = retry.error;
+    }
 
     if (dbError) {
       console.error("[Supabase DB Error]:", dbError);
@@ -459,7 +486,25 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
     }
 
-    const { id, initial_status, brand_name, city, cuisine, assigned_plan, phone, branches, enabled_modules } = body;
+    const {
+      id,
+      initial_status,
+      brand_name,
+      city,
+      cuisine,
+      hq_address,
+      contact_person,
+      phone,
+      owner_email,
+      assigned_plan,
+      branches,
+      enabled_modules,
+      enable_kitchen_kds,
+      enable_table_service,
+      enable_direct_thermal_print,
+      enable_offline_sync,
+      logo_url,
+    } = body;
 
     const numericId = typeof id === "number" ? id : parseInt(String(id).replace(/[^0-9]/g, ""), 10);
 
@@ -472,25 +517,58 @@ export async function PUT(request: Request) {
     if (brand_name !== undefined) payload.brand_name = brand_name;
     if (city !== undefined) payload.city = city;
     if (cuisine !== undefined) payload.cuisine = cuisine;
-    if (assigned_plan !== undefined) payload.assigned_plan = assigned_plan;
+    if (hq_address !== undefined) payload.hq_address = hq_address;
+    if (contact_person !== undefined) payload.contact_person = contact_person;
     if (phone !== undefined) payload.phone = phone;
+    if (owner_email !== undefined) payload.owner_email = owner_email;
+    if (assigned_plan !== undefined) payload.assigned_plan = assigned_plan;
     if (branches !== undefined) payload.branches = branches;
     if (enabled_modules !== undefined) payload.enabled_modules = enabled_modules;
+    if (enable_kitchen_kds !== undefined) payload.enable_kitchen_kds = Boolean(enable_kitchen_kds);
+    if (enable_table_service !== undefined) payload.enable_table_service = Boolean(enable_table_service);
+    if (enable_direct_thermal_print !== undefined) payload.enable_direct_thermal_print = Boolean(enable_direct_thermal_print);
+    if (enable_offline_sync !== undefined) payload.enable_offline_sync = Boolean(enable_offline_sync);
+    if (logo_url !== undefined) payload.logo_url = logo_url;
 
-    const { data, error } = await supabase
+    let { data, error } = await supabase
       .from("restaurants")
       .update(payload)
       .eq("id", numericId)
       .select()
-      .single();
+      .maybeSingle();
+
+    if (error && (error.message?.includes("enable_") || error.code === "PGRST204")) {
+      delete payload.enable_kitchen_kds;
+      delete payload.enable_table_service;
+      delete payload.enable_direct_thermal_print;
+      delete payload.enable_offline_sync;
+      const retry = await supabase.from("restaurants").update(payload).eq("id", numericId).select().maybeSingle();
+      data = retry.data;
+      error = retry.error;
+    }
+
+    // If no row was updated (e.g. ID not found or mock item), attempt insert/upsert
+    if (!error && !data) {
+      const insertPayload = {
+        ...payload,
+        id: numericId,
+        brand_name: payload.brand_name || "Restaurant",
+        city: payload.city || "Lahore",
+      };
+      const insertRes = await supabase.from("restaurants").insert([insertPayload]).select().maybeSingle();
+      data = insertRes.data;
+      error = insertRes.error;
+    }
 
     if (error) {
+      console.warn("[SuperAdmin PUT Database Error]:", error);
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
 
     return NextResponse.json({ success: true, restaurant: data });
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : "Failed to update restaurant in Supabase";
+    console.error("[Restaurant PUT Exception]:", err);
     return NextResponse.json({ error: errorMsg }, { status: 500 });
   }
 }

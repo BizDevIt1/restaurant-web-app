@@ -77,11 +77,11 @@ export default function SuperAdminMenuDrawer({
   };
 
   return (
-    <div className="fixed inset-0 z-50 xl:hidden">
+    <div className="fixed inset-0 z-[100] lg:hidden">
       {/* Dark Backdrop with blur */}
       <div
         onClick={onClose}
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300 animate-in fade-in"
+        className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-md transition-opacity duration-300 animate-in fade-in"
         aria-hidden="true"
       />
 
@@ -90,7 +90,7 @@ export default function SuperAdminMenuDrawer({
         role="dialog"
         aria-modal="true"
         aria-label="Navigation Menu"
-        className="fixed inset-x-0 bottom-0 z-50 bg-[var(--bg-deep)] border-t border-[var(--border)] rounded-t-3xl p-5 pb-8 shadow-2xl transition-all duration-300 max-h-[85vh] overflow-y-auto custom-scrollbar animate-in slide-in-from-bottom duration-300 select-none"
+        className="fixed inset-x-0 bottom-0 z-[101] bg-[var(--bg-deep)] border-t border-[var(--border)] rounded-t-3xl p-5 pb-8 shadow-2xl transition-all duration-300 max-h-[85vh] overflow-y-auto custom-scrollbar animate-in slide-in-from-bottom duration-300 select-none"
       >
         {/* Pull Handle Pill */}
         <div className="w-12 h-1 bg-[var(--border-hi)] rounded-full mx-auto mb-4" />

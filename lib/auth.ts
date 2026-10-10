@@ -13,7 +13,7 @@ export interface AuthSession {
   organizationId: number;
   restaurantName: string;
   role: string; // e.g. 'owner', 'manager', 'cashier', 'chef', 'rider', 'STANDALONE_ADMIN'
-  terminalAccess: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY";
+  terminalAccess: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY" | "MANAGER_ONLY";
   branchId?: number | null;
   // UI & branding hydration metadata
   name?: string;
@@ -28,6 +28,15 @@ export interface AuthSession {
   branchesCount?: number;
   branches?: any[];
   staffRole?: "manager" | "cashier" | "chef" | "rider" | "waiter";
+  assignedShift?: string;
+  enableKitchenKds?: boolean;
+  enableTableService?: boolean;
+  enableDirectThermalPrint?: boolean;
+  enableOfflineSync?: boolean;
+  enable_kitchen_kds?: boolean;
+  enable_table_service?: boolean;
+  enable_direct_thermal_print?: boolean;
+  enable_offline_sync?: boolean;
 }
 
 export const ADMIN_SESSION_KEY = "omni_admin_session";
@@ -171,6 +180,13 @@ export function clearAllAuthSessions(): void {
     localStorage.removeItem("staff_user");
     localStorage.removeItem("omni_staff_session");
     localStorage.removeItem("omni_admin_session");
+    sessionStorage.clear();
     document.cookie = "omni_admin_session=; path=/; max-age=0; SameSite=Lax";
+    // Clear cookies across paths
+    document.cookie.split(";").forEach((c) => {
+      const eqPos = c.indexOf("=");
+      const name = eqPos > -1 ? c.substring(0, eqPos).trim() : c.trim();
+      document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; max-age=0; SameSite=Lax`;
+    });
   } catch {}
 }

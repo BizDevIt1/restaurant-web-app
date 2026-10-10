@@ -641,7 +641,7 @@ function FleetConsoleContent({
       />
 
       {/* ===================== MAIN CONTENT AREA ===================== */}
-      <div className="flex-1 min-w-0 flex flex-col h-screen overflow-y-auto">
+      <div className="flex-1 min-w-0 flex flex-col h-screen overflow-y-auto pb-16 md:pb-0">
         {!hasFeature("RIDER") ? (
           <div className="flex-1 flex items-center justify-center p-4 sm:p-8">
             <ModuleLockedView
@@ -653,7 +653,7 @@ function FleetConsoleContent({
         ) : (
           <>
         {/* Top Header Bar */}
-        <header className="sticky top-0 z-30 h-20 bg-[var(--bg-deep)]/90 backdrop-blur-xl border-b border-[var(--border)] px-4 sm:px-8 flex items-center justify-between gap-4 shrink-0">
+        <header className="sticky top-0 z-30 h-20 bg-[var(--bg-deep)]/90 backdrop-blur-xl border-b border-[var(--border)] px-4 sm:px-6 md:px-8 flex items-center justify-between gap-4 shrink-0">
           <div className="flex items-center gap-4">
             <Link
               href="/admin/dispatch"
@@ -664,18 +664,12 @@ function FleetConsoleContent({
             </Link>
 
             <div>
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
-                <h1 className="font-display font-black text-lg sm:text-2xl text-[var(--text-hi)] tracking-tight">
-                  Fleet Console &amp;{" "}
-                  <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
-                    Driver Command
-                  </span>
-                </h1>
-              </div>
-              <p className="text-xs text-[var(--text-lo)] font-medium mt-0.5 hidden sm:block">
-                Dedicated hub for rider registration, vehicle allocations, zone mapping, and live dispatch control.
-              </p>
+              <h1 className="font-display font-black text-lg sm:text-2xl text-[var(--text-hi)] tracking-tight">
+                Fleet Console &amp;{" "}
+                <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
+                  Driver Command
+                </span>
+              </h1>
             </div>
           </div>
 
@@ -709,7 +703,7 @@ function FleetConsoleContent({
         </header>
 
         {/* Main Content Body */}
-        <main className="max-w-7xl w-full mx-auto px-4 sm:px-8 pt-6 sm:pt-8 space-y-6 sm:space-y-8 pb-24">
+        <main className="max-w-[1400px] w-full mx-auto px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 pb-24">
           {/* ========================================================================= */}
           {/* TAB 2: LIVE DISPATCH & ACTIVE FLEET */}
           {/* ========================================================================= */}
@@ -830,7 +824,7 @@ function FleetConsoleContent({
                         <span className="font-mono font-extrabold text-sm text-[var(--gold)]">
                           {ord.orderNumber}
                         </span>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-bold border border-emerald-500/30">
+                        <span className="badge-pill badge-success">
                           {ord.prepTimeAgo}
                         </span>
                       </div>
@@ -895,7 +889,7 @@ function FleetConsoleContent({
                     </div>
                   </div>
                 </div>
-                <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-zinc-500/15 text-zinc-400 border border-zinc-500/30 font-bold shrink-0 self-start sm:self-auto">
+                <span className="badge-pill badge-neutral shrink-0 self-start sm:self-auto">
                   0 Orders in Queue
                 </span>
               </div>
@@ -1021,21 +1015,17 @@ function FleetConsoleContent({
 
                             {/* Status Pill */}
                             <span
-                              className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold border ${
+                              className={`badge-pill ${
                                 isAvailable
-                                  ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                                  ? "badge-success"
                                   : isInTransit
-                                  ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
-                                  : "bg-zinc-500/15 text-zinc-400 border-zinc-500/30"
+                                  ? "badge-warning"
+                                  : "badge-neutral"
                               }`}
                             >
                               <span
-                                className={`w-1.5 h-1.5 rounded-full ${
-                                  isAvailable
-                                    ? "bg-emerald-400 animate-pulse"
-                                    : isInTransit
-                                    ? "bg-amber-400 animate-pulse"
-                                    : "bg-zinc-400"
+                                className={`badge-dot ${
+                                  isAvailable || isInTransit ? "animate-pulse" : ""
                                 }`}
                               />
                               {isAvailable
@@ -1402,7 +1392,7 @@ function FleetConsoleContent({
               <button
                 type="button"
                 onClick={() => setIsAssignModalOpen(false)}
-                className="p-1.5 rounded-xl bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-white"
+                className="p-1.5 rounded-xl bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-[var(--text-hi)] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>

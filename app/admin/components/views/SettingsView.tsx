@@ -19,6 +19,7 @@ import {
 import { AuthenticatedUser } from "../../types";
 import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
+import { saveStoredBranchSettings } from "../../../../lib/tenantStore";
 
 interface SettingsViewProps {
   user: AuthenticatedUser;
@@ -197,16 +198,40 @@ export default function SettingsView({ user, showToast }: SettingsViewProps) {
         return;
       }
 
-      // Sync outlet contact details directly to public.restaurants
-      if (address.trim() || phone.trim() || displayName.trim()) {
+      // Sync outlet contact details and tax rate to public.restaurants
+      try {
         await supabase
           .from("restaurants")
           .update({
+            tax_rate: Number(taxRatePercent),
+            tax_rate_percent: Number(taxRatePercent),
             brand_name: displayName.trim() || undefined,
             hq_address: address.trim() || undefined,
             phone: phone.trim() || undefined,
           })
           .eq("id", restId);
+      } catch { }
+
+      // Save to local tenant cache for immediate zero-latency hydration
+      const taxNum = Number(taxRatePercent);
+      saveStoredBranchSettings(String(restId), targetBranchId, {
+        taxRatePercent: taxNum,
+        printerIp: printerIp.trim(),
+        printerPaperWidth,
+        kitchenBuzzerEnabled,
+        openingTime: openingTime.trim(),
+        closingTime: closingTime.trim(),
+        currencySymbol: currencySymbol.trim() || "Rs",
+      });
+
+      // Broadcast update across windows & tabs
+      if (typeof window !== "undefined") {
+        localStorage.setItem(`pos_tax_rate_${restId}`, String(taxNum));
+        window.dispatchEvent(
+          new CustomEvent("pos_tax_rate_changed", {
+            detail: { taxRate: taxNum, restaurantId: String(restId) },
+          })
+        );
       }
 
       setIsSaved(true);
@@ -221,22 +246,14 @@ export default function SettingsView({ user, showToast }: SettingsViewProps) {
   };
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-4xl w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       <div>
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--gold)] animate-pulse" />
-          <Sliders className="w-3.5 h-3.5" />
-          <span>OUTLET CONFIGURATION &amp; HARDWARE</span>
-        </div>
         <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
           Branch Profile &amp;{" "}
           <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
             Hardware Setup
           </span>
         </h1>
-        <p className="text-xs sm:text-sm text-[var(--text-lo)] mt-1 font-medium">
-          Thermal receipt printer IP, paper width, tax compliance, audio alerts, and operating hours.
-        </p>
       </div>
 
       <form onSubmit={handleSave} className="space-y-6 text-xs">

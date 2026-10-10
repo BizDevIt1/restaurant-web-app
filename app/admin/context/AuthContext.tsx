@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useMemo } from "react";
 import { AuthenticatedUser, BranchData, UserRole } from "../types";
 import { createClient } from "../../../lib/supabase";
 import {
@@ -14,6 +14,11 @@ import {
   getStoredRestaurants,
   normalizeModules,
 } from "../../../lib/tenantStore";
+import {
+  validateCashierShiftWindow,
+  ShiftWindowValidation,
+  isShiftWindowConcluded,
+} from "../../../lib/shiftSchedule";
 
 interface AuthContextType {
   user: AuthenticatedUser | null;
@@ -40,6 +45,8 @@ interface AuthContextType {
     email?: string;
   }) => void;
   logout: () => void;
+  shiftValidation: ShiftWindowValidation | null;
+  isShiftLocked: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -73,6 +80,10 @@ export function AuthProvider({
       let freshModules: any[] | null = null;
       let freshBrandName: string | null = null;
       let freshBranches: any[] | null = null;
+      let freshEnableKitchenKds: boolean | undefined = undefined;
+      let freshEnableTableService: boolean | undefined = undefined;
+      let freshEnableDirectThermalPrint: boolean | undefined = undefined;
+      let freshEnableOfflineSync: boolean | undefined = undefined;
 
       // 1. Direct query to Supabase public.restaurants for real-time entitlement state
       try {
@@ -148,7 +159,11 @@ export function AuthProvider({
           freshModules = Array.isArray(rest.enabled_modules) ? rest.enabled_modules : [];
           if (rest.brand_name) freshBrandName = rest.brand_name;
           if (Array.isArray(rest.branches)) freshBranches = rest.branches;
-          console.log("[AuthContext] Live enabled_modules from Supabase:", freshModules);
+          freshEnableKitchenKds = rest.enable_kitchen_kds !== undefined ? Boolean(rest.enable_kitchen_kds) : Boolean(freshModules && freshModules.includes("kds_system"));
+          freshEnableTableService = rest.enable_table_service !== undefined ? Boolean(rest.enable_table_service) : true;
+          freshEnableDirectThermalPrint = rest.enable_direct_thermal_print !== undefined ? Boolean(rest.enable_direct_thermal_print) : true;
+          freshEnableOfflineSync = rest.enable_offline_sync !== undefined ? Boolean(rest.enable_offline_sync) : true;
+          console.log("[AuthContext] Live enabled_modules from Supabase:", freshModules, "enableKitchenKds:", freshEnableKitchenKds);
         }
       } catch (err) {
         console.warn("[AuthContext] Supabase real-time module query notice:", err);
@@ -171,6 +186,10 @@ export function AuthProvider({
               freshModules = Array.isArray(json.restaurant.enabled_modules) ? json.restaurant.enabled_modules : [];
               if (json.restaurant.brand_name) freshBrandName = json.restaurant.brand_name;
               if (Array.isArray(json.restaurant.branches)) freshBranches = json.restaurant.branches;
+              if (json.restaurant.enable_kitchen_kds !== undefined) freshEnableKitchenKds = Boolean(json.restaurant.enable_kitchen_kds);
+              if (json.restaurant.enable_table_service !== undefined) freshEnableTableService = Boolean(json.restaurant.enable_table_service);
+              if (json.restaurant.enable_direct_thermal_print !== undefined) freshEnableDirectThermalPrint = Boolean(json.restaurant.enable_direct_thermal_print);
+              if (json.restaurant.enable_offline_sync !== undefined) freshEnableOfflineSync = Boolean(json.restaurant.enable_offline_sync);
             }
           }
         } catch {}
@@ -193,6 +212,10 @@ export function AuthProvider({
           freshModules = Array.isArray(matched.enabled_modules) ? matched.enabled_modules : [];
           if (matched.brand_name) freshBrandName = matched.brand_name;
           if (Array.isArray(matched.branches)) freshBranches = matched.branches;
+          if (matched.enableKitchenKds !== undefined) freshEnableKitchenKds = Boolean(matched.enableKitchenKds);
+          if (matched.enableTableService !== undefined) freshEnableTableService = Boolean(matched.enableTableService);
+          if (matched.enableDirectThermalPrint !== undefined) freshEnableDirectThermalPrint = Boolean(matched.enableDirectThermalPrint);
+          if (matched.enableOfflineSync !== undefined) freshEnableOfflineSync = Boolean(matched.enableOfflineSync);
         }
       }
 
@@ -204,13 +227,17 @@ export function AuthProvider({
         const nextFeats = [...normalized].map((f) => f.toUpperCase().trim()).sort();
         const hasChanged = JSON.stringify(currentFeats) !== JSON.stringify(nextFeats);
 
-        if (hasChanged || !currentSession.assignedFeatures || currentSession.assignedFeatures.length === 0) {
+        if (hasChanged || !currentSession.assignedFeatures || currentSession.assignedFeatures.length === 0 || freshEnableKitchenKds !== currentSession.enableKitchenKds) {
           console.log("[AuthContext] Hydrated fresh entitlements from database:", normalized);
           const updatedUser: AuthenticatedUser = sanitizeUserSession({
             ...currentSession,
             assignedFeatures: normalized,
             restaurantName: freshBrandName || currentSession.restaurantName,
             branches: freshBranches || currentSession.branches,
+            enableKitchenKds: freshEnableKitchenKds !== undefined ? freshEnableKitchenKds : (currentSession.enableKitchenKds ?? true),
+            enableTableService: freshEnableTableService !== undefined ? freshEnableTableService : (currentSession.enableTableService ?? true),
+            enableDirectThermalPrint: freshEnableDirectThermalPrint !== undefined ? freshEnableDirectThermalPrint : (currentSession.enableDirectThermalPrint ?? true),
+            enableOfflineSync: freshEnableOfflineSync !== undefined ? freshEnableOfflineSync : (currentSession.enableOfflineSync ?? true),
           })!;
 
           setUser(updatedUser);
@@ -360,10 +387,37 @@ export function AuthProvider({
   };
 
   const hasFeature = (feature: string): boolean => {
-    if (!user || !user.assignedFeatures) return false;
-    return user.assignedFeatures.some(
-      (f) => f.toUpperCase() === feature.toUpperCase()
-    );
+    if (!user) return false;
+    const featUpper = feature.toUpperCase().trim();
+    if (featUpper === "KITCHEN" || featUpper === "KDS") {
+      if (user.enableKitchenKds === false) return false;
+    }
+    if (featUpper === "TABLES" || featUpper === "DINE_IN" || featUpper === "TABLE_MATRIX") {
+      if (user.enableTableService === false) return false;
+    }
+    if (!user.assignedFeatures || !Array.isArray(user.assignedFeatures)) return false;
+
+    const feats = user.assignedFeatures.map((f) => String(f || "").toUpperCase().trim());
+
+    // Direct match check
+    if (feats.includes(featUpper)) {
+      return true;
+    }
+
+    // Granular alias checks
+    if (featUpper === "KDS" && feats.includes("KITCHEN")) return true;
+    if (featUpper === "KITCHEN" && feats.includes("KDS")) return true;
+    if (featUpper === "REPORTS" && feats.includes("ANALYTICS")) return true;
+    if (featUpper === "ANALYTICS" && feats.includes("REPORTS")) return true;
+    if (featUpper === "POS" && feats.includes("POS_TERMINAL")) return true;
+    if (featUpper === "POS_TERMINAL" && feats.includes("POS")) return true;
+    if (featUpper === "TABLES" && (feats.includes("TABLE_MATRIX") || feats.includes("DINE_IN"))) return true;
+    if (featUpper === "TABLE_MATRIX" && feats.includes("TABLES")) return true;
+    if (featUpper === "RIDER" && (feats.includes("RIDERS") || feats.includes("DISPATCH") || feats.includes("RIDER_APP"))) return true;
+    if (featUpper === "INVENTORY" && feats.includes("INVENTORY_STOCK")) return true;
+    if (featUpper === "INVENTORY_STOCK" && feats.includes("INVENTORY")) return true;
+
+    return false;
   };
 
   const selectedBranch =
@@ -425,14 +479,26 @@ export function AuthProvider({
   };
 
   const logout = async () => {
+    setUser(null);
     clearUserSession();
+    if (typeof window !== "undefined") {
+      try {
+        sessionStorage.clear();
+      } catch {}
+      // Clear cookies
+      document.cookie.split(";").forEach((c) => {
+        const eqPos = c.indexOf("=");
+        const name = eqPos > -1 ? c.substring(0, eqPos).trim() : c.trim();
+        document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; max-age=0; SameSite=Lax`;
+      });
+    }
     try {
       const { createClient } = await import("../../../lib/supabase");
       const supabase = createClient();
       await supabase.auth.signOut();
     } catch {}
     if (typeof window !== "undefined") {
-      window.location.replace("/login");
+      window.location.href = "/login";
     }
   };
 
@@ -443,6 +509,21 @@ export function AuthProvider({
   // Backwards compatibility flags
   const isAdmin = isStandaloneAdmin || isBranchAdmin;
   const isFranchiser = isFranchiseOwner;
+
+  // Shift window validation for cashiers
+  const isCashier = Boolean(
+    user &&
+    (user.staffRole === "cashier" ||
+      (user.role as string) === "cashier" ||
+      user.terminalAccess === "POS_ONLY")
+  );
+
+  const shiftValidation = useMemo<ShiftWindowValidation | null>(() => {
+    if (!user || !isCashier || !user.assignedShift) return null;
+    return validateCashierShiftWindow(user.assignedShift);
+  }, [user, isCashier]);
+
+  const isShiftLocked = Boolean(isShiftWindowConcluded(shiftValidation));
 
   return (
     <AuthContext.Provider
@@ -463,6 +544,8 @@ export function AuthProvider({
         addBranchToFranchise,
         updateRestaurantProfile,
         logout,
+        shiftValidation,
+        isShiftLocked,
       }}
     >
       {children}
@@ -470,10 +553,33 @@ export function AuthProvider({
   );
 }
 
-export function useAuth() {
+export function useAuth(): AuthContextType {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error("useAuth must be used within an AuthProvider");
+    // Graceful fallback for components rendered outside AuthProvider (e.g. LoginPage, standalone modals)
+    const stored = typeof window !== "undefined" ? getActiveUserSession() : null;
+    return {
+      user: stored,
+      setUser: () => {},
+      activeBranchId: "",
+      setActiveBranchId: () => {},
+      selectedBranch: null,
+      isAdmin: stored?.userType === "ADMIN",
+      isFranchiser: stored?.role === "FRANCHISE_OWNER",
+      isStandaloneAdmin: stored?.role === "STANDALONE_ADMIN",
+      isFranchiseOwner: stored?.role === "FRANCHISE_OWNER",
+      isBranchAdmin: stored?.role === "BRANCH_ADMIN",
+      hasFeature: () => true,
+      refreshEntitlements: async () => {},
+      switchRolePreset: () => {},
+      addBranchToFranchise: () => {},
+      updateRestaurantProfile: () => {},
+      logout: () => {
+        clearUserSession();
+      },
+      shiftValidation: null,
+      isShiftLocked: false,
+    };
   }
   return context;
 }

@@ -28,12 +28,15 @@ interface RecipeModalProps {
 }
 
 interface LocalIngredient {
+  id?: string | number;
   raw_material_id: string | number;
   raw_material_name: string;
   category: string;
   quantity_required: number;
   unit: string;
   cost_per_unit: number;
+  variant_id?: string | null;
+  variant_name?: string | null;
 }
 
 export default function RecipeModal({
@@ -112,15 +115,18 @@ export default function RecipeModal({
         }
 
         if (recipeData && isMounted) {
-          const mappedIngredients: LocalIngredient[] = recipeData.map((row: any) => {
+          const mappedIngredients: LocalIngredient[] = recipeData.map((row: any, idx: number) => {
             const raw = row.raw_materials || materials.find((m) => String(m.id) === String(row.raw_material_id));
             return {
+              id: row.id ? String(row.id) : `rec_${row.raw_material_id}_${row.variant_id || idx}`,
               raw_material_id: row.raw_material_id,
               raw_material_name: raw?.name || `Material #${row.raw_material_id}`,
               category: raw?.category || "General",
               quantity_required: Number(row.quantity_required) || 0,
               unit: row.unit || raw?.unit || "kg",
               cost_per_unit: Number(raw?.cost_per_unit) || 0,
+              variant_id: row.variant_id || null,
+              variant_name: row.variant_name || null,
             };
           });
           setIngredients(mappedIngredients);
@@ -173,6 +179,7 @@ export default function RecipeModal({
     } else {
       // Add new ingredient
       const newIngredient: LocalIngredient = {
+        id: `new_${currentSelectedMaterial.id}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         raw_material_id: currentSelectedMaterial.id,
         raw_material_name: currentSelectedMaterial.name,
         category: currentSelectedMaterial.category,
@@ -188,10 +195,13 @@ export default function RecipeModal({
     setInputQuantity("1");
   };
 
-  // Handle Remove Ingredient
-  const handleRemoveIngredient = (rawMaterialId: string | number) => {
+  // Handle Remove Ingredient by unique identifier or index-composed key
+  const handleRemoveIngredient = (uniqueKey: string | number) => {
     setIngredients((prev) =>
-      prev.filter((item) => String(item.raw_material_id) !== String(rawMaterialId))
+      prev.filter((item, idx) => {
+        const itemKey = item.id ? String(item.id) : `${item.raw_material_id}_${item.variant_id || idx}`;
+        return itemKey !== String(uniqueKey);
+      })
     );
   };
 
@@ -235,6 +245,8 @@ export default function RecipeModal({
           raw_material_id: item.raw_material_id,
           quantity_required: item.quantity_required,
           unit: item.unit,
+          variant_id: item.variant_id || null,
+          variant_name: item.variant_name || null,
         }));
 
         const { error: insertError } = await supabase
@@ -394,18 +406,28 @@ export default function RecipeModal({
               </p>
             </div>
           ) : (
-            ingredients.map((item) => {
+            ingredients.map((item, idx) => {
               const lineCost = item.quantity_required * item.cost_per_unit;
+              const uniqueKey = item.id
+                ? String(item.id)
+                : `${item.raw_material_id}_${item.variant_id || idx}`;
               return (
                 <div
-                  key={item.raw_material_id}
+                  key={uniqueKey}
                   className="p-2.5 grid grid-cols-12 gap-2 items-center text-xs font-mono hover:bg-[var(--surface-hi)]/40 transition-colors"
                 >
                   {/* Name & Category */}
                   <div className="col-span-5">
-                    <span className="font-sans font-bold text-[var(--text-hi)] block text-xs">
-                      {item.raw_material_name}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-sans font-bold text-[var(--text-hi)] block text-xs">
+                        {item.raw_material_name}
+                      </span>
+                      {item.variant_name && (
+                        <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-medium bg-[var(--gold)]/15 text-[var(--gold)] border border-[var(--gold)]/30">
+                          {item.variant_name}
+                        </span>
+                      )}
+                    </div>
                     <span className="text-[10px] text-[var(--text-faint)] uppercase">
                       {item.category}
                     </span>
@@ -433,7 +455,7 @@ export default function RecipeModal({
                   <div className="col-span-1 text-center">
                     <button
                       type="button"
-                      onClick={() => handleRemoveIngredient(item.raw_material_id)}
+                      onClick={() => handleRemoveIngredient(uniqueKey)}
                       className="p-1 rounded-lg text-[var(--text-faint)] hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
                       title="Remove ingredient"
                     >
@@ -488,10 +510,10 @@ export default function RecipeModal({
 
             {/* Margin % */}
             <div
-              className={`p-2 rounded-lg border ${
+              className={`p-2 rounded-lg border shadow-2xs ${
                 isHealthyMargin
-                  ? "bg-[#25d366]/10 border-[#25d366]/30 text-[#25d366]"
-                  : "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                  ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-800 dark:text-[#25d366]"
+                  : "bg-amber-500/15 border-amber-500/35 text-amber-900 dark:text-amber-400"
               }`}
             >
               <span className="text-[10px] uppercase block opacity-80">

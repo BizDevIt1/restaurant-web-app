@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, Suspense } from "react";
+import React, { useState, useEffect, useRef, useMemo, Suspense } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
@@ -52,6 +52,11 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AdminCacheProvider, useAdminCache, mapRowToTableStatus } from "./context/AdminCacheContext";
 import { getPermittedNavigation } from "./navigationConfig";
 import {
+  getStoredNotifications,
+  markAllNotificationsRead,
+  dispatchLowStockAlert,
+} from "../../lib/shiftAuditNotifications";
+import {
   AdminTab,
   Branch,
   CartItem,
@@ -84,6 +89,14 @@ import SettingsView from "./components/views/SettingsView";
 import SubscriptionView from "./components/views/SubscriptionView";
 import ProfileView from "./components/views/ProfileView";
 import ModuleLockedView from "./components/ModuleLockedView";
+import { deductInventoryStockForOrder } from "@/lib/inventoryDeduction";
+import { applyRecipeCalculationsToMenu } from "@/lib/recipePortions";
+import {
+  saveSharedPosCart,
+  clearSharedPosCart,
+  getSharedPosCart,
+  subscribeToSharedPosCart,
+} from "@/lib/posLedgerSync";
 
 export default function AdminDashboardClient({
   initialCollapsed = false,
@@ -274,6 +287,10 @@ const PATH_SEGMENT_TO_TAB: Record<string, AdminTab> = {
   branches: "branches",
   subscription: "subscription",
   profile: "profile",
+  "z-report": "staff",
+  zreport: "staff",
+  settlement: "staff",
+  shifts: "staff",
 };
 
 export function parseAdminRoute(
@@ -302,6 +319,8 @@ export function parseAdminRoute(
     const secondSeg = segments[1];
     if (secondSeg === "new") {
       return { tab, routeAction: { action: "new" } };
+    } else if (secondSeg === "edit" && segments.length >= 3) {
+      return { tab, routeAction: { action: "edit", id: decodeURIComponent(segments[2]) } };
     } else {
       return { tab, routeAction: { action: "edit", id: decodeURIComponent(secondSeg) } };
     }
@@ -514,7 +533,30 @@ function AdminDashboardContent({
     return getStoredStaff(currentOrgId, []);
   });
   const [deliveries, setDeliveries] = useState<RiderDelivery[]>([]);
-  const [notifications, setNotifications] = useState<OperationalNotification[]>([]);
+  const [notifications, setNotifications] = useState<OperationalNotification[]>(() => {
+    return getStoredNotifications(currentOrgId);
+  });
+
+  useEffect(() => {
+    const handleUpdate = (e?: any) => {
+      if (e?.detail && Array.isArray(e.detail)) {
+        setNotifications(e.detail);
+      } else {
+        setNotifications(getStoredNotifications(currentOrgId));
+      }
+    };
+    window.addEventListener("omni_notifications_updated", handleUpdate);
+    window.addEventListener("storage", handleUpdate);
+    const interval = setInterval(() => {
+      setNotifications(getStoredNotifications(currentOrgId));
+    }, 2500);
+
+    return () => {
+      window.removeEventListener("omni_notifications_updated", handleUpdate);
+      window.removeEventListener("storage", handleUpdate);
+      clearInterval(interval);
+    };
+  }, [currentOrgId]);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(initialCollapsed);
   const [isMenuDrawerOpen, setIsMenuDrawerOpen] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
@@ -532,7 +574,28 @@ function AdminDashboardContent({
       ? cachedMenuItems
       : getStoredMenu(currentOrgId, []);
   });
-  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cart, setCart] = useState<CartItem[]>(() => getSharedPosCart(currentOrgId));
+
+  // Cross-tab real-time sync with POS Terminal
+  useEffect(() => {
+    const unsub = subscribeToSharedPosCart(currentOrgId, (syncedCart) => {
+      setCart((prev) => {
+        if (JSON.stringify(prev) === JSON.stringify(syncedCart)) return prev;
+        return syncedCart;
+      });
+    });
+    return unsub;
+  }, [currentOrgId]);
+
+  // Keep shared POS storage in sync safely after render
+  const prevCartRef = useRef<string>(JSON.stringify(cart));
+  useEffect(() => {
+    const serialized = JSON.stringify(cart);
+    if (prevCartRef.current !== serialized) {
+      prevCartRef.current = serialized;
+      saveSharedPosCart(currentOrgId, cart);
+    }
+  }, [cart, currentOrgId]);
   const [orderChannel, setOrderChannel] = useState<"dine_in" | "takeaway" | "delivery">("dine_in");
   const [selectedTable, setSelectedTable] = useState<number>(1);
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "raast">("cash");
@@ -549,15 +612,54 @@ function AdminDashboardContent({
   const [orders, setOrders] = useState<OrderRecord[]>(() => {
     return getStoredOrders(currentOrgId);
   });
+  const isSendingKotRef = useRef(false);
 
-  const todayGrossSales = orders.reduce((acc, curr) => acc + (curr.total || 0), 0) || 164850;
+  // Synchronize menu items and tables instantly when cache updates
+  useEffect(() => {
+    if (cachedMenuItems && cachedMenuItems.length > 0) {
+      setMenuItems(cachedMenuItems);
+    }
+  }, [cachedMenuItems]);
+
+  useEffect(() => {
+    if (cachedTableStatuses && cachedTableStatuses.length > 0) {
+      setTables(cachedTableStatuses);
+    }
+  }, [cachedTableStatuses]);
+
+  // Dynamically compute today's live orders and sales for header ticker & overview
+  const todayOrders = useMemo(() => {
+    const today = new Date();
+    const filtered = orders.filter((o) => {
+      if (o.status === "cancelled") return false;
+      const timeStr = o.timestamp || o.created_at || o.createdAt;
+      if (!timeStr) return true;
+      try {
+        const d = new Date(timeStr);
+        return (
+          d.getFullYear() === today.getFullYear() &&
+          d.getMonth() === today.getMonth() &&
+          d.getDate() === today.getDate()
+        );
+      } catch {
+        return true;
+      }
+    });
+    return filtered.length > 0 ? filtered : orders.filter((o) => o.status !== "cancelled");
+  }, [orders]);
+
+  const todayGrossSales = useMemo(() => {
+    return todayOrders.reduce((acc, curr) => acc + (curr.total || 0), 0);
+  }, [todayOrders]);
+
+  const todayOrdersCount = todayOrders.length;
   const activeFloorOrders = orders.filter((o) => o.status === "in_progress" || o.status === "seated" || o.status === "pending").length || 14;
   const avgCookTime = 13.4;
 
   const handleAddDish = (newDish: MenuItem) => {
     setMenuItems((prev) => {
       const updated = [newDish, ...prev];
-      saveStoredMenu(currentOrgId, updated);
+      setTimeout(() => saveStoredMenu(currentOrgId, updated), 0);
       return updated;
     });
     showToast(`Added ${newDish.name} to menu`);
@@ -566,7 +668,7 @@ function AdminDashboardContent({
   const handleUpdateDish = (updatedDish: MenuItem) => {
     setMenuItems((prev) => {
       const updated = prev.map((item) => (item.id === updatedDish.id ? updatedDish : item));
-      saveStoredMenu(currentOrgId, updated);
+      setTimeout(() => saveStoredMenu(currentOrgId, updated), 0);
       return updated;
     });
     showToast(`Updated ${updatedDish.name}`);
@@ -575,7 +677,7 @@ function AdminDashboardContent({
   const handleDeleteDish = (dishId: string) => {
     setMenuItems((prev) => {
       const updated = prev.filter((item) => item.id !== dishId);
-      saveStoredMenu(currentOrgId, updated);
+      setTimeout(() => saveStoredMenu(currentOrgId, updated), 0);
       return updated;
     });
     showToast("Dish removed from menu");
@@ -583,6 +685,9 @@ function AdminDashboardContent({
 
   const handleToggleStock = (itemId: string) => {
     setMenuItems((prev) => {
+      let toggledItem: MenuItem | undefined;
+      let targetStockStatus: string = "in_stock";
+
       const updated = prev.map((item) => {
         if (item.id === itemId) {
           const nextStatus: "in_stock" | "low_stock" | "out_of_stock" =
@@ -591,11 +696,25 @@ function AdminDashboardContent({
               : item.stockStatus === "low_stock"
               ? "out_of_stock"
               : "in_stock";
+          toggledItem = item;
+          targetStockStatus = nextStatus;
           return { ...item, stockStatus: nextStatus };
         }
         return item;
       });
-      saveStoredMenu(currentOrgId, updated);
+
+      if (toggledItem && (targetStockStatus === "low_stock" || targetStockStatus === "out_of_stock")) {
+        dispatchLowStockAlert(currentOrgId, {
+          itemName: toggledItem.name,
+          currentStock: targetStockStatus === "out_of_stock" ? 0 : 3,
+          minSafetyStock: 5,
+          unit: "portions",
+          isRawMaterial: false,
+          branchName: user?.branchName || "Main Kitchen",
+        });
+      }
+
+      setTimeout(() => saveStoredMenu(currentOrgId, updated), 0);
       return updated;
     });
     showToast("Stock status updated in real-time");
@@ -662,7 +781,7 @@ function AdminDashboardContent({
           .order("created_at", { ascending: false });
 
         if (!menuErr && menuData && isMounted) {
-          const mappedMenu: MenuItem[] = menuData.map((d: any) => ({
+          let mappedMenu: MenuItem[] = menuData.map((d: any) => ({
             id: d.id,
             name: d.name,
             category: d.category || "karahi",
@@ -672,78 +791,65 @@ function AdminDashboardContent({
             stockCount: d.stock_count ?? 20,
             imageIcon: d.image_icon || "🍲",
             isPopular: Boolean(d.is_popular),
-            is_available: (d.stock_status || "in_stock") === "in_stock",
-            in_stock: (d.stock_status || "in_stock") === "in_stock",
+            variants: (() => {
+              if (Array.isArray(d.variants) && d.variants.length > 0) return d.variants;
+              if (d.description) {
+                try {
+                  const parsed = JSON.parse(d.description);
+                  if (Array.isArray(parsed.variants) && parsed.variants.length > 0) return parsed.variants;
+                } catch {}
+              }
+              if (Array.isArray(d.metadata?.variants) && d.metadata.variants.length > 0) return d.metadata.variants;
+              return undefined;
+            })(),
+            is_available: (d.stock_status || "in_stock") !== "out_of_stock",
+            in_stock: (d.stock_status || "in_stock") !== "out_of_stock",
+            image_url: d.image_url || undefined,
+            imageUrl: d.image_url || undefined,
           }));
 
           try {
             const { data: recipeRows } = await supabase
               .from("recipe_items")
               .select(
-                "menu_item_id, raw_material_id, quantity_required, unit, raw_materials(id, name, current_stock, min_safety_stock, cost_per_unit, unit)"
+                "menu_item_id, variant_id, variant_name, raw_material_id, quantity_required, unit, raw_materials(id, name, current_stock, min_safety_stock, cost_per_unit, unit)"
               )
               .eq("restaurant_id", resolvedRestId);
 
             if (recipeRows && recipeRows.length > 0) {
-              mappedMenu.forEach((d) => {
-                const dishRecipes = recipeRows.filter(
-                  (r: any) => String(r.menu_item_id) === String(d.id)
-                );
-
-                if (dishRecipes.length > 0) {
-                  d.hasRecipe = true;
-                  let totalCost = 0;
-                  let minPortions = Infinity;
-                  const missing: string[] = [];
-
-                  dishRecipes.forEach((r: any) => {
-                    const raw = r.raw_materials as any;
-                    const reqQty = Number(r.quantity_required) || 0;
-                    const costPerUnit = Number(raw?.cost_per_unit) || 0;
-                    totalCost += reqQty * costPerUnit;
-
-                    const currentStock = Number(raw?.current_stock) || 0;
-                    if (reqQty > 0) {
-                      const portions = Math.floor(currentStock / reqQty);
-                      if (portions < minPortions) {
-                        minPortions = portions;
-                      }
-                      if (currentStock < reqQty) {
-                        missing.push(
-                          `${raw?.name || "Ingredient"} (Req: ${reqQty} ${r.unit || raw?.unit || ""
-                          }, Stock: ${currentStock})`
-                        );
-                      }
+              mappedMenu = mappedMenu.map((item) => {
+                if (item.variants && Array.isArray(item.variants)) {
+                  const enrichedVars = item.variants.map((v) => {
+                    if (v.recipe && Array.isArray(v.recipe) && v.recipe.length > 0) return v;
+                    const matched = recipeRows.filter(
+                      (r: any) =>
+                        String(r.menu_item_id) === String(item.id) &&
+                        ((r.variant_id && String(r.variant_id) === String(v.id)) ||
+                          (r.variant_name && v.name && r.variant_name.trim().toLowerCase() === v.name.trim().toLowerCase()))
+                    );
+                    if (matched.length > 0) {
+                      return {
+                        ...v,
+                        recipe: matched.map((r: any) => {
+                          const raw = Array.isArray(r.raw_materials) ? r.raw_materials[0] : r.raw_materials;
+                          return {
+                            raw_material_id: r.raw_material_id,
+                            raw_material_name: raw?.name || "Ingredient",
+                            quantity_required: Number(r.quantity_required) || 0,
+                            unit: r.unit || raw?.unit || "",
+                            cost_per_unit: Number(raw?.cost_per_unit) || 0,
+                          };
+                        }),
+                      };
                     }
+                    return v;
                   });
-
-                  d.recipeCost = totalCost;
-                  d.recipeMargin =
-                    d.price > 0
-                      ? Math.round(((d.price - totalCost) / d.price) * 100)
-                      : 0;
-                  const canMake = minPortions === Infinity ? 0 : minPortions;
-                  d.maxPortions = canMake;
-                  d.missingIngredients = missing;
-
-                  // Rule 1: If canMakePortions < 1, dish status MUST automatically resolve to OUT OF STOCK
-                  if (canMake < 1) {
-                    d.isAutoOutOfStock = true;
-                    d.stockStatus = "out_of_stock";
-                    d.is_available = false;
-                    d.in_stock = false;
-                  } else {
-                    d.isAutoOutOfStock = false;
-                    d.is_available = d.stockStatus === "in_stock";
-                    d.in_stock = d.stockStatus === "in_stock";
-                  }
-                } else {
-                  d.hasRecipe = false;
-                  d.isAutoOutOfStock = false;
-                  d.is_available = d.stockStatus === "in_stock";
-                  d.in_stock = d.stockStatus === "in_stock";
+                  return { ...item, variants: enrichedVars };
                 }
+                return item;
               });
+
+              mappedMenu = applyRecipeCalculationsToMenu(mappedMenu, recipeRows);
             }
           } catch (rErr) {
             console.warn("[AdminDashboardClient] Recipe fetch warning:", rErr);
@@ -923,12 +1029,14 @@ function AdminDashboardContent({
 
     loadSupabaseData();
 
-    // Attach Realtime listener for kitchen_tickets, tables, branch_settings, raw_materials, and recipe_items
+    // Attach Realtime listener for kitchen_tickets, tables, branch_settings, raw_materials, recipe_items, and orders
     let kdsChannel: any = null;
     let tablesChannel: any = null;
     let settingsChannel: any = null;
     let rawMaterialsChannel: any = null;
     let recipeItemsChannel: any = null;
+    let menuItemsChannel: any = null;
+    let ordersChannel: any = null;
 
     try {
       const supabase = createClient();
@@ -1100,6 +1208,46 @@ function AdminDashboardContent({
           }
         )
         .subscribe();
+
+      // Realtime listener for menu_items changes
+      menuItemsChannel = supabase
+        .channel(`rt_menu_items_${restId}_${subUid}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "menu_items",
+            filter: `restaurant_id=eq.${restId}`,
+          },
+          (payload: any) => {
+            if (isMounted) {
+              console.log("[Admin Realtime] menu_items event:", payload.eventType);
+              loadSupabaseData();
+            }
+          }
+        )
+        .subscribe();
+
+      // Realtime listener for orders changes (updates live sales & order count ticker)
+      ordersChannel = supabase
+        .channel(`rt_orders_${restId}_${subUid}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "orders",
+            filter: `restaurant_id=eq.${restId}`,
+          },
+          (payload: any) => {
+            if (isMounted) {
+              console.log("[Admin Realtime] orders event:", payload.eventType);
+              loadSupabaseData();
+            }
+          }
+        )
+        .subscribe();
     } catch (chanErr) {
       console.warn("[AdminDashboardClient] Realtime subscription error:", chanErr);
     }
@@ -1113,6 +1261,8 @@ function AdminDashboardContent({
         if (settingsChannel) supabase.removeChannel(settingsChannel);
         if (rawMaterialsChannel) supabase.removeChannel(rawMaterialsChannel);
         if (recipeItemsChannel) supabase.removeChannel(recipeItemsChannel);
+        if (menuItemsChannel) supabase.removeChannel(menuItemsChannel);
+        if (ordersChannel) supabase.removeChannel(ordersChannel);
       } catch { }
     };
   }, [user?.organizationId, user?.id]);
@@ -1176,8 +1326,8 @@ function AdminDashboardContent({
   };
 
   const handleUpdateCartQty = (itemId: string, delta: number) => {
-    setCart((prev) =>
-      prev
+    setCart((prev) => {
+      return prev
         .map((c) => {
           if (c.item.id === itemId) {
             const nextQty = c.quantity + delta;
@@ -1185,8 +1335,8 @@ function AdminDashboardContent({
           }
           return c;
         })
-        .filter(Boolean) as CartItem[]
-    );
+        .filter(Boolean) as CartItem[];
+    });
   };
 
   const cartSubtotal = cart.reduce(
@@ -1198,10 +1348,13 @@ function AdminDashboardContent({
   const cartTotal = cartSubtotal + taxAmount - discountAmount;
 
   const handleSendToKitchen = (deliveryMeta?: { customerName?: string; customerPhone?: string; deliveryZone?: string }) => {
+    if (isSendingKotRef.current) return;
     if (cart.length === 0) {
       showToast("Please add items to cart before sending KOT.");
       return;
     }
+    isSendingKotRef.current = true;
+    try {
 
     const matchedTable = tables.find((t) => t.id === selectedTable);
     const tableIdentifier = matchedTable?.label || `Table ${selectedTable}`;
@@ -1261,6 +1414,7 @@ function AdminDashboardContent({
           c.item.preparation_time ||
           parseInt(String(c.item.prepTime || "15").replace(/[^0-9]/g, "")) ||
           15;
+        const variantObj = c.selectedVariant || c.item.selectedVariant;
         return {
           id: c.item.id,
           name: c.item.name,
@@ -1268,6 +1422,10 @@ function AdminDashboardContent({
           notes: c.notes,
           prepTime: c.item.prepTime || `${itemPrepMinutes}m`,
           preparation_time: itemPrepMinutes,
+          selectedVariant: variantObj,
+          variant: variantObj,
+          variant_id: variantObj?.id || null,
+          variant_name: variantObj?.name || null,
         };
       });
     }
@@ -1318,14 +1476,19 @@ function AdminDashboardContent({
         c.item.preparation_time ||
         parseInt(String(c.item.prepTime || "15").replace(/[^0-9]/g, "")) ||
         15;
+      const variantObj = c.selectedVariant || c.item.selectedVariant;
       return {
         id: c.item.id,
         name: c.item.name,
-        price: c.item.price,
+        price: variantObj?.price ?? c.item.price,
         quantity: c.quantity,
         notes: c.notes,
         prepTime: c.item.prepTime || `${itemPrepMinutes}m`,
         preparation_time: itemPrepMinutes,
+        selectedVariant: variantObj,
+        variant: variantObj,
+        variant_id: variantObj?.id || null,
+        variant_name: variantObj?.name || null,
       };
     });
 
@@ -1555,13 +1718,25 @@ function AdminDashboardContent({
             await query.eq("restaurant_id", restId);
             console.log(`[AdminDashboardClient] Table ${tableIdentifier} atomically locked to occupied.`);
           }
+
+          // Real-time Raw Material Inventory Stock Deduction
+          await deductInventoryStockForOrder(restId, freshOrderRecord.items, {
+            orderId: freshOrderRecord.id,
+            source: "admin_pos_send_to_kitchen",
+          });
         } catch (tblErr) {
           console.warn("[AdminDashboardClient] Fresh order & table lock exception:", tblErr);
         }
       })();
     }
 
-    setCart([]);
+      clearSharedPosCart(currentOrgId);
+      setCart([]);
+    } finally {
+      setTimeout(() => {
+        isSendingKotRef.current = false;
+      }, 1000);
+    }
   };
 
   const handleAdvanceKds = (ticketId: string, specificStatus?: KdsTicket["status"]) => {
@@ -1645,6 +1820,38 @@ function AdminDashboardContent({
       saveStoredKdsTickets(currentOrgId, updated);
       return updated;
     });
+
+    // 2. Async DB update to public.kitchen_tickets if ticket exists in database
+    (async () => {
+      try {
+        const supabase = createClient();
+        const updatePayload: any = {
+          status: nextStatus,
+        };
+        if (nextStatus === "completed" || nextStatus === "archived") {
+          updatePayload.completed_at = new Date().toISOString();
+        }
+        if (isTransitionToCooking) {
+          updatePayload.prep_timer_started_at = prepStartTimestamp;
+        }
+        await supabase
+          .from("kitchen_tickets")
+          .update(updatePayload)
+          .or(`ticket_number.eq.${ticketId},id.eq.${ticketId}`);
+
+        // If transitioning to cooking and not yet deducted, execute raw materials deduction
+        if (isTransitionToCooking && !isAlreadyDeducted && currentTicket?.items) {
+          const { restId } = await getValidTenantContext(user);
+          await deductInventoryStockForOrder(restId, currentTicket.items, {
+            orderId: ticketId,
+            source: "admin_kds_transition",
+          });
+        }
+      } catch (err) {
+        console.warn("Could not sync KDS status to kitchen_tickets DB table:", err);
+      }
+    })();
+
     showToast(`Kitchen status updated for ${ticketId}`);
   };
 
@@ -1655,7 +1862,7 @@ function AdminDashboardContent({
   });
 
   return (
-    <div className="min-h-screen bg-[var(--bg)] text-[var(--text-hi)] flex transition-colors duration-300 antialiased font-sans selection:bg-[var(--gold)]/20 selection:text-[var(--gold)]">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[var(--bg)] text-[var(--text-hi)] flex transition-colors duration-300 antialiased font-sans selection:bg-[var(--gold)]/20 selection:text-[var(--gold)]">
       {/* Toast Alert */}
       {toastMessage && (
         <div className="fixed top-6 right-6 z-[999] flex items-center gap-2.5 px-4 py-2.5 rounded-2xl bg-[var(--bg-deep)] border border-[var(--gold)]/40 text-[var(--gold)] shadow-2xl shadow-black/80 font-mono text-xs font-semibold animate-in fade-in slide-in-from-top-4 duration-200">
@@ -1690,7 +1897,7 @@ function AdminDashboardContent({
 
 
       {/* ===================== MAIN CONTENT AREA ===================== */}
-      <main className="flex-1 min-w-0 flex flex-col h-screen overflow-y-auto">
+      <main className={`flex-1 min-w-0 max-w-full overflow-x-hidden flex flex-col h-screen ${activeTab === "pos" ? "overflow-hidden" : "overflow-y-auto"} pb-16 lg:pb-0`}>
         {/* Top Navbar */}
         <AdminHeader
           searchQuery={searchQuery}
@@ -1698,7 +1905,10 @@ function AdminDashboardContent({
           theme={theme}
           toggleTheme={toggleTheme}
           notifications={notifications}
-          markNotificationsAsRead={() => setNotifications([])}
+          markNotificationsAsRead={() => {
+            markAllNotificationsRead(currentOrgId);
+            setNotifications(getStoredNotifications(currentOrgId));
+          }}
           onNewOrderClick={() => handleTabChange("pos")}
           onLogout={() => {
             logout();
@@ -1706,6 +1916,8 @@ function AdminDashboardContent({
           }}
           onNavigateProfile={() => handleTabChange("profile")}
           onOpenMobileMenu={() => setIsMenuDrawerOpen(true)}
+          todaySales={todayGrossSales}
+          todayOrdersCount={todayOrdersCount}
         />
 
 
@@ -1864,10 +2076,10 @@ function AdminDashboardContent({
         {mountedTabs.has("menu") && (
           <div
             key="view-menu"
-            className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "menu" ? "" : "hidden"}`}
+            className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "menu" ? "block" : "hidden"}`}
             style={{ display: activeTab === "menu" ? undefined : "none" }}
           >
-            {hasFeature("INVENTORY") ? (
+            {hasFeature("MENU") ? (
               <MenuView
                 menuItems={menuItems}
                 onAddDish={handleAddDish}
@@ -1880,9 +2092,10 @@ function AdminDashboardContent({
               />
             ) : (
               <ModuleLockedView
-                moduleName="Menu Catalog"
-                requiredFeature="INVENTORY"
+                moduleName="Menu Management"
+                requiredFeature="MENU"
                 onNavigate={handleTabChange}
+                onNavigateOverview={() => handleTabChange("overview")}
               />
             )}
           </div>
@@ -1914,14 +2127,14 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "procurement" ? "" : "hidden"}`}
             style={{ display: activeTab === "procurement" ? undefined : "none" }}
           >
-            {hasFeature("INVENTORY") ? (
+            {hasFeature("PROCUREMENT") ? (
               <ProcurementView
                 showToast={showToast}
               />
             ) : (
               <ModuleLockedView
                 moduleName="Procurement & Purchase Orders"
-                requiredFeature="INVENTORY"
+                requiredFeature="PROCUREMENT"
                 onNavigate={handleTabChange}
               />
             )}
@@ -1934,9 +2147,17 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "expenses" ? "" : "hidden"}`}
             style={{ display: activeTab === "expenses" ? undefined : "none" }}
           >
-            <ExpensesView
-              showToast={showToast}
-            />
+            {hasFeature("EXPENSES") ? (
+              <ExpensesView
+                showToast={showToast}
+              />
+            ) : (
+              <ModuleLockedView
+                moduleName="Expenses & OPEX"
+                requiredFeature="EXPENSES"
+                onNavigate={handleTabChange}
+              />
+            )}
           </div>
         )}
 
@@ -1946,7 +2167,7 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "tables" ? "" : "hidden"}`}
             style={{ display: activeTab === "tables" ? undefined : "none" }}
           >
-            {hasFeature("KITCHEN") ? (
+            {hasFeature("TABLES") ? (
               <TableView
                 showToast={showToast}
                 routeAction={routeAction}
@@ -1954,7 +2175,7 @@ function AdminDashboardContent({
             ) : (
               <ModuleLockedView
                 moduleName="Floor Matrix & Tables"
-                requiredFeature="KITCHEN"
+                requiredFeature="TABLES"
                 onNavigate={handleTabChange}
               />
             )}
@@ -1967,10 +2188,18 @@ function AdminDashboardContent({
             className={`w-full flex-1 flex flex-col min-h-0 ${activeTab === "analytics" || activeTab === "orders" ? "" : "hidden"}`}
             style={{ display: activeTab === "analytics" || activeTab === "orders" ? undefined : "none" }}
           >
-            <AnalyticsView
-              user={user || undefined}
-              showToast={showToast}
-            />
+            {hasFeature("REPORTS") || hasFeature("ANALYTICS") ? (
+              <AnalyticsView
+                user={user || undefined}
+                showToast={showToast}
+              />
+            ) : (
+              <ModuleLockedView
+                moduleName="Analytics & Reports"
+                requiredFeature="REPORTS"
+                onNavigate={handleTabChange}
+              />
+            )}
           </div>
         )}
 

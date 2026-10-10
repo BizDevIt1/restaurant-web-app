@@ -397,23 +397,16 @@ export default function RiderDispatchView({
   const totalRidersCount = riders.length;
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
-            • LOGISTICS &amp; FLEET TELEMETRY
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
             Rider Dispatch &amp;{" "}
             <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
               Delivery Fleet
             </span>
           </h1>
-          <p className="text-xs sm:text-sm text-[var(--text-lo)] font-medium mt-1">
-            Real-time delivery routing, rider telemetry, customer ETA tracking, and digital COD settlement.
-          </p>
         </div>
 
         <Link
@@ -531,14 +524,14 @@ export default function RiderDispatchView({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center font-bold">
+              <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-400 flex items-center justify-center font-bold">
                 <Package className="w-4 h-4" />
               </div>
               <h2 className="font-display font-black text-xl text-[var(--text-hi)]">
                 Active Delivery Dispatch Queue
               </h2>
               {readyOrdersCount > 0 && (
-                <span className="px-2.5 py-0.5 rounded-full bg-[#25d366]/15 border border-[#25d366]/30 text-[#25d366] font-mono text-[10.5px] font-bold animate-pulse flex items-center gap-1">
+                <span className="px-2.5 py-0.5 rounded-full bg-[#25d366]/15 border border-[#25d366]/30 text-emerald-800 dark:text-[#25d366] font-mono text-[10.5px] font-bold animate-pulse flex items-center gap-1 shadow-2xs">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#25d366]" />
                   {readyOrdersCount} Ready to Dispatch
                 </span>
@@ -550,11 +543,28 @@ export default function RiderDispatchView({
           </div>
 
           {/* Quick Filter Tabs */}
-          <div className="flex items-center gap-1.5 bg-[var(--surface-hi)] p-1 rounded-xl border border-[var(--border)] self-start sm:self-auto overflow-x-auto">
+          {/* Mobile & Tablet Dropdown Filter (< 1024px) */}
+          <div className="lg:hidden w-full sm:w-64">
+            <ResponsiveSelect
+              value={deliveryFilter}
+              onChange={(val) => setDeliveryFilter(val as any)}
+              options={[
+                { id: "ready", label: "Ready for Dispatch", count: readyOrdersCount },
+                { id: "preparing", label: "Kitchen Cooking", count: preparingOrdersCount },
+                { id: "out_for_delivery", label: "Out for Delivery", count: outForDeliveryCount },
+                { id: "all", label: "All Active", count: totalDeliveryOrdersCount },
+              ]}
+              buttonClassName="h-10 text-xs font-mono font-bold text-[var(--text-hi)]"
+              menuClassName="w-full sm:w-64"
+            />
+          </div>
+
+          {/* Desktop Horizontal Tabs (>= 1024px) */}
+          <div className="hidden lg:flex items-center gap-1.5 bg-white/80 dark:bg-[var(--surface-hi)] p-1 rounded-xl border border-[var(--border)] self-start sm:self-auto overflow-x-auto shadow-2xs">
             {[
-              { id: "ready", label: "Ready for Dispatch", count: readyOrdersCount, color: "text-[#25d366]" },
-              { id: "preparing", label: "Kitchen Cooking", count: preparingOrdersCount, color: "text-amber-400" },
-              { id: "out_for_delivery", label: "Out for Delivery", count: outForDeliveryCount, color: "text-blue-400" },
+              { id: "ready", label: "Ready for Dispatch", count: readyOrdersCount, color: "text-emerald-700 dark:text-[#25d366]" },
+              { id: "preparing", label: "Kitchen Cooking", count: preparingOrdersCount, color: "text-amber-800 dark:text-amber-400" },
+              { id: "out_for_delivery", label: "Out for Delivery", count: outForDeliveryCount, color: "text-blue-700 dark:text-blue-400" },
               { id: "all", label: "All Active", count: totalDeliveryOrdersCount, color: "text-[var(--text-hi)]" },
             ].map((tab) => (
               <button
@@ -622,19 +632,19 @@ export default function RiderDispatchView({
                       </span>
 
                       {isReady ? (
-                        <span className="px-2.5 py-1 rounded-full bg-[#25d366]/15 border border-[#25d366]/40 text-[#25d366] font-mono text-[10px] font-bold flex items-center gap-1.5 shadow-sm">
+                        <span className="badge-pill badge-success">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          Ready for Handoff
+                          <span>Ready for Handoff</span>
                         </span>
                       ) : isOut ? (
-                        <span className="px-2.5 py-1 rounded-full bg-blue-500/15 border border-blue-500/40 text-blue-300 font-mono text-[10px] font-bold flex items-center gap-1.5">
+                        <span className="badge-pill badge-info">
                           <Bike className="w-3.5 h-3.5" />
-                          Out for Delivery
+                          <span>Out for Delivery</span>
                         </span>
                       ) : (
-                        <span className="px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-400 font-mono text-[10px] font-bold flex items-center gap-1.5">
+                        <span className="badge-pill badge-warning">
                           <ChefHat className="w-3.5 h-3.5" />
-                          Cooking in Kitchen
+                          <span>Cooking in Kitchen</span>
                         </span>
                       )}
                     </div>
@@ -698,12 +708,12 @@ export default function RiderDispatchView({
 
                     {/* If assigned to courier */}
                     {ord.assignedRiderName && (
-                      <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-between text-[11px] font-mono text-blue-300">
+                      <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-between text-[11px] font-mono text-blue-600 dark:text-blue-300">
                         <span className="flex items-center gap-1.5">
-                          <Bike className="w-3.5 h-3.5 text-blue-400" />
+                          <Bike className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400" />
                           Courier Assigned:
                         </span>
-                        <span className="font-bold text-white">{ord.assignedRiderName}</span>
+                        <span className="font-bold text-[var(--text-hi)]">{ord.assignedRiderName}</span>
                       </div>
                     )}
                   </div>
@@ -840,14 +850,15 @@ export default function RiderDispatchView({
                     </div>
 
                     <span
-                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider ${
+                      className={`badge-pill uppercase ${
                         isActive
-                          ? "bg-[#25d366]/15 text-[#25d366] border border-[#25d366]/30"
+                          ? "badge-success"
                           : item.status === "on_break"
-                          ? "bg-amber-500/15 text-amber-400 border border-amber-500/30"
-                          : "bg-red-500/15 text-red-400 border border-red-500/30"
+                          ? "badge-warning"
+                          : "badge-danger"
                       }`}
                     >
+                      <span className="badge-dot" />
                       {item.status || "active"}
                     </span>
                   </div>
@@ -866,7 +877,7 @@ export default function RiderDispatchView({
 
                     <div className="flex items-center justify-between">
                       <span className="text-[var(--text-faint)] flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-amber-400" />
+                        <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
                         Shift:
                       </span>
                       <span className="font-bold text-[var(--gold)]">
@@ -954,7 +965,7 @@ export default function RiderDispatchView({
               <button
                 type="button"
                 onClick={() => setIsAssignModalOpen(false)}
-                className="p-1.5 rounded-xl bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-white cursor-pointer"
+                className="p-1.5 rounded-xl bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-[var(--text-hi)] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -964,7 +975,7 @@ export default function RiderDispatchView({
             <div className="p-3.5 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-mono space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-[var(--text-faint)]">Customer Destination:</span>
-                <span className="text-[10.5px] px-2 py-0.5 rounded bg-blue-500/15 text-blue-300 font-bold border border-blue-500/30">
+                <span className="text-[10.5px] px-2 py-0.5 rounded bg-blue-500/15 text-blue-700 dark:text-blue-300 font-bold border border-blue-500/30">
                   Target Zone
                 </span>
               </div>

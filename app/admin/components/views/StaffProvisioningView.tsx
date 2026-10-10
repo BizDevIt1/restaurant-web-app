@@ -159,7 +159,13 @@ export default function StaffProvisioningView({
   );
 
   // Section 2: Shift and Role-Specific Metadata
-  const [shift, setShift] = useState<string>(initialData?.shift || "Evening Rush");
+  const [shift, setShift] = useState<string>(() => {
+    const raw = initialData?.shift || "";
+    if (raw.includes("Morning") || raw.includes("First")) return "First Shift (Morning)";
+    if (raw.includes("Evening") || raw.includes("Second")) return "Second Shift (Evening)";
+    if (raw.includes("Night") || raw.includes("Third") || raw.includes("Owl")) return "Third Shift (Night / Closing)";
+    return "First Shift (Morning)";
+  });
   const [cashDrawer, setCashDrawer] = useState("Counter 01");
   const [kitchenStation, setKitchenStation] = useState("Hot Kitchen / Grills");
   const [vehiclePlate, setVehiclePlate] = useState("Bike - LEA 4920");
@@ -206,7 +212,7 @@ export default function StaffProvisioningView({
           screenName: "Kitchen (KDS)" as const,
           displayLabel: "Kitchen Display Terminal (KDS)",
           description: "Staff is automatically routed to the kitchen queue terminal with dedicated prep ticket controls.",
-          badgeColor: "bg-amber-500/10 text-amber-400 border-amber-500/30",
+          badgeColor: "bg-amber-50 text-amber-800 border-amber-200/80 shadow-xs dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/30",
           icon: Flame,
           path: "/kitchen",
         };
@@ -216,7 +222,7 @@ export default function StaffProvisioningView({
           screenName: "Rider Dispatch" as const,
           displayLabel: "Rider Delivery Fleet Terminal",
           description: "Staff is automatically routed to delivery dispatch console for live parcel assignments.",
-          badgeColor: "bg-blue-500/10 text-blue-400 border-blue-500/30",
+          badgeColor: "bg-blue-50 text-blue-700 border-blue-200/80 shadow-xs dark:bg-blue-500/10 dark:text-blue-400 dark:border-blue-500/30",
           icon: Bike,
           path: "/dispatch",
         };
@@ -226,7 +232,7 @@ export default function StaffProvisioningView({
           screenName: "Full Admin" as const,
           displayLabel: "Full Management Portal",
           description: "Staff receives complete administration dashboard access including analytics, billing, and settings.",
-          badgeColor: "bg-[var(--gold)]/10 text-[var(--gold)] border-[var(--gold)]/30",
+          badgeColor: "bg-amber-50 text-amber-800 border-amber-200/80 shadow-xs dark:bg-[var(--gold)]/10 dark:text-[var(--gold)] dark:border-[var(--gold)]/30",
           icon: ShieldCheck,
           path: "/admin",
         };
@@ -236,9 +242,9 @@ export default function StaffProvisioningView({
           screenName: "POS Counter" as const,
           displayLabel: "POS Floor / Table Ordering Station",
           description: "Staff is automatically routed to POS table-side ordering terminal.",
-          badgeColor: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
+          badgeColor: "bg-teal-50 text-teal-800 border-teal-200/80 shadow-xs dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/30",
           icon: UtensilsCrossed,
-          path: "/pos",
+          path: "/terminal/pos",
         };
       case "cashier":
       default:
@@ -247,9 +253,9 @@ export default function StaffProvisioningView({
           screenName: "POS Counter" as const,
           displayLabel: "POS Billing Counter",
           description: "Staff is automatically routed to dedicated checkout register with locked management settings.",
-          badgeColor: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
+          badgeColor: "bg-emerald-50 text-emerald-800 border border-emerald-200/80 shadow-xs dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/30",
           icon: Receipt,
-          path: "/pos",
+          path: "/terminal/pos",
         };
     }
   };
@@ -429,7 +435,7 @@ export default function StaffProvisioningView({
   };
 
   return (
-    <div className="w-full max-w-4xl mx-auto p-3.5 sm:p-6 lg:p-8 space-y-6 pb-12 animate-in fade-in duration-200 select-none">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200 select-none">
       <div className="max-w-4xl mx-auto w-full space-y-6">
         {/* Navigation Breadcrumb / Back Action */}
         <div className="flex items-center justify-between">
@@ -441,20 +447,10 @@ export default function StaffProvisioningView({
             <ArrowLeft className="w-4 h-4" />
             <span>Back to Staff Roster</span>
           </button>
-
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] text-[11px] font-mono text-[var(--text-faint)]">
-            <ShieldCheck className="w-3.5 h-3.5 text-[var(--gold)]" />
-            <span>Role-Based Automated Terminal Routing</span>
-          </div>
         </div>
 
-        {/* Page Title Header */}
+          {/* Page Title Header */}
         <div className="border-b border-[var(--border)] pb-5">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--gold)] animate-pulse" />
-            <UserCheck className="w-3.5 h-3.5" />
-            <span>STAFF PROVISIONING &amp; ACCESS</span>
-          </div>
           <h1 className="text-2xl sm:text-4xl font-black font-display tracking-tight text-[var(--text-hi)]">
             {mode === "add" ? (
               <>
@@ -472,9 +468,6 @@ export default function StaffProvisioningView({
               </>
             )}
           </h1>
-          <p className="text-xs text-[var(--text-lo)] font-mono mt-1">
-            Register operational restaurant personnel. The system automatically provisions secure terminal screens and permissions based on operational roles.
-          </p>
         </div>
 
         {/* Main Provisioning Form */}
@@ -651,9 +644,9 @@ export default function StaffProvisioningView({
                     onChange={(e) => setShift(e.target.value)}
                     className="w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)] rounded-xl pl-9 pr-4 py-2.5 text-xs text-[var(--text-hi)] focus:outline-none transition-all cursor-pointer font-sans"
                   >
-                    <option value="Morning">Morning Shift (08:00 AM - 04:00 PM)</option>
-                    <option value="Evening Rush">Evening Rush (04:00 PM - 12:00 AM)</option>
-                    <option value="Night Owl">Night Owl (12:00 AM - 08:00 AM)</option>
+                    <option value="First Shift (Morning)">First Shift / Morning (08:00 AM – 04:00 PM)</option>
+                    <option value="Second Shift (Evening)">Second Shift / Evening (04:00 PM – 12:00 AM)</option>
+                    <option value="Third Shift (Night / Closing)">Third Shift / Night (12:00 AM – 08:00 AM)</option>
                   </select>
                 </div>
               </div>

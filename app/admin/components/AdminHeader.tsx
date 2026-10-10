@@ -6,7 +6,6 @@ import {
   Sun,
   Moon,
   Bell,
-  Plus,
   LogOut,
   User,
   Building2,
@@ -15,10 +14,11 @@ import {
   X,
   ShieldCheck,
   Menu,
+  TrendingUp,
+  Receipt,
 } from "lucide-react";
-import { OperationalNotification, UserRole } from "../types";
+import { OperationalNotification } from "../types";
 import { useAuth } from "../context/AuthContext";
-
 import { useRouter } from "next/navigation";
 
 interface AdminHeaderProps {
@@ -32,6 +32,8 @@ interface AdminHeaderProps {
   onLogout?: () => void;
   onNavigateProfile?: () => void;
   onOpenMobileMenu?: () => void;
+  todaySales?: number;
+  todayOrdersCount?: number;
 }
 
 export default function AdminHeader({
@@ -41,10 +43,12 @@ export default function AdminHeader({
   toggleTheme,
   notifications,
   markNotificationsAsRead,
-  onNewOrderClick,
+  onNewOrderClick: _onNewOrderClick,
   onLogout,
   onNavigateProfile,
   onOpenMobileMenu,
+  todaySales = 0,
+  todayOrdersCount = 0,
 }: AdminHeaderProps) {
   const router = useRouter();
   const {
@@ -122,6 +126,8 @@ export default function AdminHeader({
     .substring(0, 2)
     .toUpperCase() || "AD";
 
+  const currentOrgId = user?.organizationId || user?.id || "default";
+
   const activeBranchName =
     activeBranchId === "all"
       ? `All Outlets (${user?.branches?.length || 0})`
@@ -130,101 +136,172 @@ export default function AdminHeader({
           .trim() || "Main Outlet";
 
   return (
-    <header className="sticky top-0 z-30 min-h-16 sm:h-20 shrink-0 bg-[var(--bg-deep)]/80 backdrop-blur-xl border-b border-[var(--border)] px-3 sm:px-8 flex items-center justify-between gap-2 sm:gap-4 select-none flex-wrap py-2 sm:py-0">
-      {/* ===================== LEFT: CLEAN HEADER (No side view hamburger) ===================== */}
-      <div className="flex items-center gap-3" />
+    <header className="w-full max-w-full sticky top-0 z-40 h-16 sm:h-20 shrink-0 bg-[var(--bg-deep)]/80 backdrop-blur-xl border-b border-[var(--border)] px-4 sm:px-6 md:px-8 flex items-center justify-between gap-1 sm:gap-4 select-none whitespace-nowrap">
+      {/* ===================== LEFT: LIVE DAILY SALES & ORDERS TICKER ===================== */}
+      <div className="flex items-center gap-1 sm:gap-3 shrink-0 whitespace-nowrap">
+        {onOpenMobileMenu && (
+          <button
+            onClick={onOpenMobileMenu}
+            className="hidden p-1.5 sm:p-2 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--gold)] cursor-pointer mr-0.5"
+            aria-label="Open navigation menu"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
+        )}
+
+        {/* Daily Ticker Capsule (Strictly single horizontal line) */}
+        <div className="flex items-center gap-1 sm:gap-3 px-1.5 sm:px-3 py-1 sm:py-1.5 rounded-xl bg-[var(--surface-hi)]/80 border border-[var(--border)] shadow-xs backdrop-blur-md select-none transition-all hover:border-[var(--gold)]/30 shrink-0 whitespace-nowrap">
+          {/* Today's Sales */}
+          <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
+            <TrendingUp className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[var(--gold)] shrink-0" />
+            <div className="flex items-baseline gap-0.5 sm:gap-1 whitespace-nowrap">
+              <span className="text-[10px] sm:text-[11px] font-medium text-[var(--text-lo)] hidden min-[360px]:inline">
+                Sales:
+              </span>
+              <span className="font-mono text-[11px] sm:text-[13px] font-bold text-[var(--text-hi)] whitespace-nowrap">
+                Rs {Number(todaySales || 0).toLocaleString()}
+              </span>
+            </div>
+          </div>
+
+          <div className="h-3 w-px bg-[var(--border)] shrink-0" />
+
+          {/* Today's Orders */}
+          <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
+            <Receipt className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-[var(--orange)] shrink-0" />
+            <div className="flex items-baseline gap-0.5 sm:gap-1 whitespace-nowrap">
+              <span className="text-[10px] sm:text-[11px] font-medium text-[var(--text-lo)] hidden min-[360px]:inline">
+                Orders:
+              </span>
+              <span className="font-mono text-[11px] sm:text-[13px] font-bold text-[var(--text-hi)] whitespace-nowrap">
+                {todayOrdersCount || 0}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {/* ===================== RIGHT SECTION: MINIMAL & CLEAN ===================== */}
-      <div className="flex flex-wrap items-center gap-2 sm:gap-3.5 shrink-0">
+      <div className="flex items-center gap-1 sm:gap-3 shrink-0 whitespace-nowrap">
         {/* Theme Toggle Button */}
         <div className="relative group">
           <button
             onClick={toggleTheme}
             aria-label={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
-            className="p-2.5 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--gold)] hover:border-[var(--gold)] transition-all cursor-pointer flex items-center justify-center"
+            className="w-7 h-7 sm:w-9 sm:h-9 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--gold)] hover:border-[var(--gold)] transition-all cursor-pointer flex items-center justify-center shrink-0"
           >
             {theme === "dark" ? (
-              <Sun className="w-4 h-4 transition-transform hover:rotate-45" />
+              <Sun className="w-3 h-3 sm:w-4 sm:h-4 transition-transform hover:rotate-45" />
             ) : (
-              <Moon className="w-4 h-4 transition-transform hover:-rotate-12" />
+              <Moon className="w-3 h-3 sm:w-4 sm:h-4 transition-transform hover:-rotate-12" />
             )}
           </button>
         </div>
 
         {/* Notification Bell */}
-        <div className="relative" ref={notifDropdownRef}>
+        <div className="relative shrink-0" ref={notifDropdownRef}>
           <button
-            onClick={() => {
-              setShowNotifications(!showNotifications);
-              if (!showNotifications) markNotificationsAsRead();
-            }}
-            className="p-2.5 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--gold)] transition-all relative cursor-pointer flex items-center justify-center"
-            title="Notifications"
+            onClick={() => setShowNotifications(!showNotifications)}
+            className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] flex items-center justify-center text-[var(--text-lo)] hover:text-[var(--text-hi)] relative cursor-pointer"
+            title="Recent Alerts"
+            aria-label="Toggle notifications menu"
           >
             <Bell className="w-4 h-4" />
             {unreadCount > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[var(--orange)] shadow-[0_0_6px_var(--orange)]" />
+              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[var(--orange)] shadow-[0_0_6px_var(--orange)]"></span>
             )}
           </button>
 
           {/* Notifications Dropdown Popover */}
           {showNotifications && (
-            <div className="absolute right-0 mt-2 w-[calc(100vw-1.5rem)] max-w-xs sm:max-w-sm sm:w-88 rounded-2xl bg-[var(--bg-deep)] border border-[var(--border-hi)] p-3.5 sm:p-4 shadow-2xl z-50 space-y-3 animate-in fade-in slide-in-from-top-2 backdrop-blur-xl">
+            <div className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-2xl bg-[var(--bg-deep)] border border-[var(--border-hi)] p-4 shadow-2xl z-50 space-y-3 animate-in fade-in slide-in-from-top-2 text-left font-sans whitespace-normal">
               <div className="flex items-center justify-between pb-2 border-b border-[var(--border)]">
-                <span className="font-display font-bold text-xs text-[var(--text-hi)]">
-                  Recent Alerts
-                </span>
-                <button
+                <span className="font-bold text-xs text-[var(--text-hi)]">Alerts &amp; Audits</span>
+                <span
                   onClick={markNotificationsAsRead}
-                  className="font-mono text-[10px] text-[var(--gold)] hover:underline cursor-pointer"
+                  className="text-xs text-[var(--gold)] font-medium cursor-pointer hover:underline"
                 >
                   Mark all read
-                </button>
+                </span>
               </div>
-              <div className="space-y-2.5 text-xs max-h-64 overflow-y-auto">
-                {notifications.map((n) => (
-                  <div
-                    key={n.id}
-                    className="p-2.5 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)]"
-                  >
-                    <div className="flex items-center justify-between font-semibold text-[var(--text-hi)]">
-                      <span className="truncate">{n.title}</span>
-                      <span className="text-[9.5px] font-mono text-[var(--text-faint)] shrink-0 ml-1">
-                        {n.timestamp}
-                      </span>
-                    </div>
-                    <div className="text-[var(--text-lo)] text-[11px] mt-1 font-mono leading-relaxed">
-                      {n.message}
-                    </div>
+              <div className="space-y-2.5 text-xs max-h-[320px] overflow-y-auto overflow-x-hidden custom-scrollbar">
+                {notifications.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-[var(--text-lo)] whitespace-normal">
+                    No recent alerts
                   </div>
-                ))}
+                ) : (
+                  notifications.map((n) => {
+                    const isUrgent = n.type === "urgent";
+                    const isWarning = n.type === "warning";
+                    const isSuccess = n.type === "success";
+
+                    return (
+                      <div
+                        key={n.id}
+                        className={`p-2.5 rounded-xl bg-[var(--surface-hi)] w-full max-w-full overflow-hidden border transition-all ${
+                          isUrgent
+                            ? "border-rose-500/35 bg-rose-500/5 shadow-xs shadow-rose-950/20"
+                            : isWarning
+                            ? "border-amber-500/30 bg-amber-500/5"
+                            : "border-[var(--border)]"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1.5 mb-1">
+                          <span
+                            className={`text-[9.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md ${
+                              isUrgent
+                                ? "bg-rose-500/20 text-rose-400 border border-rose-500/30"
+                                : isWarning
+                                ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                                : isSuccess
+                                ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                                : "bg-[var(--gold)]/15 text-[var(--gold)] border border-[var(--gold)]/25"
+                            }`}
+                          >
+                            {isUrgent ? "CRITICAL / DEPLETED" : isWarning ? "LOW STOCK" : "SHIFT AUDIT"}
+                          </span>
+                          {n.timestamp && (
+                            <span className="text-[9.5px] text-[var(--text-faint)] font-mono shrink-0">
+                              {n.timestamp}
+                            </span>
+                          )}
+                        </div>
+                        <div
+                          className={`font-semibold text-xs break-words whitespace-normal max-w-full ${
+                            isUrgent
+                              ? "text-rose-400"
+                              : isWarning
+                              ? "text-amber-400"
+                              : "text-[var(--gold)]"
+                          }`}
+                        >
+                          {n.title}
+                        </div>
+                        <div className="text-[var(--text-lo)] text-[11px] leading-relaxed mt-0.5 break-words whitespace-normal max-w-full">
+                          {n.message}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
           )}
         </div>
 
-        {/* Quick Action Button: [+ New Order] for POS users */}
-        <button
-          onClick={onNewOrderClick}
-          className="btn-gold animate-sheen text-xs px-3.5 sm:px-4 py-2 gap-1.5 font-bold cursor-pointer inline-flex items-center rounded-xl shadow-md"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>{isFranchiseOwner ? "Add Branch" : "New Order"}</span>
-        </button>
-
         {/* Profile Avatar Badge with Clean Dropdown */}
-        <div className="relative" ref={profileDropdownRef}>
+        <div className="relative shrink-0 pr-0.5 sm:pr-0" ref={profileDropdownRef}>
           <button
             onClick={() => setShowProfileDropdown(!showProfileDropdown)}
             aria-label="User Profile"
-            className="w-9 h-9 rounded-full bg-gradient-to-br from-[#f5c85c] to-[#e04e17] text-[#342c14] font-bold text-xs flex items-center justify-center border border-white/40 shadow-md cursor-pointer hover:scale-105 transition-transform select-none"
+            className="w-7 h-7 sm:w-9 sm:h-9 rounded-full bg-gradient-to-br from-[#f5c85c] to-[#e04e17] text-[#342c14] font-bold text-[11px] sm:text-xs flex items-center justify-center border border-white/40 shadow-md cursor-pointer hover:scale-105 transition-transform select-none shrink-0"
           >
             {initials}
           </button>
 
           {/* Profile Dropdown */}
           {showProfileDropdown && (
-            <div className="absolute right-0 mt-2 w-[calc(100vw-1.5rem)] max-w-xs sm:w-72 rounded-2xl bg-[var(--bg-deep)] border border-[var(--border-hi)] shadow-2xl p-2.5 z-50 animate-in fade-in slide-in-from-top-2 backdrop-blur-2xl">
+            <div className="fixed inset-x-3 top-16 sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80 rounded-2xl bg-[var(--bg-deep)] border border-[var(--border-hi)] shadow-2xl p-2.5 z-50 animate-in fade-in slide-in-from-top-2 backdrop-blur-2xl">
               <div className="p-3 border-b border-[var(--border)] mb-1">
                 <p className="font-bold text-xs text-[var(--text-hi)]">{cleanUserName}</p>
                 <p className="text-[10px] font-mono text-[var(--text-faint)] truncate">

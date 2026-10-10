@@ -108,7 +108,13 @@ export default function OverviewView({
   // 2. ACTIVE ORDERS IN PROGRESS & KITCHEN METRICS
   // ============================================================================
   const activeKdsTickets = useMemo(() => {
-    return kdsTickets.filter((t) => t.status !== "completed");
+    return kdsTickets.filter(
+      (t) =>
+        t.status !== "completed" &&
+        t.status !== "cancelled" &&
+        t.status !== "archived" &&
+        t.status !== "fulfilled"
+    );
   }, [kdsTickets]);
 
   const activeOrdersCount = activeKdsTickets.length;
@@ -149,23 +155,10 @@ export default function OverviewView({
   const animatedCookTime = useCountUp(computedAvgCookTime);
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* ===================== DYNAMIC PAGE HEADING ===================== */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
-            •{" "}
-            {(isBranchAdmin
-              ? (user.branchName || user.restaurantName)
-              : user.restaurantName
-            )
-              .replace(/frenchis\w*|franchis\w*/gi, "")
-              .replace(/\s+/g, " ")
-              .trim()
-              .toUpperCase() || "RESTAURANT"}
-            {user.city ? ` • ${user.city.toUpperCase()}` : ""}
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
             {isFranchiseOwner ? (
               <>
@@ -183,11 +176,6 @@ export default function OverviewView({
               </>
             )}
           </h1>
-          <p className="text-xs sm:text-sm text-[var(--text-lo)] mt-1 font-medium">
-            {isFranchiseOwner
-              ? `Today — ${currentDate || "Live Data"} • Multi-branch network telemetry & consolidated performance.`
-              : `Today — ${currentDate || "Live Data"} • Real-time kitchen, POS counter, and floor billing operations.`}
-          </p>
         </div>
       </div>
 
@@ -425,12 +413,12 @@ export default function OverviewView({
                     </span>
                   </div>
                   <span
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold ${
+                    className={`badge-pill ${
                       ticket.status === "ready"
-                        ? "bg-[#25d366]/20 text-[#25d366]"
+                        ? "badge-success"
                         : ticket.elapsedMinutes > 15
-                        ? "bg-red-500/20 text-red-400 animate-pulse"
-                        : "bg-[var(--gold-dim)] text-[var(--gold)]"
+                        ? "badge-danger animate-pulse"
+                        : "badge-gold"
                     }`}
                   >
                     <Clock className="w-2.5 h-2.5" />

@@ -138,19 +138,18 @@ export default function SuperAdminClient({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [navResetKey, setNavResetKey] = useState(0);
   const [activePlanMode, setActivePlanMode] = useState<"new" | "edit" | null>(initialPlanMode || null);
-  const [activeRestaurantMode, setActiveRestaurantMode] = useState<"new" | "edit" | null>(() => {
-    if (initialRestaurantMode) return initialRestaurantMode;
-    if (typeof window !== "undefined") {
+  const [activeRestaurantMode, setActiveRestaurantMode] = useState<"new" | "edit" | null>(initialRestaurantMode || null);
+
+  useEffect(() => {
+    if (!initialRestaurantMode && typeof window !== "undefined") {
       const path = window.location.pathname;
       if (path.endsWith("/new") && path.includes("/restaurants")) {
-        return "new";
-      }
-      if (path.includes("/restaurants/edit")) {
-        return "edit";
+        setActiveRestaurantMode("new");
+      } else if (path.includes("/restaurants/edit")) {
+        setActiveRestaurantMode("edit");
       }
     }
-    return null;
-  });
+  }, [initialRestaurantMode]);
 
   // Real-time Super Admin Avatar State synced with Settings (hydration safe)
   const [adminAvatarUrl, setAdminAvatarUrl] = useState<string | null>(null);
@@ -1012,7 +1011,7 @@ export default function SuperAdminClient({
   ];
 
   return (
-    <div className="min-h-screen bg-[var(--bg)] text-[var(--text-hi)] font-sans antialiased">
+    <div className="h-screen w-full max-w-full overflow-hidden bg-[var(--bg)] text-[var(--text-hi)] font-sans antialiased">
 
       {/* Toast Notification */}
       {toastMessage && (
@@ -1023,10 +1022,10 @@ export default function SuperAdminClient({
       )}
 
       {/* App Shell Layout */}
-      <div className="flex min-h-screen w-full max-w-full">
-        {/* ===================== 1. SIDEBAR (DESKTOP & TABLET >= 768px) ===================== */}
+      <div className="flex h-screen w-full max-w-full overflow-hidden">
+        {/* ===================== 1. SIDEBAR (DESKTOP >= 1024px / lg) ===================== */}
         <aside
-          className={`hidden xl:flex flex-col shrink-0 bg-[var(--bg-deep)]/90 backdrop-blur-2xl border-r border-[var(--border)] sticky top-0 h-screen z-40 transition-[width] duration-300 ease-in-out ${isSidebarCollapsed ? "w-[72px]" : "w-[252px]"
+          className={`hidden lg:flex flex-col shrink-0 bg-[var(--bg-deep)]/90 backdrop-blur-2xl border-r border-[var(--border)] h-screen z-40 transition-[width] duration-300 ease-in-out ${isSidebarCollapsed ? "w-[72px]" : "w-[252px]"
             }`}
         >
           {/* Brand Logo & Title with Toggle Action (Logo stays 100% fixed at x=36px) */}
@@ -1064,7 +1063,11 @@ export default function SuperAdminClient({
           </div>
 
           {/* Navigation Links */}
-          <div className="flex-1 px-2.5 py-4 space-y-1.5 overflow-visible">
+          <div
+            className={`flex-1 px-2.5 py-4 space-y-1.5 scrollbar-thin ${
+              isSidebarCollapsed ? "overflow-visible" : "overflow-y-auto overflow-x-hidden"
+            }`}
+          >
             {navOverview.map((item) => {
               const Icon = item.icon;
               const isActive = activeNav === item.name;
@@ -1109,9 +1112,9 @@ export default function SuperAdminClient({
 
                   {/* Custom Floating UI Tooltip (when sidebar collapsed) */}
                   {isSidebarCollapsed && (
-                    <div className="absolute left-[calc(100%+12px)] top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 group-hover:translate-x-0 -translate-x-1.5 transition-all duration-200 z-50 whitespace-nowrap">
+                    <div className="absolute left-[calc(100%+12px)] top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 group-hover:translate-x-0 -translate-x-1.5 transition-all duration-200 z-[100] whitespace-nowrap">
                       <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-deep)] text-[var(--text-hi)] border border-[var(--border-hi)] shadow-2xl shadow-black/80 backdrop-blur-xl">
-                        <span>{item.name}</span>
+                        <span className="font-bold text-[var(--gold)]">{item.name}</span>
                         {item.badge && (
                           <span className="text-xs font-semibold px-1.5 py-0.5 rounded-full bg-[var(--gold)] text-[#342c14]">
                             {item.badge}
@@ -1150,7 +1153,7 @@ export default function SuperAdminClient({
 
               {/* Custom Floating UI Tooltip (when sidebar collapsed) */}
               {isSidebarCollapsed && (
-                <div className="absolute left-[calc(100%+12px)] top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 group-hover:translate-x-0 -translate-x-1.5 transition-all duration-200 z-50 whitespace-nowrap">
+                <div className="absolute left-[calc(100%+12px)] top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 group-hover:translate-x-0 -translate-x-1.5 transition-all duration-200 z-[100] whitespace-nowrap">
                   <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-deep)] text-[#ff4d4f] border border-[#ff4d4f]/40 shadow-2xl shadow-black/80 backdrop-blur-xl">
                     <LogOut className="w-3.5 h-3.5 text-[#ff4d4f]" />
                     <span>Log Out</span>
@@ -1183,7 +1186,7 @@ export default function SuperAdminClient({
         />
 
         {/* ===================== 2. MAIN CONTENT AREA ===================== */}
-        <div className="flex-1 flex flex-col min-w-0 w-full max-w-full">
+        <div className="flex-1 flex flex-col min-w-0 w-full max-w-full h-screen overflow-y-auto overflow-x-hidden pb-16 lg:pb-0">
           {/* ===================== TOP BAR ===================== */}
           <header className="sticky top-0 z-30 h-20 shrink-0 bg-[var(--bg-deep)]/75 backdrop-blur-xl border-b border-[var(--border)] px-4 sm:px-8 flex items-center justify-between gap-4">
             {/* Left: Global Search (No side hamburger) */}
@@ -2200,81 +2203,7 @@ export default function SuperAdminClient({
         </div>
       </div>
 
-      {/* ===================== MOBILE BOTTOM NAVIGATION BAR ===================== */}
-      {/* ===================== MOBILE BOTTOM NAVIGATION BAR (FIXED) ===================== */}
-      <nav
-        aria-label="Mobile Navigation"
-        style={{
-          position: "fixed",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          zIndex: 9999,
-          transform: "translateZ(0)",
-          WebkitTransform: "translateZ(0)",
-          backfaceVisibility: "hidden",
-          WebkitBackfaceVisibility: "hidden",
-          willChange: "transform",
-        }}
-        className="md:hidden w-full bg-[var(--bg-deep)]/95 backdrop-blur-2xl border-t border-[var(--border)] px-3 py-2 flex items-center justify-around shadow-[0_-4px_25px_rgba(0,0,0,0.7)]"
-      >
-        {/* 1. Dashboard Button */}
-        <button
-          type="button"
-          onClick={() => {
-            handleNavClick("Dashboard");
-            setMobileSidebarOpen(false);
-          }}
-          className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-[360px]:gap-1 py-1 rounded-xl font-semibold transition-all cursor-pointer select-none ${activeNav === "Dashboard"
-              ? "text-[var(--gold)] font-bold"
-              : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
-            }`}
-        >
-          <div className={`p-1 min-[360px]:p-1.5 rounded-xl transition-all ${activeNav === "Dashboard" ? "bg-[var(--gold-dim)] text-[var(--gold)] scale-110 shadow-sm shadow-[var(--gold-glow)]" : ""}`}>
-            <LayoutDashboard className="w-4 h-4 min-[360px]:w-5 min-[360px]:h-5" />
-          </div>
-          <span style={{ fontSize: "clamp(9.5px, 2.7vw, 11px)" }} className="leading-tight">
-            Dashboard
-          </span>
-        </button>
 
-        {/* 2. Restaurants Button */}
-        <button
-          type="button"
-          onClick={() => {
-            handleNavClick("Restaurants");
-            setMobileSidebarOpen(false);
-          }}
-          className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-[360px]:gap-1 py-1 rounded-xl font-semibold transition-all cursor-pointer select-none ${activeNav === "Restaurants"
-              ? "text-[var(--gold)] font-bold"
-              : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
-            }`}
-        >
-          <div className={`p-1 min-[360px]:p-1.5 rounded-xl transition-all ${activeNav === "Restaurants" ? "bg-[var(--gold-dim)] text-[var(--gold)] scale-110 shadow-sm shadow-[var(--gold-glow)]" : ""}`}>
-            <Store className="w-4 h-4 min-[360px]:w-5 min-[360px]:h-5" />
-          </div>
-          <span style={{ fontSize: "clamp(9.5px, 2.7vw, 11px)" }} className="leading-tight">
-            Restaurants
-          </span>
-        </button>
-
-        {/* 3. Menu Button (Opens Bottom Sheet Modal for Subscriptions & Plans, Settings, etc.) */}
-        <button
-          type="button"
-          onClick={() => setMobileSidebarOpen((prev) => !prev)}
-          className={`flex-1 flex flex-col items-center justify-center gap-0.5 min-[360px]:gap-1 py-1 rounded-xl font-semibold transition-all cursor-pointer select-none ${mobileSidebarOpen || (activeNav !== "Dashboard" && activeNav !== "Restaurants")
-              ? "text-[var(--gold)] font-bold"
-              : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
-            }`}
-        >
-          <div className={`p-1 min-[360px]:p-1.5 rounded-xl transition-all ${mobileSidebarOpen || (activeNav !== "Dashboard" && activeNav !== "Restaurants") ? "bg-[var(--gold-dim)] text-[var(--gold)] scale-110 shadow-sm shadow-[var(--gold-glow)]" : ""}`}>
-            <Menu className="w-4 h-4 min-[360px]:w-5 min-[360px]:h-5" />
-          </div>
-          <span style={{ fontSize: "clamp(9.5px, 2.7vw, 11px)" }} className="leading-tight">
-            Menu
-          </span>
-        </button>
-      </nav>
 
       {/* ===================== ADD RESTAURANT MODAL ===================== */}
       {isAddModalOpen && (

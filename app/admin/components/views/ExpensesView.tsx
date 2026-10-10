@@ -398,41 +398,33 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
   const getCategoryBadgeClass = (category: string) => {
     switch (category.toLowerCase()) {
       case "rent":
-        return "bg-purple-500/15 text-purple-400 border-purple-500/30";
+        return "badge-pill badge-purple";
       case "utilities":
-        return "bg-amber-500/15 text-amber-400 border-amber-500/30";
+        return "badge-pill badge-warning";
       case "salaries":
-        return "bg-blue-500/15 text-blue-400 border-blue-500/30";
+        return "badge-pill badge-info";
       case "maintenance":
-        return "bg-orange-500/15 text-orange-400 border-orange-500/30";
+        return "badge-pill badge-gold";
       case "marketing":
-        return "bg-pink-500/15 text-pink-400 border-pink-500/30";
+        return "badge-pill badge-purple";
       default:
-        return "bg-zinc-500/15 text-zinc-400 border-zinc-500/30";
+        return "badge-pill badge-neutral";
     }
   };
 
   return (
-    <div className="p-4 sm:p-8 space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
+    <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* ========================================================================= */}
       {/* A. TOP HEADER */}
       {/* ========================================================================= */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] font-mono text-[11px] font-semibold uppercase tracking-wider mb-2">
-            <span className="w-2 h-2 rounded-full bg-[var(--gold)] animate-live-dot" />
-            <Receipt className="w-3.5 h-3.5" />
-            <span>OPERATIONAL EXPENDITURE (OPEX)</span>
-          </div>
           <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
             Operational Expenses{" "}
             <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
               (OPEX)
             </span>
           </h1>
-          <p className="text-xs sm:text-sm text-[var(--text-lo)] mt-1 font-medium">
-            Log non-food overheads, utilities, salaries, and daily maintenance
-          </p>
         </div>
 
         <div className="flex items-center gap-2.5">
@@ -454,15 +446,15 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
         {/* Card 1: Total OPEX This Month */}
         <div className="glass-panel p-3.5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
           <div className="flex items-center justify-between mb-2 sm:mb-3">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 text-[var(--gold)] flex items-center justify-center group-hover:scale-110 transition-transform shrink-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-[var(--gold)] flex items-center justify-center group-hover:scale-110 transition-transform shrink-0">
               <DollarSign className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[var(--gold-dim)] text-[var(--gold)] font-mono text-[10px] sm:text-[11px] font-bold border border-[var(--gold)]/30">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-900 border border-amber-500/30 dark:bg-[var(--gold-dim)] dark:text-[var(--gold)] font-mono text-[10px] sm:text-[11px] font-bold">
               Monthly OPEX
             </span>
           </div>
           <div>
-            <div className="font-mono font-extrabold text-2xl sm:text-4xl text-[var(--gold)] tracking-tight">
+            <div className="font-mono font-extrabold text-2xl sm:text-4xl text-amber-800 dark:text-[var(--gold)] tracking-tight">
               Rs {totalOpexThisMonth.toLocaleString()}
             </div>
             <p className="font-sans text-[11px] sm:text-xs font-medium text-[var(--text-lo)] mt-0.5 sm:mt-1">
@@ -471,17 +463,17 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
           </div>
           <div className="mt-2.5 sm:mt-3 pt-2 sm:pt-2.5 border-t border-[var(--border)]/60 text-[10px] font-mono text-[var(--text-faint)] flex items-center justify-between">
             <span>Non-food operational costs</span>
-            <span className="text-[var(--gold)]">{expenses.length} Logged</span>
+            <span className="text-amber-800 dark:text-[var(--gold)] font-bold">{expenses.length} Logged</span>
           </div>
         </div>
 
         {/* Card 2: Top Expense Category */}
         <div className="glass-panel p-3.5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
           <div className="flex items-center justify-between mb-2 sm:mb-3">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center group-hover:scale-110 transition-transform shrink-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-400 flex items-center justify-center group-hover:scale-110 transition-transform shrink-0">
               <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 font-mono text-[10px] sm:text-[11px] font-bold border border-amber-500/30">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-900 border border-amber-500/35 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30 font-mono text-[10px] sm:text-[11px] font-bold shadow-2xs">
               Top Outflow
             </span>
           </div>
@@ -490,7 +482,7 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
               {topCatAmount > 0 ? (
                 <>
                   <span className="text-[var(--text-hi)] break-words">{topCategoryName}:</span>
-                  <span className="text-amber-400 whitespace-nowrap font-mono font-extrabold">
+                  <span className="text-amber-800 dark:text-amber-400 whitespace-nowrap font-mono font-extrabold">
                     Rs {topCatAmount.toLocaleString()}
                   </span>
                 </>
@@ -504,22 +496,22 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
           </div>
           <div className="mt-2.5 sm:mt-3 pt-2 sm:pt-2.5 border-t border-[var(--border)]/60 text-[10px] font-mono text-[var(--text-faint)] flex items-center justify-between">
             <span>Highest expenditure this month</span>
-            <span className="text-amber-400">P&amp;L Weighted</span>
+            <span className="text-amber-800 dark:text-amber-400 font-bold">P&amp;L Weighted</span>
           </div>
         </div>
 
         {/* Card 3: Cash Outflow Today */}
         <div className="glass-panel p-3.5 sm:p-6 rounded-2xl flex flex-col justify-between relative overflow-hidden group transition-all duration-300">
           <div className="flex items-center justify-between mb-2 sm:mb-3">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-[#25d366]/15 border border-[#25d366]/30 text-[#25d366] flex items-center justify-center group-hover:scale-110 transition-transform shrink-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-[#25d366] flex items-center justify-center group-hover:scale-110 transition-transform shrink-0">
               <Wallet className="w-4 h-4 sm:w-5 sm:h-5" />
             </div>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#25d366]/15 text-[#25d366] font-mono text-[10px] sm:text-[11px] font-bold border border-[#25d366]/30">
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-900 border border-emerald-500/30 dark:text-[#25d366] font-mono text-[10px] sm:text-[11px] font-bold shadow-2xs">
               Today's Cash
             </span>
           </div>
           <div>
-            <div className="font-mono font-extrabold text-2xl sm:text-4xl text-[#25d366] tracking-tight">
+            <div className="font-mono font-extrabold text-2xl sm:text-4xl text-emerald-700 dark:text-[#25d366] tracking-tight">
               Rs {cashOutflowToday.toLocaleString()}
             </div>
             <p className="font-sans text-[11px] sm:text-xs font-medium text-[var(--text-lo)] mt-0.5 sm:mt-1">
@@ -528,7 +520,7 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
           </div>
           <div className="mt-2.5 sm:mt-3 pt-2 sm:pt-2.5 border-t border-[var(--border)]/60 text-[10px] font-mono text-[var(--text-faint)] flex items-center justify-between">
             <span>Logged cash today</span>
-            <span className="text-[#25d366]">Drawer Safe</span>
+            <span className="text-emerald-700 dark:text-[#25d366] font-bold">Drawer Safe</span>
           </div>
         </div>
       </div>
@@ -569,10 +561,97 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
       </div>
 
       {/* ========================================================================= */}
-      {/* D. EXPENSES TABLE */}
+      {/* D. EXPENSES TABLE & RESPONSIVE STACK */}
       {/* ========================================================================= */}
       <div className="glass-panel rounded-2xl overflow-hidden">
-        <div className="overflow-x-auto">
+        {/* Mobile Stacked Card List (< 768px) - Zero Horizontal Scrolling */}
+        <div className="md:hidden flex flex-col divide-y divide-[var(--border)]">
+          {expenses.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+              <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
+                <Receipt className="w-6 h-6" />
+              </div>
+              <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-3">No expenses logged yet</h3>
+              <button
+                type="button"
+                onClick={handleOpenCreateModal}
+                className="btn-gold px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 cursor-pointer shadow-md"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Record Expense</span>
+              </button>
+            </div>
+          ) : filteredExpenses.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+              <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
+                <Receipt className="w-6 h-6" />
+              </div>
+              <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching operating expenses</h3>
+              <p className="text-xs text-[var(--text-lo)] max-w-xs mt-1">Try adjusting your category filter or search query.</p>
+            </div>
+          ) : (
+            filteredExpenses.map((exp) => {
+              const badgeClass = getCategoryBadgeClass(exp.category);
+              return (
+                <div key={exp.id} className="p-3.5 space-y-2.5 bg-[var(--surface-base)]/20 hover:bg-[var(--surface-hi)]/30 transition-colors">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="font-bold text-[var(--text-hi)] text-sm block">
+                        {exp.title}
+                      </span>
+                      <span className="text-[10px] text-[var(--text-faint)] font-mono">
+                        {exp.expense_date ? new Date(exp.expense_date).toLocaleDateString() : "Today"} • By {exp.logged_by || "Admin"}
+                      </span>
+                    </div>
+                    <span className="font-bold text-[var(--gold)] text-sm font-mono shrink-0">
+                      Rs {Number(exp.amount || 0).toLocaleString()}
+                    </span>
+                  </div>
+
+                  {exp.notes && (
+                    <p className="text-xs text-[var(--text-lo)] font-sans line-clamp-2">
+                      {exp.notes}
+                    </p>
+                  )}
+
+                  <div className="flex items-center justify-between pt-1 border-t border-[var(--border)]/40 text-xs">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className={badgeClass}>
+                        <Tag className="w-2.5 h-2.5" />
+                        <span>{exp.category}</span>
+                      </span>
+                      <span className="px-1.5 py-0.5 rounded bg-[var(--surface)] border border-[var(--border)] text-[var(--text-lo)] text-[9.5px] font-semibold uppercase">
+                        {exp.payment_method.replace("_", " ")}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditModal(exp)}
+                        className="p-1.5 rounded-lg bg-[var(--surface)] hover:bg-[var(--surface-hi)] text-[var(--text-lo)] hover:text-[var(--gold)] border border-[var(--border)] transition-colors cursor-pointer"
+                        title="Edit Expense"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExpenseToDelete(exp)}
+                        className="p-1.5 rounded-lg bg-[var(--surface)] hover:bg-red-500/20 text-[var(--text-lo)] hover:text-red-400 border border-[var(--border)] transition-colors cursor-pointer"
+                        title="Delete Expense"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop Table View (>= 768px) */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left text-xs font-mono border-collapse">
             <thead>
               <tr className="border-b border-[var(--border)] bg-white/[0.02] text-[10px] uppercase font-mono text-[var(--text-faint)] py-3.5 px-4 font-semibold tracking-wider">
@@ -590,10 +669,10 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
                 <tr>
                   <td colSpan={7} className="p-4">
                     <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
-                      <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+                      <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
                         <Receipt className="w-6 h-6" />
                       </div>
-                      <h3 className="text-sm font-semibold text-white tracking-wide mb-4">No expenses logged yet</h3>
+                      <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-4">No expenses logged yet</h3>
                       <button
                         type="button"
                         onClick={handleOpenCreateModal}
@@ -609,11 +688,11 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
                 <tr>
                   <td colSpan={7} className="p-4">
                     <div className="flex flex-col items-center justify-center py-16 px-4 text-center glass-panel border border-[var(--border)] rounded-2xl">
-                      <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center text-[var(--gold)] mb-3">
+                      <div className="w-12 h-12 rounded-full bg-[var(--surface-hi)] flex items-center justify-center text-[var(--gold)] mb-3 border border-[var(--border)]">
                         <Receipt className="w-6 h-6" />
                       </div>
-                      <h3 className="text-sm font-semibold text-white tracking-wide">No matching operating expenses</h3>
-                      <p className="text-xs text-white/50 max-w-sm mt-1 mb-4">Try adjusting your category filter or search query.</p>
+                      <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide">No matching operating expenses</h3>
+                      <p className="text-xs text-[var(--text-lo)] max-w-sm mt-1 mb-4">Try adjusting your category filter or search query.</p>
                     </div>
                   </td>
                 </tr>
@@ -647,9 +726,7 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
 
                       {/* Category Badge */}
                       <td className="py-3.5 px-4">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${badgeClass}`}
-                        >
+                        <span className={badgeClass}>
                           <Tag className="w-2.5 h-2.5" />
                           <span>{exp.category}</span>
                         </span>
@@ -910,20 +987,6 @@ export default function ExpensesView({ showToast }: ExpensesViewProps) {
                       className="w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)]/60 focus:ring-1 focus:ring-[var(--gold)]/30 rounded-xl px-3.5 py-2.5 text-xs text-[var(--text-hi)] focus:outline-none transition-all font-sans"
                     />
                   </div>
-                </div>
-
-                {/* Notes */}
-                <div>
-                  <label className="block text-xs font-medium text-[var(--text-lo)] mb-1.5">
-                    Description / Receipt Notes
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={formNotes}
-                    onChange={(e) => setFormNotes(e.target.value)}
-                    placeholder="e.g. Invoice reference #48291, vendor payout..."
-                    className="w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)]/60 focus:ring-1 focus:ring-[var(--gold)]/30 rounded-xl p-3.5 text-xs text-[var(--text-hi)] placeholder:text-[var(--text-lo)]/40 focus:outline-none transition-all font-sans resize-none"
-                  />
                 </div>
               </div>
 
