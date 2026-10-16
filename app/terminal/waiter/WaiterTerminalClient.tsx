@@ -356,11 +356,13 @@ export default function WaiterTerminalClient() {
           let label = String(t.table_number || t.name || `Table ${resolvedId}`).trim();
           if (/^\d+$/.test(label)) label = `Table ${label}`;
           const rawStatus = String(t.status || "available").toLowerCase();
-          const isOccupied =
-            rawStatus === "occupied" ||
-            rawStatus === "seated" ||
-            rawStatus === "dining" ||
-            rawStatus === "billed";
+          const hasActiveOrder = activeRecords.some((rec) =>
+            (rec.tableId && (t.id === rec.tableId || String(t.id) === String(rec.tableId))) ||
+            isTableMatchingIdentifier({ id: t.id, label }, rec.tableIdentifier) ||
+            isTableMatchingIdentifier({ id: t.id, label }, rec.tableId) ||
+            (rec.tableNumberNorm && normalizeTableNumber(label) === rec.tableNumberNorm)
+          );
+          const isOccupied = hasActiveOrder;
           return {
             id: resolvedId,
             dbId: t.id,
@@ -369,7 +371,7 @@ export default function WaiterTerminalClient() {
             section: t.section_name || t.floor_name || "Main Dining",
             sectionName: t.section_name || t.floor_name || "Main Dining",
             status: isOccupied ? "seated" : rawStatus === "reserved" ? "reserved" : "available",
-            activeOrderId: (t.active_order_id || t.current_order_id) ? String(t.active_order_id || t.current_order_id) : undefined,
+            activeOrderId: isOccupied && (t.active_order_id || t.current_order_id) ? String(t.active_order_id || t.current_order_id) : undefined,
           };
         });
 
@@ -452,15 +454,40 @@ export default function WaiterTerminalClient() {
             })
           );
 
+          // Clear active cart and notes if currently selected table was the one settled
+          setSelectedTable((curr) => {
+            setTables((currentTables) => {
+              const currentT = currentTables.find((t) => t.id === curr);
+              const matchesCurrent =
+                currentT &&
+                ((data.tableId && (String(currentT.dbId) === String(data.tableId) || String(currentT.id) === String(data.tableId))) ||
+                (data.tableNumber && isTableMatchingIdentifier(currentT, data.tableNumber)) ||
+                (data.orderId && (currentT.activeOrderId === data.orderId || String(currentT.activeOrderId) === String(data.orderId))));
+
+              if (matchesCurrent) {
+                setCart([]);
+                setTableNotes("");
+              }
+              return currentTables;
+            });
+            return curr;
+          });
+
           // Clear settled order from local storage
           try {
             const rawRunning = localStorage.getItem(`pos_running_kot_orders_${currentOrgId}`) || localStorage.getItem(`pos_running_kot_orders_${restId}`);
             if (rawRunning) {
               const parsed = JSON.parse(rawRunning);
               if (Array.isArray(parsed)) {
+                const dataTableNorm = normalizeTableNumber(data.tableNumber);
                 const filtered = parsed.filter((o) => {
                   if (data.orderId && (String(o.id) === String(data.orderId) || o.kotId === data.orderId)) return false;
-                  if (data.tableNumber && (o.tableName === data.tableNumber || isTableMatchingIdentifier({ label: data.tableNumber }, o.tableId))) return false;
+                  if (data.tableId && String(o.tableId) === String(data.tableId)) return false;
+                  if (data.tableNumber) {
+                    if (o.tableName === data.tableNumber) return false;
+                    if (dataTableNorm && normalizeTableNumber(o.tableName || o.tableId) === dataTableNorm) return false;
+                    if (isTableMatchingIdentifier({ label: data.tableNumber }, o.tableId)) return false;
+                  }
                   return true;
                 });
                 localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(filtered));
@@ -1081,7 +1108,107 @@ export default function WaiterTerminalClient() {
               table: "restaurant_tables",
               filter: `restaurant_id=eq.${restId}`,
             },
-            () => {
+            (payload: any) => {
+              if (!isMounted) return;
+              if (payload?.eventType === "UPDATE") {
+                const row = payload.new;
+                const statusLower = String(row?.status || "available").toLowerCase();
+                const isAvail = statusLower === "available";
+                const tableId = row?.id;
+                const tableNum = row?.table_number;
+
+                if (isAvail) {
+                  setTables((prev) => {
+                    const updated = prev.map((t) => {
+                      if (
+                        (tableId && (String(t.dbId) === String(tableId) || String(t.id) === String(tableId))) ||
+                        (tableNum && (isTableMatchingIdentifier(t, tableNum) || normalizeTableNumber(t.label || t.id) === normalizeTableNumber(tableNum)))
+                      ) {
+                        return {
+                          ...t,
+                          status: "available" as const,
+                          activeOrderId: undefined,
+                          activeAmount: undefined,
+                        };
+                      }
+                      return t;
+                    });
+                    saveStoredTables(currentOrgId, updated);
+                    saveStoredTables(String(restId), updated);
+                    return updated;
+                  });
+
+                  setActiveUnpaidRecords((prev) =>
+                    prev.filter((r) => {
+                      if (tableId && String(r.tableId) === String(tableId)) return false;
+                      if (tableNum && (r.tableIdentifier === tableNum || normalizeTableNumber(r.tableIdentifier) === normalizeTableNumber(tableNum))) return false;
+                      return true;
+                    })
+                  );
+
+                  // Clear active cart & notes if current selected table was the one freed
+                  setSelectedTable((curr) => {
+                    setTables((currentTables) => {
+                      const matchedSelected = currentTables.find((t) =>
+                        t.id === curr &&
+                        ((tableId && (String(t.dbId) === String(tableId) || String(t.id) === String(tableId))) ||
+                         (tableNum && isTableMatchingIdentifier(t, tableNum)))
+                      );
+                      if (matchedSelected) {
+                        setCart([]);
+                        setTableNotes("");
+                      }
+                      return currentTables;
+                    });
+                    return curr;
+                  });
+
+                  // Clean up running KOT orders cache
+                  try {
+                    const rawRunning = localStorage.getItem(`pos_running_kot_orders_${currentOrgId}`) || localStorage.getItem(`pos_running_kot_orders_${restId}`);
+                    if (rawRunning) {
+                      const parsed = JSON.parse(rawRunning);
+                      if (Array.isArray(parsed)) {
+                        const tableNumNorm = normalizeTableNumber(tableNum);
+                        const filtered = parsed.filter((o) => {
+                          if (tableId && String(o.tableId) === String(tableId)) return false;
+                          if (tableNum) {
+                            if (o.tableName === tableNum) return false;
+                            if (tableNumNorm && normalizeTableNumber(o.tableName || o.tableId) === tableNumNorm) return false;
+                            if (isTableMatchingIdentifier({ label: tableNum }, o.tableId)) return false;
+                          }
+                          return true;
+                        });
+                        localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(filtered));
+                        localStorage.setItem(`pos_running_kot_orders_${restId}`, JSON.stringify(filtered));
+                      }
+                    }
+                  } catch {}
+                } else {
+                  const isOcc = statusLower === "occupied" || statusLower === "seated" || statusLower === "dining";
+                  const isBilled = statusLower === "billed" || statusLower === "billing";
+                  const isReserved = statusLower === "reserved";
+
+                  setTables((prev) => {
+                    const updated = prev.map((t) => {
+                      if (
+                        (tableId && (String(t.dbId) === String(tableId) || String(t.id) === String(tableId))) ||
+                        (tableNum && (isTableMatchingIdentifier(t, tableNum) || normalizeTableNumber(t.label || t.id) === normalizeTableNumber(tableNum)))
+                      ) {
+                        return {
+                          ...t,
+                          status: isOcc ? "seated" : isBilled ? "billing" : isReserved ? "reserved" : "available",
+                          activeOrderId: row.active_order_id ? String(row.active_order_id) : t.activeOrderId,
+                        };
+                      }
+                      return t;
+                    });
+                    saveStoredTables(currentOrgId, updated);
+                    saveStoredTables(String(restId), updated);
+                    return updated;
+                  });
+                }
+              }
               debouncedFetchLiveTables();
             }
           )
@@ -1093,7 +1220,95 @@ export default function WaiterTerminalClient() {
               table: "orders",
               filter: `restaurant_id=eq.${restId}`,
             },
-            () => {
+            (payload: any) => {
+              if (!isMounted) return;
+              if (payload?.eventType === "UPDATE") {
+                const n = payload.new;
+                const payStatus = String(n?.payment_status || "").toLowerCase();
+                const ordStatus = String(n?.order_status || "").toLowerCase();
+                const isPaid = payStatus === "paid";
+                const isCancelled = ordStatus === "cancelled" || ordStatus === "voided";
+
+                if (isPaid || isCancelled) {
+                  const orderNum = n?.order_number || n?.id;
+                  const orderTableId = n?.table_id;
+                  const orderCustName = n?.customer_name;
+
+                  // Immediate zero-latency local state release for Waiter floor map & dropdown
+                  setTables((prev) => {
+                    const updated = prev.map((t) => {
+                      const matches =
+                        (orderTableId && (String(t.dbId) === String(orderTableId) || String(t.id) === String(orderTableId))) ||
+                        (orderCustName && isTableMatchingIdentifier(t, orderCustName)) ||
+                        (orderNum && (t.activeOrderId === String(orderNum) || String(t.activeOrderId) === String(orderNum)));
+
+                      if (matches) {
+                        return {
+                          ...t,
+                          status: "available" as const,
+                          activeOrderId: undefined,
+                          activeAmount: undefined,
+                        };
+                      }
+                      return t;
+                    });
+                    saveStoredTables(currentOrgId, updated);
+                    saveStoredTables(String(restId), updated);
+                    return updated;
+                  });
+
+                  // Remove from activeUnpaidRecords immediately
+                  setActiveUnpaidRecords((prev) =>
+                    prev.filter((r) => {
+                      if (orderNum && (r.orderId === String(orderNum) || r.kotId === String(orderNum))) return false;
+                      if (orderCustName && (r.tableIdentifier === orderCustName || normalizeTableNumber(r.tableIdentifier) === normalizeTableNumber(orderCustName))) return false;
+                      if (orderTableId && String(r.tableId) === String(orderTableId)) return false;
+                      return true;
+                    })
+                  );
+
+                  // Clear cart/notes if current selected table was the one settled
+                  setSelectedTable((curr) => {
+                    setTables((currentTables) => {
+                      const matchedSelected = currentTables.find((t) =>
+                        t.id === curr &&
+                        ((orderTableId && (String(t.dbId) === String(orderTableId) || String(t.id) === String(orderTableId))) ||
+                         (orderCustName && isTableMatchingIdentifier(t, orderCustName)) ||
+                         (orderNum && (t.activeOrderId === String(orderNum) || String(t.activeOrderId) === String(orderNum))))
+                      );
+                      if (matchedSelected) {
+                        setCart([]);
+                        setTableNotes("");
+                      }
+                      return currentTables;
+                    });
+                    return curr;
+                  });
+
+                  // Clean up from localStorage running orders
+                  try {
+                    const rawRunning = localStorage.getItem(`pos_running_kot_orders_${currentOrgId}`) || localStorage.getItem(`pos_running_kot_orders_${restId}`);
+                    if (rawRunning) {
+                      const parsed = JSON.parse(rawRunning);
+                      if (Array.isArray(parsed)) {
+                        const custNameNorm = normalizeTableNumber(orderCustName);
+                        const filtered = parsed.filter((o) => {
+                          if (orderNum && (String(o.id) === String(orderNum) || o.kotId === orderNum)) return false;
+                          if (orderTableId && String(o.tableId) === String(orderTableId)) return false;
+                          if (orderCustName) {
+                            if (o.tableName === orderCustName) return false;
+                            if (custNameNorm && normalizeTableNumber(o.tableName || o.tableId) === custNameNorm) return false;
+                            if (isTableMatchingIdentifier({ label: orderCustName }, o.tableId)) return false;
+                          }
+                          return true;
+                        });
+                        localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(filtered));
+                        localStorage.setItem(`pos_running_kot_orders_${restId}`, JSON.stringify(filtered));
+                      }
+                    }
+                  } catch {}
+                }
+              }
               debouncedFetchLiveTables();
               debouncedFetchLiveMenu();
             }
@@ -1494,8 +1709,8 @@ export default function WaiterTerminalClient() {
 
     try {
       const { restId: rawTenantId, branchId: rawBranchId } = await getValidTenantContext(user);
-      const parsedRestId = Number(rawTenantId && !isNaN(Number(rawTenantId)) && Number(rawTenantId) > 0 ? rawTenantId : (user?.restaurantId || user?.organizationId || 40));
-      const restId = (parsedRestId === 27 || !parsedRestId || isNaN(parsedRestId)) ? 40 : parsedRestId;
+      const parsedRestId = Number(rawTenantId && !isNaN(Number(rawTenantId)) && Number(rawTenantId) > 0 ? rawTenantId : (user?.restaurantId || user?.organizationId || 41));
+      const restId = (rawTenantId && !isNaN(Number(rawTenantId))) ? Number(rawTenantId) : (!parsedRestId || isNaN(parsedRestId) ? 41 : parsedRestId);
       const branchId = rawBranchId || user?.branchId || null;
       const supabase = createClient();
 
@@ -1640,20 +1855,24 @@ export default function WaiterTerminalClient() {
       const isValidUuid = (val?: any): boolean =>
         Boolean(val && typeof val === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val));
 
-      let targetTableUuid: string | null = null;
-      if (isValidUuid(matchedTable?.dbId)) {
-        targetTableUuid = String(matchedTable!.dbId);
-      } else if (orderChannel === "dine_in" && tableIdentifier) {
+      let targetTableId: string | number | null = matchedTable?.dbId ?? matchedTable?.id ?? selectedTable ?? null;
+      if (!targetTableId && orderChannel === "dine_in" && tableIdentifier) {
         try {
+          const cleanDigits = tableIdentifier.replace(/\D/g, "");
+          const orList = [
+            `table_number.eq.${tableIdentifier}`,
+            cleanDigits ? `table_number.eq.${cleanDigits}` : null,
+            cleanDigits ? `table_number.eq.Table ${cleanDigits}` : null,
+          ].filter(Boolean).join(",");
           const { data: dbTable } = await supabase
             .from("restaurant_tables")
             .select("id")
             .eq("restaurant_id", restId)
-            .or(`table_number.eq.${tableIdentifier},table_number.eq.${tableIdentifier.replace(/\D/g, '')},table_number.eq.Table ${tableIdentifier.replace(/\D/g, '')}`)
+            .or(orList)
             .limit(1)
             .maybeSingle();
-          if (dbTable?.id && isValidUuid(dbTable.id)) {
-            targetTableUuid = dbTable.id;
+          if (dbTable?.id) {
+            targetTableId = dbTable.id;
           }
         } catch { }
       }
@@ -1687,8 +1906,15 @@ export default function WaiterTerminalClient() {
           orderPayload.branch_id = null;
         }
 
-        if (orderChannel === "dine_in" && targetTableUuid) {
-          orderPayload.table_id = targetTableUuid;
+        if (orderChannel === "dine_in") {
+          const resolvedUuid = isValidUuid(targetTableId)
+            ? targetTableId
+            : isValidUuid(matchedTable?.dbId)
+            ? matchedTable?.dbId
+            : null;
+          if (resolvedUuid) {
+            orderPayload.table_id = resolvedUuid;
+          }
         }
 
         if (orderEstimatedPrepTime) {
@@ -1767,20 +1993,28 @@ export default function WaiterTerminalClient() {
 
         (async () => {
           try {
+            const cleanDigits = tableIdentifier.replace(/\D/g, "");
             const tableUpdatePayload: Record<string, any> = {
-              status: "occupied",
+              status: "OCCUPIED",
+              updated_at: new Date().toISOString(),
             };
-            if (isValidUuid(createdDbOrderId)) {
-              tableUpdatePayload.active_order_id = createdDbOrderId;
+            if (createdDbOrderId) {
+              const numOrderId = Number(String(createdDbOrderId).replace(/\D/g, ""));
+              if (!isNaN(numOrderId) && numOrderId > 0) {
+                tableUpdatePayload.current_order_id = numOrderId;
+              }
+              if (isValidUuid(createdDbOrderId)) {
+                tableUpdatePayload.active_order_id = createdDbOrderId;
+              }
             }
-            if (targetTableUuid) {
+
+            if (targetTableId) {
               await supabase
                 .from("restaurant_tables")
                 .update(tableUpdatePayload)
                 .eq("restaurant_id", restId)
-                .eq("id", targetTableUuid);
+                .eq("id", targetTableId);
             } else if (matchedTable?.label || tableIdentifier) {
-              const cleanDigits = tableIdentifier.replace(/\D/g, "");
               const orClauses = [
                 `table_number.eq.${tableIdentifier}`,
                 matchedTable?.label ? `table_number.eq.${matchedTable.label}` : null,
@@ -1816,6 +2050,18 @@ export default function WaiterTerminalClient() {
                     timestamp: Date.now(),
                   });
                   bc.close();
+                } catch { }
+
+                try {
+                  const occBc = new BroadcastChannel("omni_table_occupancy_sync");
+                  occBc.postMessage({
+                    type: "TABLES_UPDATED",
+                    restId,
+                    tableIdentifier,
+                    status: "occupied",
+                    timestamp: Date.now(),
+                  });
+                  occBc.close();
                 } catch { }
               }
             }

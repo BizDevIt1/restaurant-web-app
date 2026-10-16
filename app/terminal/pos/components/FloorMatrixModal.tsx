@@ -110,8 +110,7 @@ export default function FloorMatrixModal({
             const isOccupied =
               Boolean(runningOrder) ||
               t.status === "seated" ||
-              t.status === "occupied" ||
-              Boolean(t.activeOrderId);
+              t.status === "occupied";
             const runningAmount = runningOrder?.total ?? t.activeAmount;
             return (
               <div

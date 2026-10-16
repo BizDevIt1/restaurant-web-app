@@ -1094,15 +1094,18 @@ function AdminDashboardContent({
                 )
               );
               updateTableRow(updatedRow);
+              loadSupabaseData();
             } else if (payload.eventType === "INSERT") {
               const newRow = payload.new;
               const mappedStatus = mapRowToTableStatus(newRow);
               setTables((prev) => [...prev.filter((t) => String(t.dbId) !== String(newRow.id)), mappedStatus]);
               insertTableRow(newRow);
+              loadSupabaseData();
             } else if (payload.eventType === "DELETE") {
               const oldId = payload.old?.id;
               setTables((prev) => prev.filter((t) => String(t.dbId) !== String(oldId) && String(t.id) !== String(oldId)));
               deleteTableRow(oldId);
+              loadSupabaseData();
             }
           }
         )

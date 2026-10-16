@@ -128,23 +128,19 @@ export function isOrderOccupyingTable(order: {
   // If paid, it NEVER occupies a table
   if (payStatus === "paid") return false;
 
-  // If completed, cancelled, voided, or archived, it NEVER occupies a table
-  if (
-    ordStatus === "completed" ||
-    ordStatus === "cancelled" ||
-    ordStatus === "voided" ||
-    ordStatus === "archived"
-  ) {
+  // If cancelled or voided, it NEVER occupies a table
+  if (ordStatus === "cancelled" || ordStatus === "voided") {
     return false;
   }
 
+  // As long as payment is not settled ('paid') and order is not cancelled/voided, table MUST remain occupied!
   return true;
 }
 
 /**
  * Fetch all active unpaid Dine-In records across orders and kitchen_tickets tables.
- * Single source of truth is orders: an order ONLY occupies a table if:
- * order.payment_status !== 'paid' AND order.order_status !== 'cancelled' AND order.order_status !== 'completed'
+ * Single source of truth is orders: an order occupies a table as long as:
+ * order.payment_status !== 'paid' AND order.order_status !== 'cancelled' AND order.order_status !== 'voided'
  */
 export async function fetchActiveUnpaidTableRecords(
   restId: string | number,
@@ -158,17 +154,35 @@ export async function fetchActiveUnpaidTableRecords(
 
   try {
     // 1. Fetch active unpaid orders from orders table (PRIMARY SINGLE SOURCE OF TRUTH)
-    const { data: orderRows, error: orderErr } = await supabase
+    // As long as payment is not settled ('paid') and order is not cancelled/voided, it occupies the table.
+    let orderRows: any[] | null = null;
+    const { data: oData, error: orderErr } = await supabase
       .from("orders")
-      .select("id, order_number, kot_id, table_id, customer_name, order_channel, order_status, payment_status, total_amount, subtotal, items, created_at")
+      .select("id, order_number, table_id, customer_name, order_channel, order_status, payment_status, total_amount, subtotal, items, created_at")
       .eq("restaurant_id", restIdNum)
       .neq("payment_status", "paid")
       .neq("order_status", "cancelled")
-      .neq("order_status", "completed")
+      .neq("order_status", "voided")
       .order("created_at", { ascending: false })
       .limit(100);
 
-    if (!orderErr && orderRows) {
+    if (!orderErr && oData) {
+      orderRows = oData;
+    } else if (orderErr) {
+      console.warn("[TableOccupancy] Primary orders query warning, falling back to select(*):", orderErr.message || orderErr);
+      const { data: fbData } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("restaurant_id", restIdNum)
+        .neq("payment_status", "paid")
+        .neq("order_status", "cancelled")
+        .neq("order_status", "voided")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (fbData) orderRows = fbData;
+    }
+
+    if (orderRows) {
       orderRows.forEach((o: any) => {
         // Enforce strict single-source rule
         if (!isOrderOccupyingTable(o)) return;
@@ -305,6 +319,125 @@ export async function fetchActiveUnpaidTableRecords(
         seenTableNorms.add(norm);
       });
     }
+
+    // 3. Query recent paid orders to ensure settled orders NEVER resurrect tables from local cache
+    const paidOrderIds = new Set<string>();
+    const paidKotIds = new Set<string>();
+    const paidTableNorms = new Set<string>();
+    const paidTableDbIds = new Set<string>();
+
+    try {
+      const { data: recentPaidOrders } = await supabase
+        .from("orders")
+        .select("id, order_number, kot_id, table_id, customer_name, created_at")
+        .eq("restaurant_id", restIdNum)
+        .eq("payment_status", "paid")
+        .order("created_at", { ascending: false })
+        .limit(60);
+
+      if (recentPaidOrders && Array.isArray(recentPaidOrders)) {
+        recentPaidOrders.forEach((po: any) => {
+          if (po.id) paidOrderIds.add(String(po.id).toLowerCase());
+          if (po.order_number) paidOrderIds.add(String(po.order_number).toLowerCase());
+          if (po.kot_id) paidKotIds.add(String(po.kot_id).toLowerCase());
+          if (po.table_id) paidTableDbIds.add(String(po.table_id));
+          const custNorm = normalizeTableNumber(po.customer_name);
+          if (custNorm) paidTableNorms.add(custNorm);
+        });
+      }
+    } catch {}
+
+    // 4. Fallback: Merge shared running KOT orders from local cache for instantaneous cross-terminal reactivity
+    // Stale orders with no active DB record are automatically purged from local storage!
+    if (typeof window !== "undefined") {
+      try {
+        const rawRunning =
+          localStorage.getItem(`pos_running_kot_orders_${restId}`) ||
+          localStorage.getItem(`pos_running_kot_orders_${restIdNum}`);
+        if (rawRunning) {
+          const parsed = JSON.parse(rawRunning);
+          if (Array.isArray(parsed)) {
+            let hasChanged = false;
+            const survivingRunning: any[] = [];
+
+            parsed.forEach((ro: any) => {
+              if (!isOrderOccupyingTable(ro)) {
+                hasChanged = true;
+                return;
+              }
+
+              const roId = String(ro.id || "").toLowerCase();
+              const roKot = String(ro.kotId || "").toLowerCase();
+              if (
+                (roId && paidOrderIds.has(roId)) ||
+                (roKot && paidKotIds.has(roKot))
+              ) {
+                // Order is confirmed paid in database! Purge from local cache!
+                hasChanged = true;
+                return;
+              }
+
+              const ident = ro.tableName || (ro.tableId ? String(ro.tableId) : "");
+              const norm = normalizeTableNumber(ident);
+
+              // If table has NO active unpaid orders in DB and table was recently settled, purge!
+              if (
+                (norm && !seenTableNorms.has(norm) && paidTableNorms.has(norm)) ||
+                (ro.tableId && !seenTableDbIds.has(String(ro.tableId)) && paidTableDbIds.has(String(ro.tableId)))
+              ) {
+                hasChanged = true;
+                return;
+              }
+
+              // If the table already has an active DB order or ticket, keep it synced in local cache
+              if (norm && seenTableNorms.has(norm)) {
+                survivingRunning.push(ro);
+                return;
+              }
+              if (ro.tableId && seenTableDbIds.has(String(ro.tableId))) {
+                survivingRunning.push(ro);
+                return;
+              }
+
+              // If DB query succeeded and neither orders nor kitchen_tickets track this table:
+              // Only retain as in-flight if created very recently (< 15 seconds).
+              // Any order older than 15s with 0 active DB records is definitively SETTLED/PAID!
+              const roTime = ro.timestamp ? new Date(ro.timestamp).getTime() : 0;
+              const isRecentInFlight = roTime > 0 && (Date.now() - roTime < 15 * 1000);
+
+              if (!isRecentInFlight) {
+                // Stale settled order! Purge from local cache and do NOT occupy table!
+                hasChanged = true;
+                return;
+              }
+
+              survivingRunning.push(ro);
+              activeRecords.push({
+                tableIdentifier: ident,
+                tableNumberNorm: norm,
+                orderId: String(ro.id),
+                kotId: ro.kotId,
+                tableId: ro.tableId,
+                totalAmount: ro.total,
+                source: "order",
+                paymentStatus: ro.payment_status,
+                status: ro.status,
+                createdAt: ro.timestamp,
+              });
+              if (norm) seenTableNorms.add(norm);
+              if (ro.tableId) seenTableDbIds.add(String(ro.tableId));
+            });
+
+            if (hasChanged) {
+              try {
+                localStorage.setItem(`pos_running_kot_orders_${restId}`, JSON.stringify(survivingRunning));
+                localStorage.setItem(`pos_running_kot_orders_${restIdNum}`, JSON.stringify(survivingRunning));
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+    }
   } catch (err) {
     console.warn("[TableOccupancy] Exception querying active unpaid records:", err);
   }
@@ -345,7 +478,7 @@ export function reconcileTableStatuses(
         activeAmount:
           matchedRecord.totalAmount !== undefined && matchedRecord.totalAmount > 0
             ? matchedRecord.totalAmount
-            : t.activeAmount,
+            : undefined,
       };
     }
 
@@ -396,7 +529,10 @@ export function reconcileRestaurantTables(
         status: "OCCUPIED" as any,
         current_order_id: matchedRecord.orderId || matchedRecord.kotId || t.current_order_id,
         active_order_id: matchedRecord.orderId || matchedRecord.kotId || (t as any).active_order_id,
-        active_amount: matchedRecord.totalAmount || (t as any).active_amount,
+        active_amount:
+          matchedRecord.totalAmount !== undefined && matchedRecord.totalAmount > 0
+            ? matchedRecord.totalAmount
+            : undefined,
       };
     }
 
@@ -510,6 +646,29 @@ export interface TableReleasedEventData {
   timestamp: number;
 }
 
+let sharedOccupancyBc: BroadcastChannel | null = null;
+let sharedLegacyBc: BroadcastChannel | null = null;
+
+function getSharedOccupancyBc(): BroadcastChannel | null {
+  if (typeof window === "undefined" || !("BroadcastChannel" in window)) return null;
+  if (!sharedOccupancyBc) {
+    try {
+      sharedOccupancyBc = new BroadcastChannel(TABLE_OCCUPANCY_BROADCAST_CHANNEL);
+    } catch {}
+  }
+  return sharedOccupancyBc;
+}
+
+function getSharedLegacyBc(): BroadcastChannel | null {
+  if (typeof window === "undefined" || !("BroadcastChannel" in window)) return null;
+  if (!sharedLegacyBc) {
+    try {
+      sharedLegacyBc = new BroadcastChannel("pos_ledger_sync_channel");
+    } catch {}
+  }
+  return sharedLegacyBc;
+}
+
 /**
  * Broadcasts a clean TABLE_RELEASED event across BroadcastChannel,
  * Supabase Realtime, and in-window CustomEvents.
@@ -529,17 +688,13 @@ export function broadcastTableReleased(
   // 1. Cross-tab BroadcastChannel
   if (typeof window !== "undefined" && "BroadcastChannel" in window) {
     try {
-      const bc = new BroadcastChannel(TABLE_OCCUPANCY_BROADCAST_CHANNEL);
-      bc.postMessage({ type: "TABLE_RELEASED", payload: eventPayload });
-      bc.close();
+      getSharedOccupancyBc()?.postMessage({ type: "TABLE_RELEASED", payload: eventPayload });
     } catch (err) {
       console.warn("[TableOccupancy] BroadcastChannel error:", err);
     }
 
     try {
-      const legacyBc = new BroadcastChannel("pos_ledger_sync_channel");
-      legacyBc.postMessage({ type: "TABLE_RELEASED", payload: eventPayload });
-      legacyBc.close();
+      getSharedLegacyBc()?.postMessage({ type: "TABLE_RELEASED", payload: eventPayload });
     } catch {}
   }
 
@@ -595,21 +750,17 @@ export function subscribeToTableReleased(
   const restIdStr = String(restId);
 
   // 1. BroadcastChannel listener
-  let bc: BroadcastChannel | null = null;
-  if ("BroadcastChannel" in window) {
-    try {
-      bc = new BroadcastChannel(TABLE_OCCUPANCY_BROADCAST_CHANNEL);
-      bc.onmessage = (event) => {
-        const msg = event.data;
-        if (msg?.type === "TABLE_RELEASED" && msg.payload) {
-          if (!msg.payload.restaurantId || String(msg.payload.restaurantId) === restIdStr) {
-            onRelease(msg.payload);
-          }
-        }
-      };
-    } catch (err) {
-      console.warn("[TableOccupancy] BroadcastChannel subscription error:", err);
+  const occupancyBc = getSharedOccupancyBc();
+  const handleBcMessage = (event: MessageEvent) => {
+    const msg = event.data;
+    if (msg?.type === "TABLE_RELEASED" && msg.payload) {
+      if (!msg.payload.restaurantId || String(msg.payload.restaurantId) === restIdStr) {
+        onRelease(msg.payload);
+      }
     }
+  };
+  if (occupancyBc) {
+    occupancyBc.addEventListener("message", handleBcMessage);
   }
 
   // 2. Window CustomEvent listener
@@ -641,10 +792,8 @@ export function subscribeToTableReleased(
   }
 
   return () => {
-    if (bc) {
-      try {
-        bc.close();
-      } catch {}
+    if (occupancyBc) {
+      occupancyBc.removeEventListener("message", handleBcMessage);
     }
     window.removeEventListener("table_released", handleCustomEvent);
     if (rtChannel && supabase) {

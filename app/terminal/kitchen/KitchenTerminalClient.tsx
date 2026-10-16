@@ -2211,10 +2211,18 @@ export default function KitchenTerminalClient() {
         if (nextStatus === "archived" || nextStatus === "completed") {
           const cleanTicketId = String(currentTicket.ticket_number || currentTicket.id || ticketId);
           const baseKotId = cleanTicketId.replace(/-[A-Z0-9]+$/, "");
+          const isDineIn = Boolean(
+            currentTicket.tableOrChannel &&
+            currentTicket.tableOrChannel !== "Counter" &&
+            !currentTicket.tableOrChannel.toLowerCase().includes("takeaway") &&
+            !currentTicket.tableOrChannel.toLowerCase().includes("delivery")
+          );
+
+          // For Dine-In, kitchen completion marks food prepared/served, but order stays active until payment is settled at POS!
           let orderUpdate: any = supabase
             .from("orders")
             .update({
-              order_status: "completed",
+              order_status: isDineIn ? "active" : "completed",
               updated_at: new Date().toISOString(),
             })
             .or(`kot_id.eq.${cleanTicketId},kot_id.eq.${baseKotId},order_number.eq.${cleanTicketId},order_number.eq.${baseKotId}`);
@@ -2223,19 +2231,8 @@ export default function KitchenTerminalClient() {
           }
           await orderUpdate;
 
-          // Free table if dine-in table is attached
-          if (currentTicket.tableOrChannel && currentTicket.tableOrChannel !== "Counter") {
-            const tableIdStr = String(currentTicket.tableOrChannel).replace(/^Table\s*/i, "").trim();
-            await supabase
-              .from("restaurant_tables")
-              .update({
-                status: "available",
-                active_order_id: null,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("restaurant_id", restaurantId || currentOrgId)
-              .or(`table_number.eq.${currentTicket.tableOrChannel},table_number.eq.${tableIdStr}`);
-          }
+          // NOTE: Dine-in tables must NEVER be freed by kitchen completion!
+          // Tables remain occupied until payment settlement at POS counter.
         }
 
         if (nextStatus === "ready") {

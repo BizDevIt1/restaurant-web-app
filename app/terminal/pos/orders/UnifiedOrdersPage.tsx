@@ -231,7 +231,7 @@ export default function UnifiedOrdersPage() {
               id: orderNum,
               kotId: o.kot_id || `KOT-${String(orderNum).replace(/[^0-9]/g, "").slice(-4) || "1001"}`,
               orderChannel: o.order_channel || "dine_in",
-              tableId: o.table_id ? (isNaN(Number(o.table_id)) ? undefined : Number(o.table_id)) : undefined,
+              tableId: o.table_id || undefined,
               tableName: o.customer_name || (o.table_id ? `Table ${o.table_id}` : `Order #${orderNum}`),
               customerName: o.customer_name,
               customerPhone: o.customer_phone,
@@ -495,9 +495,11 @@ export default function UnifiedOrdersPage() {
     isSettlingOrderRef.current = true;
     const finalOrderId = ord.id;
 
+    let targetRestId: string | number = currentOrgId;
     try {
       const supabase = createClient();
       const { restId, branchId } = await getValidTenantContext(user);
+      if (restId) targetRestId = restId;
 
       const normalizedPaymentMethod =
         paymentDetails.method === "card"
@@ -588,38 +590,49 @@ export default function UnifiedOrdersPage() {
         const tableIdentifier = ord.tableName || (ord.tableId ? `Table ${ord.tableId}` : "");
         const normNum = normalizeTableNumber(tableIdentifier);
         try {
+          const releasePayload = {
+            status: "available",
+            current_order_id: null,
+            active_order_id: null,
+            updated_at: new Date().toISOString(),
+          };
+
           if (ord.tableId && isUuid(String(ord.tableId))) {
             await supabase
               .from("restaurant_tables")
-              .update({
-                status: "available",
-                current_order_id: null,
-                active_order_id: null,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("restaurant_id", restId)
+              .update(releasePayload)
               .eq("id", ord.tableId);
-          } else {
-            const tableOrConds = [
-              ord.tableId ? `id.eq.${ord.tableId}` : "",
-              tableIdentifier ? `table_number.eq.${tableIdentifier}` : "",
-              normNum ? `table_number.eq.${normNum}` : "",
-              normNum ? `table_number.eq.Table ${normNum}` : "",
-            ].filter(Boolean).join(",");
+          }
 
-            if (tableOrConds) {
+          const { data: restTables } = await supabase
+            .from("restaurant_tables")
+            .select("id, table_number")
+            .eq("restaurant_id", Number(restId) || restId);
+
+          if (restTables && Array.isArray(restTables)) {
+            const matchedRows = restTables.filter((row: any) =>
+              (ord.tableId && (row.id === ord.tableId || String(row.id) === String(ord.tableId))) ||
+              (tableIdentifier && (row.table_number === tableIdentifier || normalizeTableNumber(row.table_number) === normNum)) ||
+              (normNum && normalizeTableNumber(row.table_number) === normNum)
+            );
+
+            for (const r of matchedRows) {
               await supabase
                 .from("restaurant_tables")
-                .update({
-                  status: "available",
-                  current_order_id: null,
-                  active_order_id: null,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("restaurant_id", restId)
-                .or(tableOrConds);
+                .update(releasePayload)
+                .eq("id", r.id);
             }
           }
+
+          broadcastTableReleased(
+            restId,
+            {
+              tableId: ord.tableId,
+              tableNumber: tableIdentifier,
+              orderId: finalOrderId,
+            },
+            supabase
+          );
 
           // Complete any active kitchen tickets for this settled table so it frees cleanly across terminals
           try {
@@ -728,12 +741,22 @@ export default function UnifiedOrdersPage() {
 
     // Always cleanse settled order from running table orders and local storage
     setRunningTableOrders((prev) => {
-      const updated = prev.filter((o) => o.id !== ord.id && o.id !== finalOrderId && (!ord.kotId || o.kotId !== ord.kotId));
+      const tableNorm = normalizeTableNumber(ord.tableName || (ord.tableId ? String(ord.tableId) : ""));
+      const updated = prev.filter((o) => {
+        if (o.id === ord.id || o.id === finalOrderId) return false;
+        if (ord.kotId && o.kotId === ord.kotId) return false;
+        if (tableNorm && normalizeTableNumber(o.tableName || o.tableId) === tableNorm) return false;
+        if (ord.tableId && String(o.tableId) === String(ord.tableId)) return false;
+        return true;
+      });
       try {
         localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(updated));
         const activeRestId = user?.restaurantId ? String(user.restaurantId) : "";
         if (activeRestId && activeRestId !== currentOrgId) {
           localStorage.setItem(`pos_running_kot_orders_${activeRestId}`, JSON.stringify(updated));
+        }
+        if (targetRestId && String(targetRestId) !== currentOrgId) {
+          localStorage.setItem(`pos_running_kot_orders_${targetRestId}`, JSON.stringify(updated));
         }
       } catch { }
       return updated;

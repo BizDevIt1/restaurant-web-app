@@ -188,11 +188,22 @@ function TerminalShell({ children }: { children: React.ReactNode }) {
     user.staffRole?.toUpperCase() ||
     (user.role === "STAFF_MEMBER" ? "STAFF" : user.role || "OPERATOR");
 
-  // Dynamic Restaurant POS Identity - strictly sanitize any accidental 'franchise' or 'frenchise'
+  // Dynamic Restaurant Terminal Subtitle (e.g. 'restora waiter' on Waiter Terminal, 'restora POS' on POS Terminal)
+  const isWaiterTerminal = pathname?.includes("/terminal/waiter");
+  const isKitchenTerminal = pathname?.includes("/terminal/kitchen");
+  const isRiderTerminal = pathname?.includes("/terminal/rider");
+
+  const terminalTypeLabel = isWaiterTerminal
+    ? "waiter"
+    : isKitchenTerminal
+      ? "kitchen"
+      : isRiderTerminal
+        ? "rider"
+        : "POS";
+
   const rawRestaurantName = (user.restaurantName || "").replace(/frenchis\w*|franchis\w*/gi, "").trim();
-  const restaurantPosSubtitle = rawRestaurantName
-    ? `${rawRestaurantName} POS`
-    : "Restora POS";
+  const brandName = rawRestaurantName || "restora";
+  const restaurantPosSubtitle = `${brandName} ${terminalTypeLabel}`;
 
   return (
     <div className="h-screen w-screen overflow-hidden flex flex-col bg-[var(--bg)] text-[var(--text-hi)] select-none transition-colors duration-300">

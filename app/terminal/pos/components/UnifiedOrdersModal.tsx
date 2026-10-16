@@ -32,7 +32,7 @@ export interface UnifiedOrder {
   kotId?: string;
   source: "settled" | "kot" | "held";
   orderChannel: "dine_in" | "takeaway" | "delivery" | string;
-  tableId?: number;
+  tableId?: number | string;
   tableName?: string;
   customerName?: string;
   customerPhone?: string;

@@ -129,6 +129,7 @@ import {
   isOrderOccupyingTable,
   broadcastTableReleased,
   subscribeToTableReleased,
+  isUuid,
 } from "@/lib/tableOccupancy";
 
 const PARKED_ORDERS_KEY = "omni_terminal_parked_orders";
@@ -2073,6 +2074,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
     }
 
     let ledgerBc: BroadcastChannel | null = null;
+    let occBc: BroadcastChannel | null = null;
     if (typeof window !== "undefined" && "BroadcastChannel" in window) {
       try {
         ledgerBc = new BroadcastChannel("pos_ledger_sync_channel");
@@ -2088,6 +2090,18 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
             debouncedFetchLiveOrders();
             debouncedFetchLiveTables();
             debouncedFetchLiveMenu();
+          }
+        };
+      } catch { }
+
+      try {
+        occBc = new BroadcastChannel("omni_table_occupancy_sync");
+        occBc.onmessage = (event) => {
+          if (event.data?.type === "TABLE_RELEASED") {
+            handleTableReleasedEvent(event.data?.payload);
+          } else if (event.data?.type === "TABLES_UPDATED" || event.data?.type === "ORDERS_UPDATED") {
+            debouncedFetchLiveTables();
+            debouncedFetchLiveOrders();
           }
         };
       } catch { }
@@ -2346,6 +2360,42 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
             if (!payload) return;
             handleTableReleasedEvent(payload);
           })
+          .on("broadcast", { event: "TABLES_UPDATED" }, () => {
+            debouncedFetchLiveOrders();
+            debouncedFetchLiveTables();
+          })
+          .on("broadcast", { event: "ORDERS_UPDATED" }, () => {
+            debouncedFetchLiveOrders();
+            debouncedFetchLiveTables();
+          })
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "orders",
+              filter: `restaurant_id=eq.${restId}`,
+            },
+            () => {
+              if (!isMounted) return;
+              debouncedFetchLiveOrders();
+              debouncedFetchLiveTables();
+            }
+          )
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "kitchen_tickets",
+              filter: `restaurant_id=eq.${restId}`,
+            },
+            () => {
+              if (!isMounted) return;
+              debouncedFetchLiveOrders();
+              debouncedFetchLiveTables();
+            }
+          )
           .on(
             "postgres_changes",
             {
@@ -2499,6 +2549,11 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       if (ledgerBc) {
         try {
           ledgerBc.close();
+        } catch { }
+      }
+      if (occBc) {
+        try {
+          occBc.close();
         } catch { }
       }
       if (channel) {
@@ -3349,6 +3404,13 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         (orderChannel === "dine_in" && t.id === selectedTable)
     );
     const finalTableId = targetTable?.id ?? resolvedTableId;
+    const isTableRelatedSettlement =
+      resolvedOrderChannel === "dine_in" ||
+      String(resolvedOrderChannel || "").toLowerCase().includes("dine") ||
+      Boolean(target?.tableName) ||
+      Boolean(target?.tableId) ||
+      Boolean(targetTable) ||
+      Boolean(resolvedTableId);
     let activeRestId: string | number = user?.restaurantId || "";
 
     // 1. Direct Supabase Persistence (orders & order_items)
@@ -3528,58 +3590,51 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         }
       }
 
-      // 3. Release table if Dine-In: Atomic table release on settlement
-      if (resolvedOrderChannel === "dine_in") {
+      // 3. Release table if Dine-In / Table Order: Atomic table release on settlement
+      if (isTableRelatedSettlement) {
         const tableIdentifier = target?.tableName || selectedTableObj?.label || targetTable?.label || `Table ${resolvedTableId}`;
         const normNum = normalizeTableNumber(tableIdentifier);
         try {
-          // Resolve table primary key UUID for atomic update
+          const releasePayload = {
+            status: "available",
+            active_order_id: null,
+            current_order_id: null,
+            updated_at: new Date().toISOString(),
+          };
+
           let tableId = targetTable?.dbId;
-          if (!tableId && (resolvedTableId || tableIdentifier)) {
-            const tableOrConds = [
-              tableIdentifier ? `table_number.eq.${tableIdentifier}` : "",
-              normNum ? `table_number.eq.${normNum}` : "",
-              normNum ? `table_number.eq.Table ${normNum}` : "",
-              resolvedTableId ? `table_number.eq.Table ${resolvedTableId}` : "",
-            ].filter(Boolean).join(",");
-            const { data: foundT } = await supabase
-              .from("restaurant_tables")
-              .select("id")
-              .eq("restaurant_id", restId)
-              .or(tableOrConds)
-              .limit(1)
-              .maybeSingle();
-            if (foundT?.id) {
-              tableId = foundT.id;
-            }
+          if (!tableId && target?.tableId && isUuid(String(target.tableId))) {
+            tableId = String(target.tableId);
           }
 
+          // Direct ID update if table ID is known
           if (tableId) {
             await supabase
               .from("restaurant_tables")
-              .update({
-                status: "available",
-                active_order_id: null,
-                current_order_id: null,
-                updated_at: new Date().toISOString(),
-              })
+              .update(releasePayload)
               .eq("id", tableId);
-          } else {
-            const tableOrConds = [
-              `table_number.eq.${tableIdentifier}`,
-              normNum ? `table_number.eq.${normNum}` : "",
-              normNum ? `table_number.eq.Table ${normNum}` : "",
-            ].filter(Boolean).join(",");
-            await supabase
-              .from("restaurant_tables")
-              .update({
-                status: "available",
-                active_order_id: null,
-                current_order_id: null,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("restaurant_id", restId)
-              .or(tableOrConds);
+          }
+
+          // Also query all restaurant tables to release by label / table_number
+          const { data: restTables } = await supabase
+            .from("restaurant_tables")
+            .select("id, table_number")
+            .eq("restaurant_id", restId);
+
+          if (restTables && Array.isArray(restTables)) {
+            const matchedRows = restTables.filter((row: any) =>
+              (tableId && row.id === tableId) ||
+              (target?.tableId && (row.id === target.tableId || String(row.id) === String(target.tableId))) ||
+              (tableIdentifier && (row.table_number === tableIdentifier || normalizeTableNumber(row.table_number) === normNum)) ||
+              (normNum && normalizeTableNumber(row.table_number) === normNum)
+            );
+
+            for (const r of matchedRows) {
+              await supabase
+                .from("restaurant_tables")
+                .update(releasePayload)
+                .eq("id", r.id);
+            }
           }
 
           // Complete any active kitchen tickets for this settled table so it frees cleanly across terminals
@@ -3678,6 +3733,9 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       shift_id: activeShift?.id ? (!isNaN(Number(activeShift.id)) ? Number(activeShift.id) : activeShift.id) : null,
     };
 
+    const resolvedTableIdent = target?.tableName || selectedTableObj?.label || targetTable?.label || (resolvedTableId ? `Table ${resolvedTableId}` : "");
+    const resolvedTableNorm = normalizeTableNumber(resolvedTableIdent);
+
     // Remove from running KOT orders across both state and localStorage
     setRunningTableOrders((prev) => {
       const updated = prev.filter(
@@ -3687,8 +3745,8 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           (resolvedOrderChannel !== "dine_in" || (
             o.tableId !== resolvedTableId &&
             o.tableId !== finalTableId &&
-            (!targetTable || (o.tableId !== targetTable.id && o.tableId !== targetTable.dbId)) &&
-            (!resolvedTableId || !isTableMatchingIdentifier({ id: resolvedTableId }, o.tableName || o.customerName || o.tableId))
+            (!resolvedTableId || !isTableMatchingIdentifier({ id: resolvedTableId }, o.tableName || o.customerName || o.tableId)) &&
+            (!resolvedTableNorm || normalizeTableNumber(o.tableName || o.customerName || o.tableId) !== resolvedTableNorm)
           ))
       );
       try {
@@ -3733,7 +3791,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
     saveStoredOrder(currentOrgId, settledOrder);
 
     // Release table in local state and synchronize across tabs
-    if (resolvedOrderChannel === "dine_in" && (finalTableId || targetTable || resolvedTableId)) {
+    if (isTableRelatedSettlement) {
       setTables((prev) => {
         const updated = prev.map((t) =>
           (finalTableId && (t.id === finalTableId || String(t.id) === String(finalTableId))) ||
@@ -3764,6 +3822,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       try {
         window.dispatchEvent(new CustomEvent("restaurant_tables_changed"));
         window.dispatchEvent(new CustomEvent("pos_tables_updated"));
+        window.dispatchEvent(new CustomEvent("tables_list_changed"));
       } catch {}
     }
 

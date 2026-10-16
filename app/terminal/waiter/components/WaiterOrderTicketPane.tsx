@@ -60,6 +60,7 @@ export default function WaiterOrderTicketPane({
   const isCurrentTableOccupied = Boolean(
     orderChannel === "dine_in" &&
     currentTableObj &&
+    currentTableObj.status !== "available" &&
     (currentTableObj.status === "seated" ||
       currentTableObj.status === "occupied" ||
       currentTableObj.status === "billing" ||
@@ -122,10 +123,10 @@ export default function WaiterOrderTicketPane({
                     const isOccupied =
                       t.status === "seated" ||
                       t.status === "occupied" ||
-                      Boolean(t.activeOrderId);
+                      t.status === "dining";
                     const isBilled = t.status === "billing";
                     const isReserved = t.status === "reserved";
-                    const runningAmount = t.activeAmount;
+                    const runningAmount = isOccupied || isBilled ? t.activeAmount : undefined;
                     const amountStr = runningAmount
                       ? ` • Rs ${runningAmount.toLocaleString()}`
                       : "";
@@ -164,26 +165,7 @@ export default function WaiterOrderTicketPane({
             </button>
           </div>
 
-          {/* Occupied notification bar */}
-          {isCurrentTableOccupied && currentTableObj && (
-            <div className="p-2 rounded-lg border flex items-center justify-between text-[11px] font-mono bg-gradient-to-r from-red-500/15 via-amber-500/10 to-red-500/15 border-red-500/30 text-red-300">
-              <span className="truncate font-bold flex items-center gap-1.5">
-                <span>
-                  🔒 OCCUPIED: {currentTableObj.label}{" "}
-                  {currentTableObj.activeAmount
-                    ? `(Rs ${currentTableObj.activeAmount.toLocaleString()})`
-                    : ""}
-                </span>
-              </span>
-              <button
-                type="button"
-                onClick={onOpenFloorMatrix}
-                className="text-[10px] text-[var(--gold)] hover:underline shrink-0 ml-2 cursor-pointer"
-              >
-                Reload
-              </button>
-            </div>
-          )}
+
         </div>
       </div>
 

@@ -451,7 +451,7 @@ export interface OrderRecord {
   rider_id?: string | null;
   assignedRiderId?: string;
   assignedRiderName?: string;
-  tableId?: number;
+  tableId?: number | string;
   tableName?: string;
   items: {
     id: string;
