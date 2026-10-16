@@ -19,6 +19,7 @@ import {
   Plus,
   Pencil,
   Check,
+  Lock,
 } from "lucide-react";
 import { CartItem, TableStatus, OrderRecord } from "@/app/admin/types";
 import { useAuth } from "@/app/admin/context/AuthContext";
@@ -281,23 +282,6 @@ export default function OrderTicketPane({
               </button>
             </div>
 
-            {/* Active Running Tab Recalled Notice (Only when occupied/billing) */}
-            {selectedTableObj && (selectedTableObj.status === "seated" || selectedTableObj.status === "occupied" || selectedTableObj.status === "billing") && (
-              <div className="p-2 rounded-lg bg-gradient-to-r from-red-500/15 via-amber-500/10 to-red-500/15 border border-red-500/30 flex items-center justify-between text-[11px] font-mono">
-                <span className="text-red-300 truncate">
-                  Tab: {selectedTableObj.label} {activeRunningOrder ? `(Rs ${activeRunningOrder.total.toLocaleString()})` : ""}
-                </span>
-                {activeRunningOrder && (
-                  <button
-                    type="button"
-                    onClick={() => handleSelectTable(selectedTable, true)}
-                    className="text-[10px] text-[var(--gold)] hover:underline shrink-0 ml-2 cursor-pointer"
-                  >
-                    Reload
-                  </button>
-                )}
-              </div>
-            )}
           </div>
         ) : orderChannel === "takeaway" ? (
           <div className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-[var(--surface-hi)] border border-[var(--border)]">

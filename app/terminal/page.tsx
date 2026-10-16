@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   Building2,
   ArrowRight,
+  UtensilsCrossed,
 } from "lucide-react";
 import { useAuth } from "../admin/context/AuthContext";
 
@@ -19,24 +20,70 @@ export default function TerminalRoleDispatcher() {
   useEffect(() => {
     if (!user) return;
 
-    const rawRole = (user.staffRole || user.role || "").toLowerCase().trim();
+    const staffRoleClean = (user.staffRole || "").toLowerCase().trim();
+    const roleClean = (user.role || "").toLowerCase().trim();
+    const terminalAccessClean = String(user.terminalAccess || "").toUpperCase().trim();
 
-    if (rawRole === "cashier") {
-      router.replace("/terminal/pos");
-    } else if (rawRole === "chef" || rawRole === "kitchen") {
+    // 1. Waiter / Server check (strictly route to /terminal/waiter)
+    if (
+      staffRoleClean === "waiter" ||
+      staffRoleClean === "server" ||
+      roleClean === "waiter" ||
+      roleClean === "server" ||
+      terminalAccessClean === "WAITER_ONLY" ||
+      terminalAccessClean === "WAITER"
+    ) {
+      router.replace("/terminal/waiter");
+      return;
+    }
+
+    // 2. Chef / Kitchen check (strictly route to /terminal/kitchen)
+    if (
+      staffRoleClean === "chef" ||
+      staffRoleClean === "kitchen" ||
+      staffRoleClean === "cook" ||
+      staffRoleClean === "kds" ||
+      roleClean === "chef" ||
+      roleClean === "kitchen" ||
+      roleClean === "cook" ||
+      roleClean === "kds" ||
+      terminalAccessClean === "KDS_ONLY" ||
+      terminalAccessClean === "KITCHEN_ONLY"
+    ) {
       router.replace("/terminal/kitchen");
-    } else if (rawRole === "rider") {
+      return;
+    }
+
+    // 3. Rider check (strictly route to /terminal/rider)
+    if (
+      staffRoleClean === "rider" ||
+      roleClean === "rider" ||
+      terminalAccessClean === "RIDER_ONLY"
+    ) {
       router.replace("/terminal/rider");
-    } else if (rawRole === "manager" || rawRole === "supervisor") {
-      router.replace("/terminal/manager");
-    } else if (user.terminalAccess === "POS_ONLY") {
+      return;
+    }
+
+    // 4. Cashier check (only pure cashier accounts)
+    if (
+      staffRoleClean === "cashier" ||
+      roleClean === "cashier" ||
+      terminalAccessClean === "POS_ONLY"
+    ) {
       router.replace("/terminal/pos");
-    } else if (user.terminalAccess === "KDS_ONLY") {
-      router.replace("/terminal/kitchen");
-    } else if (user.terminalAccess === "RIDER_ONLY") {
-      router.replace("/terminal/rider");
-    } else if ((user.terminalAccess as any) === "MANAGER_ONLY") {
+      return;
+    }
+
+    // 5. Manager check
+    if (
+      staffRoleClean === "manager" ||
+      staffRoleClean === "supervisor" ||
+      roleClean === "manager" ||
+      roleClean === "supervisor" ||
+      terminalAccessClean === "MANAGER_ONLY"
+    ) {
       router.replace("/terminal/manager");
+      return;
     }
   }, [user, router]);
 
@@ -49,11 +96,11 @@ export default function TerminalRoleDispatcher() {
             <Building2 className="w-7 h-7" />
           </div>
           <h1 className="text-2xl font-bold font-display text-[var(--text-hi)]">
-            4-Tier Staff Terminals Portal
+            Staff Terminals Portal
           </h1>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 pt-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5 pt-2">
           {/* Tier 1: Cashier / POS station */}
           <button
             type="button"
@@ -96,7 +143,28 @@ export default function TerminalRoleDispatcher() {
             </div>
           </button>
 
-          {/* Tier 3: Rider / Dispatch station */}
+          {/* Tier 3: Waiter / Floor station */}
+          <button
+            type="button"
+            onClick={() => router.push("/terminal/waiter")}
+            className="flex flex-col items-center text-center p-5 rounded-2xl bg-[var(--surface-hi)]/60 hover:bg-[var(--surface-hi)] border border-[var(--border)] hover:border-violet-500/60 transition-all cursor-pointer group shadow-sm"
+          >
+            <div className="w-12 h-12 rounded-xl bg-violet-500/15 text-violet-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+              <UtensilsCrossed className="w-6 h-6" />
+            </div>
+            <span className="text-sm font-bold text-[var(--text-hi)] font-sans">
+              Waiter Station
+            </span>
+            <span className="text-[10px] font-mono text-[var(--text-faint)] mt-1">
+              Table Orders &amp; Pass Alerts
+            </span>
+            <div className="mt-3 flex items-center gap-1 text-[11px] font-mono font-bold text-violet-400 opacity-0 group-hover:opacity-100 transition-opacity">
+              <span>Open</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </div>
+          </button>
+
+          {/* Tier 4: Rider / Dispatch station */}
           <button
             type="button"
             onClick={() => router.push("/terminal/rider")}
@@ -117,7 +185,7 @@ export default function TerminalRoleDispatcher() {
             </div>
           </button>
 
-          {/* Tier 4: Manager Station */}
+          {/* Tier 5: Manager Station */}
           <button
             type="button"
             onClick={() => router.push("/terminal/manager")}

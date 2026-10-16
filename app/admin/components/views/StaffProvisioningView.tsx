@@ -24,6 +24,9 @@ import { StaffMember } from "../../types";
 import { useAuth } from "../../context/AuthContext";
 import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
+import { normalizeStationName } from "@/lib/kitchenStationRouting";
+import { getActiveAuthSession, setAuthSession } from "@/lib/auth";
+import { parseShiftOption } from "@/lib/shiftSchedule";
 
 interface StaffProvisioningViewProps {
   initialData?: StaffMember | null;
@@ -167,7 +170,11 @@ export default function StaffProvisioningView({
     return "First Shift (Morning)";
   });
   const [cashDrawer, setCashDrawer] = useState("Counter 01");
-  const [kitchenStation, setKitchenStation] = useState("Hot Kitchen / Grills");
+  const [kitchenStation, setKitchenStation] = useState<string>(() => {
+    const raw = (initialData?.assigned_station || initialData?.assignedStation || "").toLowerCase();
+    if (!raw) return "fast_food";
+    return normalizeStationName(raw);
+  });
   const [vehiclePlate, setVehiclePlate] = useState("Bike - LEA 4920");
   const [assignedZones, setAssignedZones] = useState<string[]>(
     Array.isArray(initialData?.assigned_zones) ? initialData.assigned_zones : []
@@ -238,13 +245,13 @@ export default function StaffProvisioningView({
         };
       case "waiter":
         return {
-          terminalAccess: "POS_ONLY" as const,
-          screenName: "POS Counter" as const,
-          displayLabel: "POS Floor / Table Ordering Station",
-          description: "Staff is automatically routed to POS table-side ordering terminal.",
-          badgeColor: "bg-teal-50 text-teal-800 border-teal-200/80 shadow-xs dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/30",
+          terminalAccess: "WAITER_ONLY" as const,
+          screenName: "Waiter Station" as const,
+          displayLabel: "Waiter Station / Table-Side Ordering",
+          description: "Staff is automatically routed to dedicated Waiter Terminal with live kitchen pass alerts.",
+          badgeColor: "bg-violet-50 text-violet-800 border-violet-200/80 shadow-xs dark:bg-violet-500/10 dark:text-violet-400 dark:border-violet-500/30",
           icon: UtensilsCrossed,
-          path: "/terminal/pos",
+          path: "/terminal/waiter",
         };
       case "cashier":
       default:
@@ -297,10 +304,17 @@ export default function StaffProvisioningView({
       const { restId, branchId: resolvedBranchId } = await getValidTenantContext(user);
       const targetBranchId = resolvedBranchId || localBranchId || null;
 
+      // Database check constraint requires terminal_access IN ('FULL_ADMIN', 'POS_ONLY', 'KDS_ONLY', 'RIDER_ONLY')
+      // Waiters are stored as 'POS_ONLY' in PostgreSQL, but remain 'WAITER_ONLY' in application state and routing
+      const dbTerminalAccess =
+        role === "waiter" || (activeTerminal.terminalAccess as string) === "WAITER_ONLY"
+          ? "POS_ONLY"
+          : activeTerminal.terminalAccess;
+
       if (mode === "add") {
         let createdStaffId = `staff_${Date.now()}`;
 
-        const insertPayload: any = {
+        const insertPayload: Record<string, any> = {
           restaurant_id: restId,
           branch_id: targetBranchId ? String(targetBranchId) : null,
           branch_name: selectedBranchName || "Main Branch",
@@ -309,11 +323,14 @@ export default function StaffProvisioningView({
           email: trimmedEmail,
           password_hash: trimmedPassword,
           role: role,
-          terminal_access: activeTerminal.terminalAccess,
+          terminal_access: dbTerminalAccess,
           shift: shift,
           status: "active",
-          assigned_zones: role === "rider" ? assignedZones : [],
         };
+
+        if (role === "chef" && kitchenStation) {
+          insertPayload.assigned_station = kitchenStation;
+        }
 
         let { data, error } = await supabase
           .from("staff_members")
@@ -321,9 +338,14 @@ export default function StaffProvisioningView({
           .select()
           .single();
 
-        if (error && (error.message?.includes("assigned_zones") || error.message?.includes("max_delivery_radius_km"))) {
-          delete insertPayload.assigned_zones;
-          delete insertPayload.max_delivery_radius_km;
+        // Resilient retry if database constraints or optional columns reject the payload
+        if (error) {
+          if (insertPayload.assigned_station && (error.message?.includes("assigned_station") || error.code === "PGRST204")) {
+            delete insertPayload.assigned_station;
+          }
+          if (error.message?.includes("terminal_access") && insertPayload.terminal_access !== "POS_ONLY") {
+            insertPayload.terminal_access = "POS_ONLY";
+          }
           const retry = await supabase
             .from("staff_members")
             .insert([insertPayload])
@@ -334,13 +356,20 @@ export default function StaffProvisioningView({
         }
 
         if (error) {
-          console.error("[StaffProvisioning] Supabase insert error:", error);
-          if (error.code === "23505" || error.message?.includes("unique")) {
+          const errCode = error.code || "";
+          const errMsg = error.message || (typeof error === "object" ? JSON.stringify(error) : String(error));
+          console.error("[StaffProvisioning] Supabase insert error:", {
+            code: errCode,
+            message: errMsg,
+            details: error.details,
+            hint: error.hint,
+          });
+          if (errCode === "23505" || errMsg.toLowerCase().includes("unique")) {
             showToast("A staff member with this email already exists.");
             setIsSubmitting(false);
             return;
           }
-          showToast(`Error creating staff: ${error.message}`);
+          showToast(`Error creating staff: ${errMsg}`);
           setIsSubmitting(false);
           return;
         }
@@ -365,47 +394,117 @@ export default function StaffProvisioningView({
           avatar: trimmedName.substring(0, 2).toUpperCase(),
           joinedDate: "Today",
           assigned_zones: role === "rider" ? assignedZones : [],
+          assigned_station: role === "chef" ? kitchenStation : undefined,
+          assignedStation: role === "chef" ? kitchenStation : undefined,
         };
 
         showToast(`Staff member "${newStaff.name}" registered successfully with ${activeTerminal.displayLabel}.`);
         onSuccess(newStaff);
       } else if (mode === "edit" && initialData) {
-        const updatePayload: any = {
+        const updatePayload: Record<string, any> = {
           full_name: trimmedName,
           phone: trimmedPhone,
           email: trimmedEmail,
           role: role,
-          terminal_access: activeTerminal.terminalAccess,
+          terminal_access: dbTerminalAccess,
           branch_name: selectedBranchName,
           branch_id: targetBranchId ? String(targetBranchId) : null,
           shift: shift,
-          assigned_zones: role === "rider" ? assignedZones : [],
         };
+
+        if (role === "chef" && kitchenStation) {
+          updatePayload.assigned_station = kitchenStation;
+        } else {
+          updatePayload.assigned_station = null;
+        }
 
         if (trimmedPassword) {
           updatePayload.password_hash = trimmedPassword;
         }
 
-        let { error } = await supabase
+        let { data: updatedRows, error } = await supabase
           .from("staff_members")
           .update(updatePayload)
-          .eq("id", initialData.id);
+          .eq("id", initialData.id)
+          .select();
 
-        if (error && (error.message?.includes("assigned_zones") || error.message?.includes("max_delivery_radius_km"))) {
-          delete updatePayload.assigned_zones;
-          delete updatePayload.max_delivery_radius_km;
+        if (error) {
+          if (updatePayload.assigned_station && (error.message?.includes("assigned_station") || error.code === "PGRST204")) {
+            delete updatePayload.assigned_station;
+          }
+          if (error.message?.includes("terminal_access") && updatePayload.terminal_access !== "POS_ONLY") {
+            updatePayload.terminal_access = "POS_ONLY";
+          }
+          if (error.message?.includes("shift") || error.code === "23514") {
+            if (shift.includes("Morning")) updatePayload.shift = "Morning";
+            else if (shift.includes("Evening")) updatePayload.shift = "Evening";
+            else if (shift.includes("Night")) updatePayload.shift = "Night";
+          }
           const retry = await supabase
             .from("staff_members")
             .update(updatePayload)
-            .eq("id", initialData.id);
+            .eq("id", initialData.id)
+            .select();
           error = retry.error;
+          updatedRows = retry.data;
+        }
+
+        // If ID wasn't found in DB (e.g. local ID or ID mismatch), match by email
+        if (!error && (!updatedRows || updatedRows.length === 0) && (initialData.email || trimmedEmail)) {
+          const emailToMatch = initialData.email || trimmedEmail;
+          const retryByEmail = await supabase
+            .from("staff_members")
+            .update(updatePayload)
+            .eq("email", emailToMatch)
+            .select();
+          error = retryByEmail.error;
+          updatedRows = retryByEmail.data;
         }
 
         if (error) {
-          console.error("[StaffProvisioning] Supabase update error:", error);
-          showToast(`Error updating profile: ${error.message}`);
+          const errCode = error.code || "";
+          const errMsg = error.message || (typeof error === "object" ? JSON.stringify(error) : String(error));
+          console.error("[StaffProvisioning] Supabase update error:", {
+            code: errCode,
+            message: errMsg,
+            details: error.details,
+            hint: error.hint,
+          });
+          showToast(`Error updating profile: ${errMsg}`);
           setIsSubmitting(false);
           return;
+        }
+
+        // Invalidate cached staff / shift sessions in localStorage and sessionStorage
+        if (typeof window !== "undefined") {
+          try {
+            const staffKeys = [
+              String(initialData.id || "").toLowerCase(),
+              String(trimmedEmail || "").toLowerCase(),
+              String(initialData.email || "").toLowerCase(),
+            ].filter(Boolean);
+
+            staffKeys.forEach((k) => {
+              const cleanKey = k.replace(/[^a-z0-9]/g, "_");
+              sessionStorage.removeItem(`staff_active_shift_${cleanKey}`);
+              localStorage.removeItem(`staff_active_shift_${cleanKey}`);
+              sessionStorage.removeItem(`pos_active_shift_${cleanKey}`);
+              localStorage.removeItem(`pos_active_shift_${cleanKey}`);
+            });
+
+            // If current session is this staff member, update assignedShift in active session
+            const currentSession = getActiveAuthSession();
+            if (
+              currentSession &&
+              (String(currentSession.id) === String(initialData.id) ||
+                currentSession.email?.toLowerCase() === trimmedEmail.toLowerCase())
+            ) {
+              currentSession.assignedShift = shift;
+              setAuthSession(currentSession);
+            }
+          } catch (cacheErr) {
+            console.warn("[StaffProvisioning] Cache invalidation warning:", cacheErr);
+          }
         }
 
         const updatedStaff: StaffMember = {
@@ -421,6 +520,8 @@ export default function StaffProvisioningView({
           terminalAccess: activeTerminal.terminalAccess,
           assignedScreen: activeTerminal.screenName,
           assigned_zones: role === "rider" ? assignedZones : [],
+          assigned_station: role === "chef" ? kitchenStation : undefined,
+          assignedStation: role === "chef" ? kitchenStation : undefined,
         };
 
         showToast(`Staff profile for "${updatedStaff.name}" updated successfully.`);
@@ -677,10 +778,13 @@ export default function StaffProvisioningView({
                     onChange={(e) => setKitchenStation(e.target.value)}
                     className="w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)] rounded-xl px-4 py-2.5 text-xs text-[var(--text-hi)] focus:outline-none transition-all cursor-pointer font-sans"
                   >
-                    <option value="Hot Kitchen / Grills">Hot Kitchen / Grills & Karahi</option>
-                    <option value="Fryers & Fast Food">Fryers, Burgers & Fast Food</option>
-                    <option value="Salad & Assembly">Salad, Appetizers & Assembly</option>
-                    <option value="Beverages">Beverages, Shakes & Desserts</option>
+                    <option value="fast_food">Fast Food (Burgers, Pizza &amp; Sandwiches)</option>
+                    <option value="desi">Desi (Karahi, Handi, Biryani &amp; Curries)</option>
+                    <option value="grill">Hot Kitchen / Grills, BBQ &amp; Steaks</option>
+                    <option value="fry">Fryers, Wings, Nuggets &amp; Crispy</option>
+                    <option value="pastry">Pastry, Bakery &amp; Desserts</option>
+                    <option value="beverages">Beverages, Shakes &amp; Drinks</option>
+                    <option value="assembly">Salad, Appetizers &amp; Assembly</option>
                   </select>
                 </div>
               )}

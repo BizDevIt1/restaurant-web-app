@@ -164,7 +164,7 @@ export const NAVIGATION_REGISTRY: NavigationItem[] = [
 export function getPermittedNavigation(
   role: UserRole,
   assignedFeatures: string[],
-  terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY" | "MANAGER_ONLY"
+  terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY" | "MANAGER_ONLY" | "WAITER_ONLY"
 ): NavigationItem[] {
   const roleStr = String(role || "").toUpperCase();
   const isAnyAdmin =
@@ -183,6 +183,9 @@ export function getPermittedNavigation(
     }
     if (terminalAccess === "RIDER_ONLY") {
       return NAVIGATION_REGISTRY.filter((item) => item.id === "riders");
+    }
+    if (terminalAccess === "WAITER_ONLY") {
+      return NAVIGATION_REGISTRY.filter((item) => item.id === "pos" || item.id === "tables");
     }
   }
 

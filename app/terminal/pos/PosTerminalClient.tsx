@@ -13,6 +13,8 @@ import {
   Search,
   ChevronRight,
   Check,
+  ShoppingBag,
+  CheckCircle2,
 } from "lucide-react";
 import {
   MenuItem,
@@ -47,6 +49,14 @@ import {
 } from "@/lib/tenantStore";
 import { useTerminalSidebar } from "../TerminalSidebarContext";
 import { playPosSound } from "@/utils/posAudio";
+import {
+  subscribeToRemoteKitchenBuzzer,
+  subscribeToKitchenWaiterBridge,
+  subscribeToTakeawayReadyAlerts,
+  TakeawayReadyPayload,
+  playRemoteAudioChime,
+  getKitchenBroadcastTopic,
+} from "@/lib/kitchenWaiterBridge";
 import MenuCategoriesAndSearch from "./components/MenuCategoriesAndSearch";
 import ItemGridAndModifiers from "./components/ItemGridAndModifiers";
 import OrderTicketPane from "./components/OrderTicketPane";
@@ -60,6 +70,8 @@ import UnifiedOrdersView, {
   UnifiedOrderTab,
 } from "./components/UnifiedOrdersView";
 import KitchenThermalSlipDialog from "./components/KitchenThermalSlipDialog";
+import { getTicketStation } from "../kitchen/KitchenTerminalClient";
+import { splitOrderIntoStationTickets, getMenuItemStation } from "@/lib/kitchenStationRouting";
 import StartShiftModal, { ShiftTypeOption } from "./components/StartShiftModal";
 import ConfirmModal from "./components/ConfirmModal";
 import ShiftExpiryWarningModal from "./components/ShiftExpiryWarningModal";
@@ -82,7 +94,8 @@ import {
   dispatchSystemSyncAlert,
   dispatchShiftSettlementAlert,
 } from "@/lib/shiftAuditNotifications";
-import { deductInventoryStockForOrder } from "@/lib/inventoryDeduction";
+import { deductInventoryStockForOrder, isOrderAlreadyDeducted } from "@/lib/inventoryDeduction";
+import { recordStaffShiftLogout } from "@/lib/universalShiftLogging";
 import {
   saveSharedPosCart,
   clearSharedPosCart,
@@ -96,9 +109,27 @@ import {
   calculateRecipePortions,
   simulateCartRawMaterials,
   getItemCartQuantity,
+  computeReservedMaterialsFromActiveOrders,
+  getItemActiveReservedQuantity,
   RawMaterialStockData,
   RecipeItemData,
 } from "@/lib/recipePortions";
+import {
+  computeUnifiedMenuCatalog,
+  broadcastStockRefresh,
+  subscribeToStockRefresh,
+  calculateUnifiedAvailableStock,
+} from "@/lib/unifiedStock";
+import {
+  fetchActiveUnpaidTableRecords,
+  reconcileTableStatuses,
+  autoHealDatabaseTableOccupancy,
+  isTableMatchingIdentifier,
+  normalizeTableNumber,
+  isOrderOccupyingTable,
+  broadcastTableReleased,
+  subscribeToTableReleased,
+} from "@/lib/tableOccupancy";
 
 const PARKED_ORDERS_KEY = "omni_terminal_parked_orders";
 
@@ -115,10 +146,63 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
   // Shift settlement modal state for embedded admin mode
   const [isShiftSettlementOpen, setIsShiftSettlementOpen] = useState(false);
 
-  // Strict Shift Window Lockout for Cashiers (disabled when embedded in Admin Dashboard)
+  // Guard: If a non-cashier arrives at the POS register, immediately redirect to their dedicated terminal
+  useEffect(() => {
+    if (embedded || !user) return;
+    const staffRoleClean = (user.staffRole || "").toLowerCase().trim();
+    const roleClean = (user.role || "").toLowerCase().trim();
+    const terminalAccessClean = String(user.terminalAccess || "").toUpperCase().trim();
+
+    const isWaiter =
+      staffRoleClean === "waiter" ||
+      staffRoleClean === "server" ||
+      roleClean === "waiter" ||
+      roleClean === "server" ||
+      terminalAccessClean === "WAITER_ONLY" ||
+      terminalAccessClean === "WAITER";
+
+    if (isWaiter) {
+      router.replace("/terminal/waiter");
+      return;
+    }
+
+    const isChef =
+      staffRoleClean === "chef" ||
+      staffRoleClean === "kitchen" ||
+      staffRoleClean === "cook" ||
+      staffRoleClean === "kds" ||
+      roleClean === "chef" ||
+      roleClean === "kitchen" ||
+      roleClean === "cook" ||
+      roleClean === "kds" ||
+      terminalAccessClean === "KDS_ONLY" ||
+      terminalAccessClean === "KITCHEN_ONLY";
+
+    if (isChef) {
+      router.replace("/terminal/kitchen");
+      return;
+    }
+
+    const isRider =
+      staffRoleClean === "rider" ||
+      roleClean === "rider" ||
+      terminalAccessClean === "RIDER_ONLY";
+
+    if (isRider) {
+      router.replace("/terminal/rider");
+      return;
+    }
+  }, [user, embedded, router]);
+
+  // Strict Shift Window Lockout for Cashiers (disabled when embedded in Admin Dashboard or for waiters)
   const isCashier = Boolean(
     !embedded &&
     user &&
+    (user.staffRole as string) !== "waiter" &&
+    (user.role as string) !== "waiter" &&
+    (user.staffRole as string) !== "server" &&
+    (user.role as string) !== "server" &&
+    (user.terminalAccess as string) !== "WAITER_ONLY" &&
     (user.staffRole === "cashier" ||
       (user.role as string) === "cashier" ||
       user.terminalAccess === "POS_ONLY")
@@ -226,9 +310,9 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
 
   const handleDismissContinuationPrompt = useCallback(() => {
     setIsShiftContinuationModalOpen(false);
-    // Snooze modal for 5 minutes persistently until resolved
-    setShiftPromptSnoozedUntil(Date.now() + 5 * 60 * 1000);
-    showToast("Shift alert snoozed. Reminding again in 5 minutes.");
+    // Snooze modal for 15 minutes persistently until resolved
+    setShiftPromptSnoozedUntil(Date.now() + 15 * 60 * 1000);
+    showToast("Shift alert snoozed. Reminding again in 15 minutes.");
   }, []);
 
   // Seamless New Shift Rollover directly from POS terminal
@@ -327,6 +411,31 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
     }
   };
 
+  // Direct End Shift & Logout from shift continuation prompt (bypasses Z-Report)
+  const handleEndShiftLogout = async () => {
+    try {
+      // 1. Close shift in database
+      await recordStaffShiftLogout(user, {
+        station: "pos",
+        notes: "Shift ended and logged out from POS terminal shift-expired prompt",
+      });
+    } catch (err) {
+      console.warn("[PosTerminal] Error recording shift logout:", err);
+    }
+
+    // 2. Close the continuation modal
+    setIsShiftContinuationModalOpen(false);
+
+    // 3. Clear local session data
+    clearUserSession();
+
+    // 4. Auth context logout
+    logout();
+
+    // 5. Redirect to login
+    router.replace("/login");
+  };
+
   // Pre-Shift Expiry 10-Minute Warning Engine (recurring modal every 3 mins)
   const [isWarningModalOpen, setIsWarningModalOpen] = useState(false);
   const [lastWarningDismissedAt, setLastWarningDismissedAt] = useState<number>(0);
@@ -399,7 +508,11 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
   // Dynamic categories calculated from live menu items
   const posCategories = useMemo(() => {
     const map = new Map<string, { id: string; label: string; count: number }>();
+    let featuredCount = 0;
     menuItems.forEach((item) => {
+      if (item.isPopular || (item as any).isFeatured || (item as any).is_popular || (item as any).is_featured) {
+        featuredCount++;
+      }
       const cat = item.category || "other";
       const key = cat.toLowerCase();
       if (map.has(key)) {
@@ -412,7 +525,15 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         });
       }
     });
-    return Array.from(map.values());
+    const result = Array.from(map.values());
+    if (featuredCount > 0) {
+      result.unshift({
+        id: "featured",
+        label: "⭐ Featured / Best Sellers",
+        count: featuredCount,
+      });
+    }
+    return result;
   }, [menuItems]);
 
   // 3. Active Order Ticket / Cart State (persisted in shared storage & sessionStorage)
@@ -448,28 +569,42 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
   }, [currentOrgId]);
 
   // 3b. Real-Time Shared Raw Material Ledger & React State Sync
+  const [runningTableOrders, setRunningTableOrders] = useState<OrderRecord[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = localStorage.getItem(`pos_running_kot_orders_${currentOrgId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch { }
+    return [];
+  });
+  const [activeDbOrders, setActiveDbOrders] = useState<any[]>([]);
   const [inventoryTick, setInventoryTick] = useState<number>(0);
 
-  // Synchronous memo of simulated raw materials ledger (re-evaluated immediately on any cart, recipe, or inventory tick change)
+  // 3c. Compute temporary stock reservations from active running table orders
+  const reservedMaterialsMap = useMemo(() => {
+    return computeReservedMaterialsFromActiveOrders(runningTableOrders, rawRecipes);
+  }, [runningTableOrders, rawRecipes]);
+
+  // Synchronous memo of simulated raw materials ledger (clean base ledger without local cart deduction)
   const effectiveLedger = useMemo(() => {
-    return simulateCartRawMaterials(cart, rawRecipes, baseMaterialsMap);
-  }, [cart, rawRecipes, baseMaterialsMap, inventoryTick]);
+    return baseMaterialsMap;
+  }, [baseMaterialsMap, inventoryTick]);
 
-  // Synchronous memo of live simulated menu items with fresh cloned references to guarantee immediate re-rendering
+  // Live Simulated Menu Items directly bound to menuItems (single source of truth without local cart deduction)
   const liveSimulatedMenuItems = useMemo(() => {
-    return applyRecipeCalculationsToMenu(menuItems, rawRecipes, effectiveLedger);
-  }, [menuItems, rawRecipes, effectiveLedger, inventoryTick]);
+    return menuItems;
+  }, [menuItems, inventoryTick]);
 
-  // Reactive State Hook: synchronously / reactively bind cart, ledger, rawRecipes, and menu catalog
-  const [, setReactiveInventoryLedger] = useState<Map<string, RawMaterialStockData>>(() =>
-    simulateCartRawMaterials(cart, rawRecipes, baseMaterialsMap)
-  );
+  // Reactive State Hook: synchronously / reactively bind base materials and menu catalog
+  const [, setReactiveInventoryLedger] = useState<Map<string, RawMaterialStockData>>(() => baseMaterialsMap);
   useEffect(() => {
-    const updatedLedger = simulateCartRawMaterials(cart, rawRecipes, baseMaterialsMap);
-    setReactiveInventoryLedger(new Map(updatedLedger));
-  }, [cart, rawRecipes, baseMaterialsMap, inventoryTick]);
+    setReactiveInventoryLedger(new Map(baseMaterialsMap));
+  }, [baseMaterialsMap, inventoryTick]);
 
-  // Unified Item & Variant Stock Calculation: resolves exact available portions against active ledger
+  // Unified Item & Variant Stock Calculation: single source of truth formula across all terminals
   const getVariantPortions = useCallback(
     (item: MenuItem, variant?: ItemVariant) => {
       const rawItemId = String(item.id);
@@ -484,79 +619,25 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           dishRecipes = (item as any).recipe_items;
         }
       }
-      const inCartQty = getItemCartQuantity(cart, item, variant);
 
-      if (variant) {
-        // Resolve target variant with full properties if present on item.variants
-        const matchedVariant =
-          item.variants?.find(
-            (v) =>
-              (v.id && variant.id && String(v.id) === String(variant.id)) ||
-              (v.name && variant.name && v.name.trim().toLowerCase() === variant.name.trim().toLowerCase())
-          ) || variant;
+      const effectiveActiveOrders = activeDbOrders.length > 0 ? activeDbOrders : runningTableOrders;
+      const res = calculateUnifiedAvailableStock({
+        item,
+        variant,
+        rawMaterialsLookup: baseMaterialsMap,
+        dishRecipes,
+        activeOrders: effectiveActiveOrders,
+      });
 
-        const liveYield = calculateVariantPortions(
-          dishRecipes,
-          matchedVariant,
-          effectiveLedger,
-          item.price
-        );
-
-        const hasVariantBOM = liveYield.resolvedBOM.length > 0;
-
-        let maxPortions = liveYield.maxPortions;
-        if (!hasVariantBOM || effectiveLedger.size === 0) {
-          const baseCount =
-            typeof matchedVariant.maxPortions === "number"
-              ? matchedVariant.maxPortions
-              : typeof item.stockCount === "number"
-              ? item.stockCount
-              : 20;
-          maxPortions = Math.max(0, baseCount - inCartQty);
-        } else {
-          maxPortions = Math.max(0, maxPortions);
-        }
-
-        const isOutOfStock = maxPortions <= 0;
-        return {
-          maxPortions,
-          isOutOfStock,
-          stockStatus: isOutOfStock ? ("out_of_stock" as const) : liveYield.stockStatus,
-          limitingIngredient: liveYield.limitingIngredient,
-        };
-      }
-
-      // Single size or base dish calculation
-      if (dishRecipes.length > 0 && effectiveLedger.size > 0) {
-        const calc = calculateRecipePortions(dishRecipes, item.price, effectiveLedger);
-        const maxPortions = Math.max(0, calc.maxPortions);
-        const isOutOfStock = maxPortions <= 0;
-        return {
-          maxPortions,
-          isOutOfStock,
-          stockStatus: isOutOfStock ? ("out_of_stock" as const) : calc.stockStatus,
-          limitingIngredient: calc.limitingIngredient?.name,
-        };
-      }
-
-      // Fallback for non-recipe items (Available Portions = Max Yield - Current Cart Quantity)
-      const rawCount =
-        typeof item.availablePortions === "number"
-          ? item.availablePortions
-          : typeof item.stockCount === "number"
-          ? item.stockCount
-          : 20;
-      const remaining = Math.max(0, rawCount - inCartQty);
       return {
-        maxPortions: remaining,
-        isOutOfStock: remaining <= 0 || item.stockStatus === "out_of_stock",
-        stockStatus:
-          remaining <= 0 || item.stockStatus === "out_of_stock"
-            ? ("out_of_stock" as const)
-            : ("in_stock" as const),
+        maxPortions: res.availableStock,
+        availablePortions: res.availableStock,
+        isOutOfStock: res.isOutOfStock,
+        stockStatus: res.stockStatus,
+        limitingIngredient: res.limitingIngredient?.name || res.limitingIngredient,
       };
     },
-    [rawRecipes, effectiveLedger, cart, inventoryTick]
+    [rawRecipes, baseMaterialsMap, activeDbOrders, runningTableOrders]
   );
   const [orderChannel, setOrderChannel] = useState<"dine_in" | "takeaway" | "delivery">(() => {
     if (typeof window === "undefined") return "dine_in";
@@ -640,19 +721,6 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
     getStoredOrders(currentOrgId)
   );
   const [isSyncingOrders, setIsSyncingOrders] = useState(false);
-
-  // 6b. Running / Open KOT Orders (Stored separately in kitchen queue & active tables, NOT in shift invoices)
-  const [runningTableOrders, setRunningTableOrders] = useState<OrderRecord[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = localStorage.getItem(`pos_running_kot_orders_${currentOrgId}`);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch { }
-    return [];
-  });
 
   // 7. Parked / Held Orders State
   const [parkedOrders, setParkedOrders] = useState<ParkedOrder[]>(() => {
@@ -1287,6 +1355,119 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
     }, 3200);
   }, []);
 
+  // Takeaway Kitchen Ready Alert Queue (Scoped to POS Terminal)
+  interface PosTakeawayReadyAlert {
+    id: string;
+    orderNumber: string;
+    ticketId?: string;
+    customerName?: string;
+    customerPhone?: string;
+    itemsSummary?: string;
+    readyAtTime?: string;
+    timestamp: number;
+  }
+
+  const [takeawayReadyList, setTakeawayReadyList] = useState<PosTakeawayReadyAlert[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = localStorage.getItem(`pos_takeaway_ready_${currentOrgId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch { }
+    return [];
+  });
+
+  const handleTakeawayOrderReady = useCallback(
+    (alert: {
+      orderNumber: string;
+      ticketId?: string;
+      customerName?: string;
+      customerPhone?: string;
+      itemsSummary?: string;
+      readyAt?: string;
+      priority?: string;
+    }) => {
+      const cleanNum = String(alert.orderNumber || alert.ticketId || "").trim();
+      if (!cleanNum) return;
+
+      playRemoteAudioChime(alert.priority === "urgent" || alert.priority === "rush");
+      playPosSound("chime");
+
+      const newAlert: PosTakeawayReadyAlert = {
+        id: cleanNum,
+        orderNumber: cleanNum,
+        ticketId: alert.ticketId,
+        customerName: alert.customerName,
+        customerPhone: alert.customerPhone,
+        itemsSummary: alert.itemsSummary,
+        readyAtTime: alert.readyAt
+          ? new Date(alert.readyAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        timestamp: Date.now(),
+      };
+
+      setTakeawayReadyList((prev) => {
+        if (prev.some((p) => p.orderNumber === cleanNum || (alert.ticketId && p.ticketId === alert.ticketId))) {
+          return prev;
+        }
+        const updated = [newAlert, ...prev];
+        try {
+          localStorage.setItem(`pos_takeaway_ready_${currentOrgId}`, JSON.stringify(updated));
+        } catch { }
+        return updated;
+      });
+
+      showToast(`🛍️ Takeaway Order #${cleanNum} is Ready for Counter Handover!`);
+    },
+    [currentOrgId, showToast]
+  );
+
+  const handleConfirmTakeawayHandover = async (alert: PosTakeawayReadyAlert) => {
+    try {
+      const supabase = createClient();
+      const nowIso = new Date().toISOString();
+      const orderNum = alert.orderNumber;
+      const cleanTicket = alert.ticketId || alert.orderNumber;
+      const baseKotId = cleanTicket.replace(/-[A-Z0-9]+$/, "");
+
+      // 1. Update orders table to completed
+      await supabase
+        .from("orders")
+        .update({
+          order_status: "completed",
+          completed_at: nowIso,
+          updated_at: nowIso,
+        })
+        .or(`order_number.eq.${orderNum},id.eq.${orderNum},kot_id.eq.${cleanTicket},kot_id.eq.${baseKotId}`);
+
+      // 2. Update kitchen_tickets table to completed
+      await supabase
+        .from("kitchen_tickets")
+        .update({
+          status: "completed",
+          completed_at: nowIso,
+        })
+        .or(`ticket_number.eq.${cleanTicket},ticket_number.eq.${baseKotId},id.eq.${cleanTicket}`);
+
+      // 3. Remove from ready list
+      setTakeawayReadyList((prev) => {
+        const updated = prev.filter((p) => p.orderNumber !== alert.orderNumber && p.id !== alert.id);
+        try {
+          localStorage.setItem(`pos_takeaway_ready_${currentOrgId}`, JSON.stringify(updated));
+        } catch { }
+        return updated;
+      });
+
+      playPosSound("chirp");
+      showToast(`✅ Takeaway Order #${alert.orderNumber} handed over to guest!`);
+    } catch (err) {
+      console.error("[PosTerminalClient] Handover confirmation error:", err);
+      showToast(`⚠️ Handover confirmation failed. Please retry.`);
+    }
+  };
+
   // Safe wrapper for opening payment settlement modal
   const handleOpenPaymentModal = () => {
     const shift = getOrRecoverActiveShift();
@@ -1381,9 +1562,14 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           const items = Array.isArray(o.items) ? o.items : [];
           const orderNum = o.order_number || o.id;
           const isHeld = String(orderNum).startsWith("#HOLD-") || o.customer_name === "Held Order";
-          const isPaid = o.payment_status === "paid" || o.order_status === "completed";
+          const isPaid = o.payment_status === "paid";
 
-          const matchedTable = currentTables.find((t) => t.dbId === o.table_id || String(t.id) === String(o.table_id));
+          const matchedTable = currentTables.find(
+            (t) =>
+              (o.table_id && (t.dbId === o.table_id || String(t.id) === String(o.table_id))) ||
+              isTableMatchingIdentifier(t, o.table_id) ||
+              isTableMatchingIdentifier(t, o.customer_name)
+          );
           const resolvedTableId = matchedTable?.id ?? (isNaN(Number(o.table_id)) ? undefined : Number(o.table_id));
 
           if (isPaid) {
@@ -1453,20 +1639,61 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
               paymentMethod: (o.payment_method || "cash").toLowerCase(),
               cashierName: o.cashier_name || user?.name || "Cashier",
               timestamp: o.created_at || new Date().toISOString(),
-              status: "active",
-              payment_status: "pending",
+              status: o.order_status || "active",
+              payment_status: o.payment_status || "pending",
               shift_id: o.shift_id ?? null,
             });
           }
         });
 
+        // Merge with any locally shared running KOT orders that haven't synced via network yet
+        try {
+          const rawLocalRunning = localStorage.getItem(`pos_running_kot_orders_${currentOrgId}`) || localStorage.getItem(`pos_running_kot_orders_${restId}`);
+          if (rawLocalRunning) {
+            const parsed = JSON.parse(rawLocalRunning);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((localR) => {
+                const isPaidOrCompleted =
+                  completedList.some((c) => String(c.id) === String(localR.id)) ||
+                  !isOrderOccupyingTable(localR);
+                if (!isPaidOrCompleted && !runningKotList.some((r) => r.id === localR.id)) {
+                  runningKotList.unshift(localR);
+                }
+              });
+            }
+          }
+        } catch { }
+
         setOrders(completedList);
         saveStoredOrders(currentOrgId, completedList);
 
         setRunningTableOrders(runningKotList);
+        setActiveDbOrders(runningKotList);
         try {
           localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(runningKotList));
+          if (restId) {
+            localStorage.setItem(`pos_running_kot_orders_${restId}`, JSON.stringify(runningKotList));
+          }
         } catch { }
+
+        // Immediately reflect running KOTs into table occupancy using single source of truth
+        const activeRecords = runningKotList
+          .filter((ro) => isOrderOccupyingTable(ro))
+          .map((ro) => {
+            const ident = ro.tableName || (ro.tableId ? String(ro.tableId) : "");
+            return {
+              tableIdentifier: ident,
+              tableNumberNorm: normalizeTableNumber(ident),
+              orderId: String(ro.id),
+              kotId: ro.kotId,
+              tableId: ro.tableId,
+              totalAmount: ro.total,
+              source: "order" as const,
+              paymentStatus: ro.payment_status,
+              status: ro.status,
+            };
+          });
+        setTables((prev) => reconcileTableStatuses(prev, activeRecords));
 
         setParkedOrders(heldList);
         try {
@@ -1497,11 +1724,17 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       const { restId } = await getValidTenantContext(user);
       if (!restId) return;
 
-      const { data, error } = await supabase
-        .from("restaurant_tables")
-        .select("*")
-        .eq("restaurant_id", restId)
-        .order("table_number", { ascending: true });
+      const [tableRes, activeRecords] = await Promise.all([
+        supabase
+          .from("restaurant_tables")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .order("table_number", { ascending: true }),
+        fetchActiveUnpaidTableRecords(restId, supabase),
+      ]);
+
+      const data = tableRes.data;
+      const error = tableRes.error;
 
       if (!error && data) {
         const seenIds = new Set<number>();
@@ -1514,20 +1747,24 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           return mapped;
         });
 
-        setTables(mappedTables);
-        saveStoredTables(currentOrgId, mappedTables);
+        const reconciled = reconcileTableStatuses(mappedTables, activeRecords);
+
+        setTables(reconciled);
+        saveStoredTables(currentOrgId, reconciled);
+        autoHealDatabaseTableOccupancy(restId, reconciled, activeRecords, supabase);
+
         if (typeof window !== "undefined") {
           try {
-            localStorage.setItem(`tables_list_${restId}`, JSON.stringify(mappedTables));
-            localStorage.setItem(`tables_list_${currentOrgId}`, JSON.stringify(mappedTables));
+            localStorage.setItem(`tables_list_${restId}`, JSON.stringify(reconciled));
+            localStorage.setItem(`tables_list_${currentOrgId}`, JSON.stringify(reconciled));
           } catch {}
         }
 
         // Align selectedTable with current floor layout
         setSelectedTable((prevSelected) => {
-          if (mappedTables.length === 0) return 1;
-          if (mappedTables.some((t) => t.id === prevSelected)) return prevSelected;
-          return mappedTables[0].id;
+          if (reconciled.length === 0) return 1;
+          if (reconciled.some((t) => t.id === prevSelected)) return prevSelected;
+          return reconciled[0].id;
         });
       }
     } catch (err) {
@@ -1542,15 +1779,15 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
     fetchLiveTables();
   }, [fetchLiveTables]);
 
-  // Memoized live catalog fetch & recipe BOM stock deductions
+  // Memoized live catalog fetch & centralized unified stock computation
   const fetchLiveMenuCatalog = useCallback(async () => {
     try {
       const supabase = createClient();
       const { restId } = await getValidTenantContext(user);
       if (!restId) return;
 
-      // Concurrently fetch menu items, recipe BOM items, and raw materials from Supabase
-      const [menuRes, recipeRes, materialsRes] = await Promise.all([
+      // Concurrently fetch menu items, recipe BOM items, raw materials, and active unfulfilled orders from Supabase
+      const [menuRes, recipeRes, materialsRes, ordersRes] = await Promise.all([
         supabase
           .from("menu_items")
           .select("*")
@@ -1566,12 +1803,17 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           .from("raw_materials")
           .select("id, name, current_stock, min_safety_stock, cost_per_unit, unit")
           .eq("restaurant_id", restId),
+        supabase
+          .from("orders")
+          .select("id, order_number, order_status, items")
+          .eq("restaurant_id", restId)
+          .eq("order_status", "active"),
       ]);
 
-      const menuData = menuRes.data;
-      const menuErr = menuRes.error;
-      const recipeRows = recipeRes.data;
-      const materialRows = materialsRes.data;
+      const menuData = menuRes.data || [];
+      const recipeRows = recipeRes.data || [];
+      const materialRows = materialsRes.data || [];
+      const activeOrdersRows = ordersRes.data || [];
 
       // Populate base raw materials map
       const bMap = new Map<string, RawMaterialStockData>();
@@ -1606,89 +1848,15 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       }
       setBaseMaterialsMap(bMap);
       saveStoredBaseMaterials(currentOrgId, bMap);
+      setActiveDbOrders(activeOrdersRows);
 
-      if (!menuErr && menuData) {
-        let mappedMenu: MenuItem[] = menuData.map((d: any) => ({
-          id: d.id,
-          name: d.name,
-          category: d.category || "karahi",
-          price: Number(d.price),
-          prepTime: d.prep_time || "15 mins",
-          stockStatus: d.stock_status || "in_stock",
-          stockCount: d.stock_count ?? 20,
-          imageIcon: d.image_icon || "🍲",
-          isPopular: Boolean(d.is_popular),
-          variants: (() => {
-            let rawList: any[] | null = null;
-            if (Array.isArray(d.variants) && d.variants.length > 0) {
-              rawList = d.variants;
-            } else if (typeof d.variants === "string") {
-              try {
-                const parsed = JSON.parse(d.variants);
-                if (Array.isArray(parsed) && parsed.length > 0) rawList = parsed;
-              } catch { }
-            }
-            if (!rawList && d.description) {
-              try {
-                const parsed = JSON.parse(d.description);
-                if (Array.isArray(parsed.variants) && parsed.variants.length > 0) rawList = parsed.variants;
-              } catch { }
-            }
-            if (!rawList && Array.isArray(d.metadata?.variants) && d.metadata.variants.length > 0) {
-              rawList = d.metadata.variants;
-            }
-            if (rawList && rawList.length > 0) {
-              return rawList.map((v: any, idx: number) => {
-                const vId = v.id ? String(v.id) : `var_${d.id}_${idx}`;
-                const matchedFromRows = (recipeRows || [])
-                  .filter(
-                    (r: any) =>
-                      String(r.menu_item_id) === String(d.id) &&
-                      ((r.variant_id && String(r.variant_id) === vId) ||
-                        (r.variant_name &&
-                          v.name &&
-                          String(r.variant_name).trim().toLowerCase() ===
-                            String(v.name).trim().toLowerCase()))
-                  )
-                  .map((r: any) => {
-                    const raw = Array.isArray(r.raw_materials) ? r.raw_materials[0] : r.raw_materials;
-                    return {
-                      raw_material_id: r.raw_material_id,
-                      raw_material_name: raw?.name || "Ingredient",
-                      quantity_required: Number(r.quantity_required) || 0,
-                      unit: r.unit || raw?.unit || "",
-                      cost_per_unit: Number(raw?.cost_per_unit) || 0,
-                    };
-                  });
-
-                const effectiveRecipe =
-                  Array.isArray(v.recipe) && v.recipe.length > 0
-                    ? v.recipe
-                    : matchedFromRows;
-
-                return {
-                  id: vId,
-                  name: String(v.name || `Portion ${idx + 1}`).trim(),
-                  price: Number(v.price ?? d.price ?? 0),
-                  isDefault: Boolean(v.isDefault),
-                  raw_material_id: v.raw_material_id,
-                  raw_material_qty: v.raw_material_qty ? Number(v.raw_material_qty) : undefined,
-                  quantity_multiplier: v.quantity_multiplier ? Number(v.quantity_multiplier) : undefined,
-                  recipe: effectiveRecipe,
-                };
-              });
-            }
-            return undefined;
-          })(),
-          is_available: (d.stock_status || "in_stock") !== "out_of_stock",
-          in_stock: (d.stock_status || "in_stock") !== "out_of_stock",
-          image_url: d.image_url || undefined,
-          imageUrl: d.image_url || undefined,
-        }));
-
-        if (recipeRows && recipeRows.length > 0) {
-          mappedMenu = applyRecipeCalculationsToMenu(mappedMenu, recipeRows, bMap);
-        }
+      if (menuData.length > 0) {
+        const mappedMenu = computeUnifiedMenuCatalog({
+          menuRows: menuData,
+          recipeRows,
+          materialRows,
+          activeOrders: activeOrdersRows,
+        });
 
         setMenuItems(mappedMenu);
         saveStoredMenu(currentOrgId, mappedMenu);
@@ -1804,6 +1972,14 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       ) {
         debouncedFetchLiveTables();
       }
+      if (
+        e.key === `pos_orders_${currentOrgId}` ||
+        e.key?.startsWith("pos_orders_") ||
+        e.key?.startsWith("pos_running_kot_")
+      ) {
+        debouncedFetchLiveOrders();
+        debouncedFetchLiveTables();
+      }
     };
     const handleCustomTaxChange = (e: any) => {
       if (
@@ -1825,6 +2001,65 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
     const handleCustomTablesUpdated = () => {
       debouncedFetchLiveTables();
     };
+    const handleOrdersUpdated = () => {
+      debouncedFetchLiveOrders();
+      debouncedFetchLiveTables();
+    };
+
+    const handleTableReleasedEvent = (data: any) => {
+      if (!data) return;
+      const targetTableId = data.tableId;
+      const targetTableNum = data.tableNumber;
+      const targetOrderId = data.orderId;
+
+      setTables((prev) =>
+        prev.map((t) => {
+          const matches =
+            (targetTableId && (String(t.dbId) === String(targetTableId) || String(t.id) === String(targetTableId))) ||
+            (targetTableNum && isTableMatchingIdentifier(t, targetTableNum)) ||
+            (targetOrderId && (t.activeOrderId === targetOrderId || String(t.activeOrderId) === String(targetOrderId)));
+
+          if (matches) {
+            return {
+              ...t,
+              status: "available",
+              activeOrderId: undefined,
+              activeAmount: undefined,
+            };
+          }
+          return t;
+        })
+      );
+
+      setRunningTableOrders((prev) => {
+        const updated = prev.filter((o) => {
+          if (targetOrderId && (String(o.id) === String(targetOrderId) || o.kotId === targetOrderId)) return false;
+          if (targetTableNum && (o.tableName === targetTableNum || isTableMatchingIdentifier({ label: targetTableNum }, o.tableId))) return false;
+          return true;
+        });
+        try {
+          localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+
+      setActiveDbOrders((prev) =>
+        prev.filter((o) => {
+          if (targetOrderId && (String(o.id) === String(targetOrderId) || o.kotId === targetOrderId)) return false;
+          if (targetTableNum && (o.tableName === targetTableNum || isTableMatchingIdentifier({ label: targetTableNum }, o.tableId))) return false;
+          return true;
+        })
+      );
+
+      debouncedFetchLiveTables();
+    };
+
+    const handleTableReleasedWindow = (e: Event) => {
+      const custom = e as CustomEvent;
+      if (custom.detail) {
+        handleTableReleasedEvent(custom.detail);
+      }
+    };
 
     if (typeof window !== "undefined") {
       window.addEventListener("storage", handleStorageUpdate);
@@ -1833,15 +2068,118 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       window.addEventListener("inventory_stock_deducted", handleInventoryStockDeducted);
       window.addEventListener("pos_tables_updated", handleCustomTablesUpdated);
       window.addEventListener("restaurant_tables_changed", handleCustomTablesUpdated);
+      window.addEventListener("table_released", handleTableReleasedWindow);
+      window.addEventListener("orders_updated", handleOrdersUpdated);
+    }
+
+    let ledgerBc: BroadcastChannel | null = null;
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        ledgerBc = new BroadcastChannel("pos_ledger_sync_channel");
+        ledgerBc.onmessage = (event) => {
+          if (event.data?.type === "INVENTORY_DEDUCTED") {
+            debouncedFetchLiveMenu();
+          } else if (event.data?.type === "TABLES_UPDATED") {
+            debouncedFetchLiveTables();
+            debouncedFetchLiveOrders();
+          } else if (event.data?.type === "TABLE_RELEASED") {
+            handleTableReleasedEvent(event.data?.payload);
+          } else if (event.data?.type === "ORDERS_UPDATED") {
+            debouncedFetchLiveOrders();
+            debouncedFetchLiveTables();
+            debouncedFetchLiveMenu();
+          }
+        };
+      } catch { }
     }
 
     // Subscribe to realtime menu, table, and branch settings updates
     let channel: any = null;
+    let unsubBuzzer: (() => void) | null = null;
+    let unsubBridge: (() => void) | null = null;
+    let unsubTakeaway: (() => void) | null = null;
+    let unsubStock: (() => void) | null = null;
+    let unsubRelease: (() => void) | null = null;
+
+    // Attach cross-tab, window event, and broadcast takeaway ready listener for POS
+    unsubTakeaway = subscribeToTakeawayReadyAlerts(currentOrgId, (alert) => {
+      if (!isMounted) return;
+      handleTakeawayOrderReady(alert);
+    });
+
+    // Attach cross-tab, window event, and broadcast buzzer listener for POS
+    unsubBuzzer = subscribeToRemoteKitchenBuzzer(currentOrgId, (payload) => {
+      if (!isMounted) return;
+      if (payload.orderChannel === "takeaway" || payload.targetStation === "pos") {
+        handleTakeawayOrderReady({
+          orderNumber: payload.orderNumber || payload.ticketId || "",
+          ticketId: payload.ticketId,
+          customerName: payload.customerName,
+          customerPhone: payload.customerPhone,
+          readyAt: payload.readyAt,
+          priority: payload.priority,
+        });
+      } else {
+        playRemoteAudioChime(payload.priority === "urgent" || payload.priority === "rush");
+        playPosSound("chime");
+        showToast(`🔔 Kitchen Alert: ${payload.title ? `${payload.title} - ` : ""}${payload.message}`);
+      }
+    });
+
+    unsubBridge = subscribeToKitchenWaiterBridge(currentOrgId, {
+      onOrderReady: (payload) => {
+        if (!isMounted) return;
+        const ch = (payload.orderChannel || "").toLowerCase();
+        if (ch === "takeaway") {
+          handleTakeawayOrderReady({
+            orderNumber: payload.orderNumber || payload.ticketId,
+            ticketId: payload.ticketId,
+            customerName: payload.customerName,
+            customerPhone: payload.customerPhone,
+            itemsSummary: Array.isArray(payload.items) ? payload.items.map((it: any) => `${it.name || "Item"} x${it.qty || 1}`).join(", ") : undefined,
+            readyAt: payload.readyAt,
+            priority: payload.priority,
+          });
+        } else if (ch !== "delivery") {
+          playRemoteAudioChime(payload.priority === "urgent" || payload.priority === "rush");
+          playPosSound("chime");
+          showToast(
+            `🔔 Kitchen Pass: Order #${payload.ticketId} (${payload.tableNumber || "Counter"}) is READY for pickup!`
+          );
+        }
+        debouncedFetchLiveOrders();
+      },
+    });
+
     (async () => {
       try {
         const supabase = createClient();
         const { restId } = await getValidTenantContext(user);
         const subId = Math.random().toString(36).substring(2, 7);
+
+        if (restId) {
+          unsubRelease = subscribeToTableReleased(restId, handleTableReleasedEvent, supabase);
+        }
+
+        // If restId differs from currentOrgId, ensure buzzer listener is active for restId as well
+        if (restId && String(restId) !== String(currentOrgId)) {
+          const restBuzzerUnsub = subscribeToRemoteKitchenBuzzer(String(restId), (payload) => {
+            if (!isMounted) return;
+            playRemoteAudioChime(payload.priority === "urgent" || payload.priority === "rush");
+            playPosSound("chime");
+            showToast(`🔔 Kitchen Alert: ${payload.title ? `${payload.title} - ` : ""}${payload.message}`);
+          });
+          const prevBuzzer = unsubBuzzer;
+          unsubBuzzer = () => {
+            if (prevBuzzer) prevBuzzer();
+            restBuzzerUnsub();
+          };
+        }
+
+        unsubStock = subscribeToStockRefresh(restId, () => {
+          debouncedFetchLiveMenu();
+          debouncedFetchLiveOrders();
+        });
 
         channel = supabase
           .channel(`terminal_realtime_${restId}_${subId}`)
@@ -1900,8 +2238,23 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
               table: "orders",
               filter: `restaurant_id=eq.${restId}`,
             },
-            () => {
+            (payload: any) => {
+              if (payload?.eventType === "UPDATE") {
+                const n = payload.new;
+                const o = payload.old;
+                if (n && n.order_channel === "takeaway" && n.order_status === "ready" && (!o || o.order_status !== "ready")) {
+                  handleTakeawayOrderReady({
+                    orderNumber: n.order_number || `#ORD-${n.id}`,
+                    ticketId: n.kot_id || n.order_number,
+                    customerName: n.customer_name || undefined,
+                    customerPhone: n.customer_phone || undefined,
+                    readyAt: n.ready_at || new Date().toISOString(),
+                  });
+                }
+              }
               debouncedFetchLiveOrders();
+              debouncedFetchLiveTables();
+              debouncedFetchLiveMenu();
             }
           )
           .on(
@@ -1912,10 +2265,87 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
               table: "kitchen_tickets",
               filter: `restaurant_id=eq.${restId}`,
             },
-            () => {
+            (payload: any) => {
+              if (payload?.eventType === "UPDATE") {
+                const n = payload.new;
+                const o = payload.old;
+                if (n?.ready_for_pickup_at && (!o || !o.ready_for_pickup_at || n.status === "ready")) {
+                  const ch = (n.channel || n.order_type || "").toLowerCase();
+                  if (ch === "takeaway" || String(n.table_number || "").toLowerCase().includes("takeaway") || String(n.table_number || "").toLowerCase().includes("pickup")) {
+                    handleTakeawayOrderReady({
+                      orderNumber: n.ticket_number || n.id,
+                      ticketId: n.ticket_number || n.id,
+                      customerName: n.customer_name || undefined,
+                      customerPhone: n.customer_phone || undefined,
+                      readyAt: n.ready_for_pickup_at,
+                      priority: n.priority,
+                    });
+                  } else if (ch !== "delivery") {
+                    playRemoteAudioChime(n.priority === "urgent" || n.priority === "rush");
+                    playPosSound("chime");
+                    showToast(`🔔 Kitchen Pass: Order #${n.ticket_number || n.id} (${n.table_number || "Counter"}) is READY for pickup!`);
+                  }
+                }
+              }
               debouncedFetchLiveOrders();
             }
           )
+          .on("broadcast", { event: "stock_refresh" }, () => {
+            debouncedFetchLiveMenu();
+            debouncedFetchLiveOrders();
+          })
+          .on("broadcast", { event: "takeaway_order_ready" }, ({ payload }) => {
+            if (!payload) return;
+            handleTakeawayOrderReady({
+              orderNumber: payload.orderNumber || payload.order_number || payload.ticketId || payload.ticket_id,
+              ticketId: payload.ticketId || payload.ticket_id,
+              customerName: payload.customerName || payload.customer_name,
+              customerPhone: payload.customerPhone || payload.customer_phone,
+              itemsSummary: payload.itemsSummary || payload.items_summary,
+              readyAt: payload.readyAt || payload.ready_for_pickup_at,
+              priority: payload.priority,
+            });
+          })
+          .on("broadcast", { event: "order_ready" }, ({ payload }) => {
+            if (!payload) return;
+            const ch = (payload.order_channel || payload.orderChannel || "").toLowerCase();
+            if (ch === "takeaway") {
+              handleTakeawayOrderReady({
+                orderNumber: payload.order_number || payload.ticket_id || payload.ticketId,
+                ticketId: payload.ticket_id || payload.ticketId,
+                customerName: payload.customer_name || payload.customerName,
+                customerPhone: payload.customer_phone || payload.customerPhone,
+                itemsSummary: Array.isArray(payload.items) ? payload.items.map((it: any) => `${it.name || "Item"} x${it.qty || 1}`).join(", ") : undefined,
+                readyAt: payload.ready_for_pickup_at,
+                priority: payload.priority,
+              });
+            } else if (ch !== "delivery") {
+              playRemoteAudioChime(payload.priority === "urgent" || payload.priority === "rush");
+              playPosSound("chime");
+              showToast(`🔔 Kitchen Pass: Order #${payload.ticket_id || payload.ticketId} (${payload.table_number || payload.tableNumber || "Counter"}) is READY for pickup!`);
+            }
+          })
+          .on("broadcast", { event: "kitchen_buzzer_alert" }, ({ payload }) => {
+            if (!payload) return;
+            if (payload.orderChannel === "takeaway" || payload.targetStation === "pos") {
+              handleTakeawayOrderReady({
+                orderNumber: payload.orderNumber || payload.ticketId || "",
+                ticketId: payload.ticketId,
+                customerName: payload.customerName,
+                customerPhone: payload.customerPhone,
+                readyAt: payload.readyAt,
+                priority: payload.priority,
+              });
+            } else {
+              playRemoteAudioChime(payload.priority === "urgent" || payload.priority === "rush");
+              playPosSound("chime");
+              showToast(`🔔 Kitchen Alert: ${payload.title ? `${payload.title} - ` : ""}${payload.message || `Order #${payload.ticketId || ""} is ready!`}`);
+            }
+          })
+          .on("broadcast", { event: "TABLE_RELEASED" }, ({ payload }) => {
+            if (!payload) return;
+            handleTableReleasedEvent(payload);
+          })
           .on(
             "postgres_changes",
             {
@@ -1929,6 +2359,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
               if (payload.eventType === "UPDATE") {
                 const row = payload.new;
                 const statusUpper = String(row.status || "AVAILABLE").toUpperCase();
+                const isAvail = statusUpper === "AVAILABLE";
                 setTables((prev) =>
                   prev.map((t) => {
                     if (String(t.dbId) === String(row.id) || t.label === row.table_number || String(t.id) === String(row.id)) {
@@ -1950,7 +2381,8 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
                               : statusUpper === "RESERVED"
                                 ? "reserved"
                                 : "available",
-                        activeOrderId: row.active_order_id || row.current_order_id || undefined,
+                        activeOrderId: isAvail ? undefined : (row.active_order_id || row.current_order_id || undefined),
+                        activeAmount: isAvail ? undefined : t.activeAmount,
                       };
                     }
                     return t;
@@ -2036,6 +2468,38 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         window.removeEventListener("inventory_stock_deducted", handleInventoryStockDeducted);
         window.removeEventListener("pos_tables_updated", handleCustomTablesUpdated);
         window.removeEventListener("restaurant_tables_changed", handleCustomTablesUpdated);
+        window.removeEventListener("table_released", handleTableReleasedWindow);
+        window.removeEventListener("orders_updated", handleOrdersUpdated);
+      }
+      if (unsubRelease) {
+        try {
+          unsubRelease();
+        } catch { }
+      }
+      if (unsubBuzzer) {
+        try {
+          unsubBuzzer();
+        } catch { }
+      }
+      if (unsubTakeaway) {
+        try {
+          unsubTakeaway();
+        } catch { }
+      }
+      if (unsubStock) {
+        try {
+          unsubStock();
+        } catch { }
+      }
+      if (unsubBridge) {
+        try {
+          unsubBridge();
+        } catch { }
+      }
+      if (ledgerBc) {
+        try {
+          ledgerBc.close();
+        } catch { }
       }
       if (channel) {
         try {
@@ -2056,6 +2520,8 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       return runningTableOrders.find(
         (o) =>
           (o.tableId === table.id ||
+            isTableMatchingIdentifier(table, o.tableId) ||
+            isTableMatchingIdentifier(table, o.tableName) ||
             (table.activeOrderId &&
               (o.id === table.activeOrderId || o.kotId === table.activeOrderId))) &&
           o.status !== "completed" &&
@@ -2130,13 +2596,20 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       showToast(`Insufficient stock available: "${item.name}" has reached its maximum available limit.`);
       return;
     }
-    playPosSound("chirp");
+
     const cleanNotes = notes?.trim() || undefined;
+    let limitReached = false;
+
     setCart((prev) => {
       const existingIndex = prev.findIndex(
         (c) => c.item.id === item.id && (c.notes || undefined) === cleanNotes
       );
       if (existingIndex !== -1) {
+        const currentQty = prev[existingIndex].quantity;
+        if (currentQty >= itemStock.maxPortions) {
+          limitReached = true;
+          return prev;
+        }
         return prev.map((c, idx) =>
           idx === existingIndex
             ? { ...c, quantity: c.quantity + 1 }
@@ -2145,6 +2618,14 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       }
       return [...prev, { item, quantity: 1, notes: cleanNotes, selectedVariant: item.selectedVariant }];
     });
+
+    if (limitReached) {
+      playPosSound("buzz");
+      showToast(`Insufficient stock available: Cannot add more "${item.name}". Only ${itemStock.maxPortions} available.`);
+      return;
+    }
+
+    playPosSound("chirp");
     setInventoryTick((prev) => prev + 1);
   };
 
@@ -2168,9 +2649,9 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         const itemStock = variantObj
           ? getVariantPortions(target.item, variantObj)
           : getVariantPortions(target.item);
-        if (itemStock.isOutOfStock || itemStock.maxPortions <= 0) {
+        if (itemStock.isOutOfStock || itemStock.maxPortions <= 0 || target.quantity >= itemStock.maxPortions) {
           playPosSound("buzz");
-          showToast(`Insufficient stock available: "${target.item.name}" has reached its maximum available limit.`);
+          showToast(`Insufficient stock available: Cannot add more "${target.item.name}". Only ${itemStock.maxPortions} available.`);
           return prev;
         }
       }
@@ -2208,13 +2689,24 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
   // Filtered menu items (derived from live simulated menu with cart deductions applied)
   const filteredMenuItems = useMemo(() => {
     return liveSimulatedMenuItems.filter((item) => {
+      const isItemFeatured = Boolean(
+        item.isPopular ||
+        (item as any).isFeatured ||
+        (item as any).is_popular ||
+        (item as any).is_featured
+      );
       const matchCat =
         selectedCategory === "all" ||
+        (selectedCategory === "featured" && isItemFeatured) ||
         (item.category || "").toLowerCase() === selectedCategory.toLowerCase();
       const matchQuery =
         !searchQuery ||
         item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.id.toLowerCase().includes(searchQuery.toLowerCase());
+        item.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        ((searchQuery.toLowerCase().includes("feat") ||
+          searchQuery.toLowerCase().includes("best") ||
+          searchQuery.toLowerCase().includes("pop")) &&
+          isItemFeatured);
       return matchCat && matchQuery;
     });
   }, [liveSimulatedMenuItems, selectedCategory, searchQuery, inventoryTick]);
@@ -2256,6 +2748,28 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
     const matchedTable = tables.find((t) => t.id === selectedTable);
     const tableIdentifier = matchedTable?.label || `Table ${selectedTable}`;
 
+    // 0. Strict Table Occupied Lock: Prevent duplicate orders on already occupied tables
+    if (orderChannel === "dine_in") {
+      const isTableOccupied = Boolean(
+        matchedTable &&
+        (matchedTable.status === "seated" ||
+          matchedTable.status === "occupied" ||
+          matchedTable.status === "billing")
+      );
+      const isAmendingActiveTab = Boolean(
+        targetOrderForSettlement &&
+        runningTableOrders.some(
+          (ro) => ro.tableId === selectedTable && (ro.id === targetOrderForSettlement?.id || ro.kotId === targetOrderForSettlement?.kotId)
+        )
+      );
+      if (isTableOccupied && !isAmendingActiveTab) {
+        playPosSound("buzz");
+        showToast(`❌ Cannot place duplicate order: ${tableIdentifier} is currently OCCUPIED with an active order. Settle payment or reload existing tab.`);
+        isSendingKotRef.current = false;
+        return;
+      }
+    }
+
     const newKotId = `KOT-${Math.floor(1000 + Math.random() * 9000)}`;
     const dishPrepTimes = cart.map(
       (c) =>
@@ -2284,8 +2798,10 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         return {
           id: c.item.id,
           name: c.item.name,
+          category: c.item.category || (c.item as any).category_name || "General",
           qty: c.quantity,
-          notes: c.notes,
+          notes: c.notes || "",
+          modifiers: variantObj ? [variantObj.name] : (c.selectedVariant ? [c.selectedVariant.name] : []),
           prepTime: c.item.prepTime || "15m",
           preparation_time: c.item.preparation_time || 15,
           selectedVariant: variantObj,
@@ -2294,22 +2810,64 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           variant_name: variantObj?.name || null,
         };
       }),
+      items_status: cart.map((c, idx) => {
+        const variantObj = c.selectedVariant || c.item.selectedVariant;
+        const dishPrep =
+          c.item.preparation_time ||
+          parseInt(String(c.item.prepTime || "15").replace(/[^0-9]/g, "")) ||
+          15;
+        const notes = c.notes?.trim() || "";
+        const modStr = variantObj ? variantObj.name : "";
+        const combinedNotes = [notes, modStr ? `Variant: ${modStr}` : ""].filter(Boolean).join(" • ");
+
+        return {
+          item_id: c.item.id || `${newKotId}-item-${idx}`,
+          name: c.item.name,
+          quantity: c.quantity,
+          status: "waiting" as const,
+          started_at: null,
+          completed_at: null,
+          prep_time_minutes: dishPrep,
+          notes: combinedNotes || undefined,
+        };
+      }),
       priority: orderChannel === "delivery" ? "urgent" : "normal",
       createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       created_at: new Date().toISOString(),
       isDeducted: false,
     };
 
-    // Save ticket locally
-    const currentTickets = getStoredKdsTickets(currentOrgId, []);
-    saveStoredKdsTickets(currentOrgId, [kitchenTicket, ...currentTickets]);
-
-    // Update active order record
+    // Determine active order number
     const resolvedOrderId =
       orderChannel === "dine_in" && activeRunningOrder?.id
         ? activeRunningOrder.id
         : `#ORD-${Math.floor(1000 + Math.random() * 9000)}`;
 
+    const posRestId = (user as any)?.restaurant_id || (user as any)?.restaurantId || (user as any)?.organizationId || 1;
+    const posBranchId = user?.branchId || (user as any)?.branch_id || null;
+
+    const splitResult = splitOrderIntoStationTickets({
+      orderId: resolvedOrderId,
+      baseKotId: newKotId,
+      cart,
+      orderChannel,
+      tableIdentifier,
+      serverName: user?.name || "Terminal Cashier",
+      priority: orderChannel === "delivery" ? "urgent" : "normal",
+      customerName: orderChannel === "delivery" ? customerName.trim() || "Delivery Customer" : tableIdentifier,
+      customerPhone: orderChannel === "delivery" ? customerPhone.trim() || undefined : undefined,
+      deliveryZone: orderChannel === "delivery" ? deliveryZone.trim() || undefined : undefined,
+      restaurantId: posRestId,
+      branchId: posBranchId,
+    });
+
+    const primaryTicket = splitResult.tickets[0] || kitchenTicket;
+
+    // Save tickets locally
+    const currentTickets = getStoredKdsTickets(currentOrgId, []);
+    saveStoredKdsTickets(currentOrgId, [...splitResult.tickets, ...currentTickets]);
+
+    // Update active order record
     const activeOrder: OrderRecord = {
       id: resolvedOrderId,
       kotId: newKotId,
@@ -2372,38 +2930,63 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
 
     // If dine-in, mark table occupied in state and Supabase
     if (orderChannel === "dine_in") {
-      setTables((prev) =>
-        prev.map((t) =>
-          t.id === selectedTable
-            ? {
+      const updatedTables = tables.map((t) =>
+        t.id === selectedTable
+          ? {
               ...t,
-              status: "seated",
+              status: "seated" as const,
               activeOrderId: resolvedOrderId,
               activeAmount: cartTotal,
             }
-            : t
-        )
+          : t
       );
+      setTables(updatedTables);
+      saveStoredTables(currentOrgId, updatedTables);
 
       (async () => {
         try {
           const supabase = createClient();
           const { restId } = await getValidTenantContext(user);
           const targetTable = tables.find((t) => t.id === selectedTable);
+          const tableUpdatePayload: Record<string, any> = {
+            status: "occupied",
+          };
           if (targetTable?.dbId) {
             await supabase
               .from("restaurant_tables")
-              .update({
-                status: "OCCUPIED",
-                current_order_id: resolvedOrderId,
-                updated_at: new Date().toISOString(),
-              })
+              .update(tableUpdatePayload)
               .eq("restaurant_id", restId)
               .eq("id", targetTable.dbId);
+          } else if (targetTable?.label) {
+            await supabase
+              .from("restaurant_tables")
+              .update(tableUpdatePayload)
+              .eq("restaurant_id", restId)
+              .eq("table_number", targetTable.label);
           }
+          window.dispatchEvent(new CustomEvent("restaurant_tables_changed"));
+          window.dispatchEvent(new CustomEvent("pos_tables_updated"));
+          localStorage.setItem(`omni_tables_trigger_${currentOrgId}`, String(Date.now()));
+          window.dispatchEvent(new Event("storage"));
         } catch { }
       })();
     }
+
+    // Immediate inventory stock deduction upon POS KOT dispatch
+    (async () => {
+      try {
+        const { restId } = await getValidTenantContext(user);
+        await deductInventoryStockForOrder(restId, activeOrder.items, {
+          orderId: resolvedOrderId,
+          kotId: newKotId,
+          source: "pos_terminal",
+        });
+        notifyInventoryStockDeducted(currentOrgId);
+        fetchLiveMenuCatalog();
+      } catch (stkErr) {
+        console.warn("[PosTerminal] KOT inventory stock deduction error:", stkErr);
+      }
+    })();
 
     // Persist KOT / Active order to Supabase orders table
     (async () => {
@@ -2426,6 +3009,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           restaurant_id: restId,
           branch_id: branchId || user?.branchId || null,
           order_number: resolvedOrderId,
+          kot_id: newKotId,
           order_channel: orderChannel,
           table_id: orderChannel === "dine_in" && isTargetTableUuid ? targetTable?.dbId : null,
           customer_name: customerDisplayName,
@@ -2437,7 +3021,8 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           payment_method: paymentMethod || "cash",
           payment_status: "pending",
           order_status: "active",
-          items: activeOrder.items,
+          is_deducted: true,
+          items: activeOrder.items.map((it: any) => ({ ...it, is_deducted: true })),
           cashier_name: user?.name || "Terminal Cashier",
           estimated_prep_time: orderEstimatedPrepTime,
           created_at: new Date().toISOString(),
@@ -2456,30 +3041,62 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
 
         if (existing) {
           const { error: updErr } = await supabase.from("orders").update(orderPayload).eq("id", existing.id);
-          if (updErr && (updErr.code === "PGRST204" || updErr.code === "42703" || updErr.message?.includes("shift_id") || String(updErr.details || "").includes("shift_id"))) {
+          if (updErr && (updErr.code === "PGRST204" || updErr.code === "42703" || updErr.message?.includes("shift_id") || updErr.message?.includes("is_deducted") || String(updErr.details || "").includes("shift_id") || String(updErr.details || "").includes("is_deducted"))) {
             delete orderPayload.shift_id;
+            delete orderPayload.is_deducted;
             await supabase.from("orders").update(orderPayload).eq("id", existing.id);
           }
         } else {
           const { error: insErr } = await supabase.from("orders").insert([orderPayload]);
-          if (insErr && (insErr.code === "PGRST204" || insErr.code === "42703" || insErr.message?.includes("shift_id") || String(insErr.details || "").includes("shift_id"))) {
+          if (insErr && (insErr.code === "PGRST204" || insErr.code === "42703" || insErr.message?.includes("shift_id") || insErr.message?.includes("is_deducted") || String(insErr.details || "").includes("shift_id") || String(insErr.details || "").includes("is_deducted"))) {
             delete orderPayload.shift_id;
+            delete orderPayload.is_deducted;
             await supabase.from("orders").insert([orderPayload]);
           }
         }
 
-        // Deduct inventory stock for recipe items linked to ordered dishes
-        await deductInventoryStockForOrder(restId, activeOrder.items, { orderId: resolvedOrderId, source: "pos_kot_dispatch" });
-        notifyInventoryStockDeducted(currentOrgId);
-        await fetchLiveMenuCatalog();
+        // Persist split KOT tickets to Supabase kitchen_tickets table for real-time KDS synchronization
+        try {
+          for (const ticketPayload of splitResult.payloads) {
+            const { error: kotErr } = await supabase.from("kitchen_tickets").insert([ticketPayload]);
+            if (kotErr) {
+              console.warn("[PosTerminal] kitchen_tickets insert warning:", kotErr.message || kotErr);
+            }
+          }
+        } catch (kotInsErr) {
+          console.warn("[PosTerminal] Exception inserting into kitchen_tickets:", kotInsErr);
+        }
+
+        // Global Live Stock Invalidation Broadcast across all open terminals via restaurant_${restId}_feed
+        broadcastStockRefresh(restId, { orderId: resolvedOrderId, kotId: newKotId, source: "pos_send_kot" });
+
+        // Staged Inventory Sync: Broadcast active order for instant reservation across Orders Hub & terminals
+        if (typeof window !== "undefined") {
+          try {
+            window.dispatchEvent(new CustomEvent("orders_updated", {
+              detail: { restaurantId: restId, orderId: resolvedOrderId, kotId: newKotId, timestamp: Date.now() },
+            }));
+            localStorage.setItem(`pos_orders_${currentOrgId}`, String(Date.now()));
+            localStorage.setItem(`pos_running_kot_orders_trigger_${currentOrgId}`, String(Date.now()));
+            window.dispatchEvent(new Event("storage"));
+          } catch { }
+        }
+        setInventoryTick((c) => c + 1);
       } catch (kotDbErr) {
         console.warn("[PosTerminal] Error persisting KOT order to database:", kotDbErr);
       }
     })();
 
     playPosSound("chime");
-    showToast(`Order dispatched to kitchen (${newKotId}).`);
-    setActiveKotTicket(kitchenTicket);
+    if (splitResult.stationCount > 1) {
+      const stationNames = splitResult.distinctStations
+        .map((s) => s.toUpperCase().replace(/_/g, " "))
+        .join(", ");
+      showToast(`Order split across ${splitResult.stationCount} stations (${stationNames}).`);
+    } else {
+      showToast(`Order dispatched to kitchen (${newKotId}).`);
+    }
+    setActiveKotTicket(primaryTicket);
     } finally {
       setTimeout(() => {
         isSendingKotRef.current = false;
@@ -2593,6 +3210,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
             await supabase.from("orders").insert([heldPayload]);
           }
         }
+        broadcastStockRefresh(restId, { orderId: parkedItem.id, source: "pos_park_order" });
       } catch (err) {
         console.warn("[PosTerminal] Error saving held order to Supabase:", err);
       }
@@ -2640,6 +3258,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           .update({ order_status: "cancelled" })
           .eq("restaurant_id", restId)
           .eq("order_number", orderId);
+        broadcastStockRefresh(restId, { orderId, source: "pos_void_order" });
       } catch { }
     })();
 
@@ -2721,12 +3340,22 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         });
 
     let finalOrderId = resolvedOrderId;
+    const targetTable = tables.find(
+      (t) =>
+        (resolvedTableId && t.id === resolvedTableId) ||
+        (target && isTableMatchingIdentifier(t, target.tableName)) ||
+        (target && isTableMatchingIdentifier(t, target.tableId)) ||
+        (target && isTableMatchingIdentifier(t, target.customerName)) ||
+        (orderChannel === "dine_in" && t.id === selectedTable)
+    );
+    const finalTableId = targetTable?.id ?? resolvedTableId;
+    let activeRestId: string | number = user?.restaurantId || "";
 
     // 1. Direct Supabase Persistence (orders & order_items)
     try {
       const supabase = createClient();
       const { restId, branchId } = await getValidTenantContext(user);
-      const targetTable = tables.find((t) => t.id === resolvedTableId);
+      if (restId) activeRestId = restId;
       const isTargetTableUuid =
         Boolean(targetTable?.dbId &&
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(targetTable.dbId)));
@@ -2760,6 +3389,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         payment_method: normalizedPaymentMethod,
         payment_status: "paid",
         order_status: "completed",
+        is_deducted: true,
         items: resolvedItems.map((c: any) => ({
           id: c.id,
           name: c.name,
@@ -2771,6 +3401,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           variant: c.variant || c.selectedVariant,
           variant_id: c.variant_id || c.selectedVariant?.id || null,
           variant_name: c.variant_name || c.selectedVariant?.name || null,
+          is_deducted: true,
         })),
         created_at: new Date().toISOString(),
       };
@@ -2782,7 +3413,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       // Check if order already exists in Supabase (e.g. dispatched to KOT or Held)
       const { data: existingOrder } = await supabase
         .from("orders")
-        .select("id, order_number")
+        .select("id, order_number, is_deducted, items")
         .eq("restaurant_id", restId)
         .eq("order_number", resolvedOrderId)
         .maybeSingle();
@@ -2800,8 +3431,9 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         createdOrder = updateRes.data || existingOrder;
         orderErr = updateRes.error;
 
-        if (orderErr && (orderErr.code === "PGRST204" || orderErr.code === "42703" || orderErr.message?.includes("shift_id") || String(orderErr.details || "").includes("shift_id"))) {
+        if (orderErr && (orderErr.code === "PGRST204" || orderErr.code === "42703" || orderErr.message?.includes("shift_id") || orderErr.message?.includes("is_deducted") || String(orderErr.details || "").includes("shift_id") || String(orderErr.details || "").includes("is_deducted"))) {
           delete orderPayload.shift_id;
+          delete orderPayload.is_deducted;
           const retryUpdate = await supabase
             .from("orders")
             .update(orderPayload)
@@ -2820,9 +3452,10 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         createdOrder = insertRes.data;
         orderErr = insertRes.error;
 
-        // Retry without shift_id if column does not exist or fails
-        if (orderErr && (orderErr.code === "PGRST204" || orderErr.code === "42703" || orderErr.message?.includes("shift_id") || String(orderErr.details || "").includes("shift_id"))) {
+        // Retry without shift_id or is_deducted if column does not exist or fails
+        if (orderErr && (orderErr.code === "PGRST204" || orderErr.code === "42703" || orderErr.message?.includes("shift_id") || orderErr.message?.includes("is_deducted") || String(orderErr.details || "").includes("shift_id") || String(orderErr.details || "").includes("is_deducted"))) {
           delete orderPayload.shift_id;
+          delete orderPayload.is_deducted;
           const retry = await supabase
             .from("orders")
             .insert([orderPayload])
@@ -2895,26 +3528,121 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         }
       }
 
-      // 3. Release table if Dine-In
-      if (resolvedOrderChannel === "dine_in" && isTargetTableUuid && targetTable?.dbId) {
-        await supabase
-          .from("restaurant_tables")
-          .update({
-            status: "AVAILABLE",
-            current_order_id: null,
-            active_order_id: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("restaurant_id", restId)
-          .eq("id", targetTable.dbId);
+      // 3. Release table if Dine-In: Atomic table release on settlement
+      if (resolvedOrderChannel === "dine_in") {
+        const tableIdentifier = target?.tableName || selectedTableObj?.label || targetTable?.label || `Table ${resolvedTableId}`;
+        const normNum = normalizeTableNumber(tableIdentifier);
+        try {
+          // Resolve table primary key UUID for atomic update
+          let tableId = targetTable?.dbId;
+          if (!tableId && (resolvedTableId || tableIdentifier)) {
+            const tableOrConds = [
+              tableIdentifier ? `table_number.eq.${tableIdentifier}` : "",
+              normNum ? `table_number.eq.${normNum}` : "",
+              normNum ? `table_number.eq.Table ${normNum}` : "",
+              resolvedTableId ? `table_number.eq.Table ${resolvedTableId}` : "",
+            ].filter(Boolean).join(",");
+            const { data: foundT } = await supabase
+              .from("restaurant_tables")
+              .select("id")
+              .eq("restaurant_id", restId)
+              .or(tableOrConds)
+              .limit(1)
+              .maybeSingle();
+            if (foundT?.id) {
+              tableId = foundT.id;
+            }
+          }
+
+          if (tableId) {
+            await supabase
+              .from("restaurant_tables")
+              .update({
+                status: "available",
+                active_order_id: null,
+                current_order_id: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", tableId);
+          } else {
+            const tableOrConds = [
+              `table_number.eq.${tableIdentifier}`,
+              normNum ? `table_number.eq.${normNum}` : "",
+              normNum ? `table_number.eq.Table ${normNum}` : "",
+            ].filter(Boolean).join(",");
+            await supabase
+              .from("restaurant_tables")
+              .update({
+                status: "available",
+                active_order_id: null,
+                current_order_id: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("restaurant_id", restId)
+              .or(tableOrConds);
+          }
+
+          // Complete any active kitchen tickets for this settled table so it frees cleanly across terminals
+          try {
+            let kotCloseQuery: any = supabase
+              .from("kitchen_tickets")
+              .update({
+                status: "completed",
+                completed_at: new Date().toISOString(),
+              })
+              .eq("restaurant_id", restId)
+              .neq("status", "completed")
+              .neq("status", "cancelled");
+
+            const kotOrConds = [
+              resolvedKotId ? `ticket_number.eq.${resolvedKotId}` : "",
+              `table_number.eq.${tableIdentifier}`,
+              normNum ? `table_number.eq.${normNum}` : "",
+              normNum ? `table_number.eq.Table ${normNum}` : "",
+            ].filter(Boolean).join(",");
+
+            kotCloseQuery = kotCloseQuery.or(kotOrConds);
+            await kotCloseQuery;
+          } catch (kErr) {
+            console.warn("[PosTerminal] Kitchen ticket close upon payment warning:", kErr);
+          }
+
+          // Broadcast clean TABLE_RELEASED event via Realtime/BroadcastChannel
+          broadcastTableReleased(
+            restId,
+            {
+              tableId: tableId || finalTableId,
+              tableNumber: tableIdentifier,
+              orderId: finalOrderId,
+            },
+            supabase
+          );
+        } catch (tableRelErr) {
+          console.warn("[PosTerminal] Table release error:", tableRelErr);
+        }
       }
 
-      // Deduct inventory stock if not sent through KOT earlier
-      if (!resolvedKotId) {
-        await deductInventoryStockForOrder(restId, resolvedItems, { orderId: finalOrderId, source: "pos_direct_settlement" });
+      // Inventory Stock Deduction: Deduct upon successful payment settlement strictly if NOT already deducted via KOT
+      const orderAlreadyDeducted =
+        isOrderAlreadyDeducted(restId, finalOrderId, resolvedKotId) ||
+        Boolean(existingOrder && (existingOrder as any).is_deducted === true) ||
+        (Array.isArray(existingOrder?.items) &&
+          existingOrder.items.some((it: any) => it.is_deducted === true || it.isDeducted === true)) ||
+        (Array.isArray(resolvedItems) &&
+          resolvedItems.some((it: any) => it.is_deducted === true || it.isDeducted === true));
+
+      if (!orderAlreadyDeducted) {
+        await deductInventoryStockForOrder(restId, resolvedItems, { orderId: finalOrderId, kotId: resolvedKotId, source: "pos_settlement" });
         notifyInventoryStockDeducted(currentOrgId);
+        broadcastStockRefresh(restId, { orderId: finalOrderId, source: "pos_settlement" });
         await fetchLiveMenuCatalog();
+      } else {
+        console.log(`[PosTerminal] Order ${finalOrderId} (${resolvedKotId}) already deducted at KOT stage. Bypassing checkout duplicate deduction.`);
       }
+
+      window.dispatchEvent(new CustomEvent("orders_updated", { detail: { restaurantId: restId, orderId: finalOrderId, timestamp: Date.now() } }));
+      localStorage.setItem(`pos_orders_${currentOrgId}`, String(Date.now()));
+      window.dispatchEvent(new Event("storage"));
     } catch (dbErr) {
       console.error("[PosTerminal] Database settlement exception:", dbErr);
     }
@@ -2933,7 +3661,8 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           : resolvedOrderChannel === "delivery"
             ? resolvedCustomerName || "Delivery"
             : undefined,
-      items: resolvedItems,
+      items: (resolvedItems || []).map((it: any) => ({ ...it, is_deducted: true })),
+      is_deducted: true,
       estimatedPrepTime: 15,
       estimated_prep_time: 15,
       subtotal: resolvedSubtotal,
@@ -2949,19 +3678,41 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       shift_id: activeShift?.id ? (!isNaN(Number(activeShift.id)) ? Number(activeShift.id) : activeShift.id) : null,
     };
 
-    // Remove from running KOT orders
+    // Remove from running KOT orders across both state and localStorage
     setRunningTableOrders((prev) => {
       const updated = prev.filter(
         (o) =>
           o.id !== finalOrderId &&
           o.id !== target?.id &&
-          (resolvedOrderChannel !== "dine_in" || o.tableId !== resolvedTableId)
+          (resolvedOrderChannel !== "dine_in" || (
+            o.tableId !== resolvedTableId &&
+            o.tableId !== finalTableId &&
+            (!targetTable || (o.tableId !== targetTable.id && o.tableId !== targetTable.dbId)) &&
+            (!resolvedTableId || !isTableMatchingIdentifier({ id: resolvedTableId }, o.tableName || o.customerName || o.tableId))
+          ))
       );
       try {
         localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(updated));
+        if (activeRestId) {
+          localStorage.setItem(`pos_running_kot_orders_${activeRestId}`, JSON.stringify(updated));
+        }
       } catch { }
       return updated;
     });
+
+    setActiveDbOrders((prev) =>
+      prev.filter(
+        (o) =>
+          o.id !== finalOrderId &&
+          o.id !== target?.id &&
+          (resolvedOrderChannel !== "dine_in" || (
+            o.tableId !== resolvedTableId &&
+            o.tableId !== finalTableId &&
+            (!targetTable || (o.tableId !== targetTable.id && o.tableId !== targetTable.dbId)) &&
+            (!resolvedTableId || !isTableMatchingIdentifier({ id: resolvedTableId }, o.tableName || o.customerName || o.tableId))
+          ))
+      )
+    );
 
     // If held order was settled, remove from parkedOrders
     if (target?.source === "held") {
@@ -2969,6 +3720,9 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         const updated = prev.filter((p) => p.id !== target.id);
         try {
           localStorage.setItem(`${PARKED_ORDERS_KEY}_${currentOrgId}`, JSON.stringify(updated));
+          if (activeRestId) {
+            localStorage.setItem(`${PARKED_ORDERS_KEY}_${activeRestId}`, JSON.stringify(updated));
+          }
         } catch { }
         return updated;
       });
@@ -2978,20 +3732,39 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
     setOrders((prev) => [settledOrder, ...prev.filter((o) => o.id !== settledOrder.id)]);
     saveStoredOrder(currentOrgId, settledOrder);
 
-    // Release table in local state
-    if (resolvedOrderChannel === "dine_in" && resolvedTableId) {
-      setTables((prev) =>
-        prev.map((t) =>
-          t.id === resolvedTableId
+    // Release table in local state and synchronize across tabs
+    if (resolvedOrderChannel === "dine_in" && (finalTableId || targetTable || resolvedTableId)) {
+      setTables((prev) => {
+        const updated = prev.map((t) =>
+          (finalTableId && (t.id === finalTableId || String(t.id) === String(finalTableId))) ||
+          (targetTable && (t.id === targetTable.id || (t.dbId && t.dbId === targetTable.dbId))) ||
+          (resolvedTableId && (t.id === resolvedTableId || String(t.id) === String(resolvedTableId))) ||
+          (target && isTableMatchingIdentifier(t, target.tableName)) ||
+          (target && isTableMatchingIdentifier(t, target.tableId)) ||
+          (target && isTableMatchingIdentifier(t, target.customerName)) ||
+          isTableMatchingIdentifier(t, targetTable?.label || `Table ${resolvedTableId}`)
             ? {
               ...t,
-              status: "available",
+              status: "available" as const,
               activeOrderId: undefined,
               activeAmount: undefined,
             }
             : t
-        )
-      );
+        );
+        saveStoredTables(currentOrgId, updated);
+        if (activeRestId) {
+          saveStoredTables(String(activeRestId), updated);
+          try {
+            localStorage.setItem(`tables_list_${activeRestId}`, JSON.stringify(updated));
+            localStorage.setItem(`tables_list_${currentOrgId}`, JSON.stringify(updated));
+          } catch {}
+        }
+        return updated;
+      });
+      try {
+        window.dispatchEvent(new CustomEvent("restaurant_tables_changed"));
+        window.dispatchEvent(new CustomEvent("pos_tables_updated"));
+      } catch {}
     }
 
     // If settled from active cart (not target order from hub), reset active cart
@@ -3135,6 +3908,57 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
               )}
             </div>
           </div>
+
+          {/* 🛍️ TAKEAWAY READY FOR COUNTER HANDOVER ALERT BANNER */}
+          {takeawayReadyList.length > 0 && (
+            <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
+              {takeawayReadyList.map((alert) => (
+                <div
+                  key={alert.id}
+                  className="bg-gradient-to-r from-emerald-500/20 via-teal-500/15 to-emerald-500/20 border-2 border-emerald-500/50 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono shadow-xl"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/25 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0 shadow-inner">
+                      <ShoppingBag className="w-5 h-5 animate-bounce" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-sm sm:text-base text-emerald-300 flex items-center gap-2 flex-wrap">
+                        <span className="truncate">Takeaway Order #{alert.orderNumber} is Ready for Counter Handover</span>
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/30 border border-emerald-500/40 text-emerald-200 text-[10px] uppercase font-bold tracking-wider animate-pulse">
+                          Kitchen Ready
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-emerald-200/80 mt-0.5 flex items-center gap-2 sm:gap-3 flex-wrap">
+                        {alert.customerName && (
+                          <span>Guest: <strong className="text-emerald-100">{alert.customerName}</strong></span>
+                        )}
+                        {alert.customerPhone && (
+                          <span>• Tel: {alert.customerPhone}</span>
+                        )}
+                        {alert.itemsSummary && (
+                          <span className="truncate max-w-xs">• {alert.itemsSummary}</span>
+                        )}
+                        <span className="text-emerald-300/60 font-mono">
+                          Ready: {alert.readyAtTime || "Just now"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleConfirmTakeawayHandover(alert)}
+                      className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg active:scale-95 transition-all cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-black" />
+                      <span>Confirm Handover</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Shift Expiry Continuation Prompt Banner */}
           {!embedded && isShiftTimeEnded && (
@@ -3413,7 +4237,10 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         previousCashierName={previousShiftHandover?.cashierName}
         previousShiftType={previousShiftHandover?.shiftType}
         onConfirmStartShift={handleConfirmStartShift}
-        onLogOut={() => {
+        onLogOut={async () => {
+          try {
+            await recordStaffShiftLogout(user, { station: "cashier" });
+          } catch {}
           clearUserSession();
           logout();
           router.push("/login");
@@ -3525,6 +4352,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         consecutiveShiftCount={consecutiveShiftCount}
         onStartNewShift={handleSeamlessStartNewShift}
         onProceedToZReport={() => router.push("/terminal/pos/z-report")}
+        onEndShiftLogout={handleEndShiftLogout}
         onDismiss={handleDismissContinuationPrompt}
       />
     )}

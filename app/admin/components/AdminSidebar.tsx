@@ -416,49 +416,8 @@ export function AdminSidebar({
           })}
         </div>
 
-        {/* Bottom Sidebar: Clean Profile Card & Logout Button */}
+        {/* Bottom Sidebar: Logout Button */}
         <div className="border-t border-[var(--border)] p-2.5 shrink-0 bg-[var(--bg-deep)]/95 space-y-2">
-          {/* User Profile Card (when expanded) */}
-          {!isCollapsed ? (
-            <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[var(--surface)] border border-[var(--border)] select-none">
-              <div className="relative">
-                <div className="w-8 h-8 rounded-lg bg-[var(--gold-dim)] border border-[var(--gold)]/30 flex items-center justify-center font-mono font-bold text-xs text-[var(--gold)] shrink-0">
-                  {userInitials}
-                </div>
-                <span className="w-2 h-2 rounded-full bg-[#25d366] absolute -top-0.5 -right-0.5 ring-2 ring-[var(--bg-deep)]" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold text-[var(--text-hi)] truncate leading-tight">
-                  {displayName}
-                </p>
-                <p className="text-[10px] text-[var(--text-faint)] font-mono truncate">
-                  {displayEmail}
-                </p>
-              </div>
-              <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded bg-[var(--surface-hi)] text-[var(--text-lo)] border border-[var(--border)] shrink-0">
-                Admin
-              </span>
-            </div>
-          ) : (
-            /* Collapsed User Avatar with Tooltip */
-            <div className="w-full flex justify-center py-1 group relative cursor-pointer" onClick={handleToggleCollapse}>
-              <div className="relative">
-                <div className="w-9 h-9 rounded-xl bg-[var(--gold-dim)] border border-[var(--gold)]/30 flex items-center justify-center font-mono font-bold text-xs text-[var(--gold)]">
-                  {userInitials}
-                </div>
-                <span className="w-2 h-2 rounded-full bg-[#25d366] absolute -top-0.5 -right-0.5 ring-2 ring-[var(--bg-deep)]" />
-              </div>
-
-              {/* Tooltip for user avatar */}
-              <div className="absolute left-[calc(100%+12px)] top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 group-hover:translate-x-0 -translate-x-1.5 transition-all duration-200 z-50 whitespace-nowrap">
-                <div className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-deep)] text-[var(--text-hi)] border border-[var(--border-hi)] shadow-2xl shadow-black/80 backdrop-blur-xl">
-                  <div className="font-bold">{displayName}</div>
-                  <div className="text-[10px] text-[var(--text-faint)] font-mono">Admin</div>
-                </div>
-                <div className="absolute -left-1 top-1/2 -translate-y-1/2 w-2 h-2 rotate-45 bg-[var(--bg-deep)] border-l border-b border-[var(--border-hi)]" />
-              </div>
-            </div>
-          )}
 
           {/* Logout Button */}
           <button

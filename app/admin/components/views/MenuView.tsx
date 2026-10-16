@@ -38,6 +38,7 @@ import {
   ItemStockStatusBadge,
   VariantPortionBadge,
 } from "@/app/components/PosInventoryPortionBadges";
+import { getMenuItemStation, getStationBadgeInfo, normalizeStationName } from "@/lib/kitchenStationRouting";
 import { getItemRepresentativePortions } from "@/lib/posLedgerSync";
 
 interface MenuViewProps {
@@ -48,7 +49,7 @@ interface MenuViewProps {
   handleToggleStock?: (dishId: string) => void;
   onToggleStock?: (dishId: string) => void;
   showToast: (msg: string) => void;
-  routeAction?: { action: "new" | "edit"; id?: string } | null;
+  routeAction?: { action: "new" | "edit" | "reconciliation"; id?: string } | null;
 }
 
 interface FormIngredient {
@@ -395,13 +396,18 @@ export default function MenuView({
             id: row.id,
             name: row.name,
             category: row.category || "karahi",
+            kitchen_station: row.kitchen_station || row.station || undefined,
+            station: row.kitchen_station || row.station || undefined,
             price: Number(row.price),
             prepTime: row.prep_time || `${prepMinutes}m`,
             preparation_time: prepMinutes,
             stockStatus: row.stock_status || "in_stock",
             stockCount: row.stock_count ?? 20,
             imageIcon: row.image_icon || "",
-            isPopular: Boolean(row.is_popular),
+            isPopular: Boolean(row.is_popular || row.is_featured || row.isPopular || row.isFeatured),
+            is_popular: Boolean(row.is_popular || row.is_featured || row.isPopular || row.isFeatured),
+            isFeatured: Boolean(row.is_popular || row.is_featured || row.isPopular || row.isFeatured),
+            is_featured: Boolean(row.is_popular || row.is_featured || row.isPopular || row.isFeatured),
             variants: (() => {
               if (Array.isArray(row.variants) && row.variants.length > 0) return row.variants;
               if (row.description) {
@@ -735,7 +741,10 @@ export default function MenuView({
                 stockStatus: data.stock_status || "in_stock",
                 stockCount: data.stock_count ?? 20,
                 imageIcon: data.image_icon || "",
-                isPopular: Boolean(data.is_popular),
+                isPopular: Boolean(data.is_popular || data.is_featured || data.isPopular || data.isFeatured),
+                is_popular: Boolean(data.is_popular || data.is_featured || data.isPopular || data.isFeatured),
+                isFeatured: Boolean(data.is_popular || data.is_featured || data.isPopular || data.isFeatured),
+                is_featured: Boolean(data.is_popular || data.is_featured || data.isPopular || data.isFeatured),
                 image_url: data.image_url || undefined,
                 imageUrl: data.image_url || undefined,
                 is_available: (data.stock_status || "in_stock") !== "out_of_stock",
@@ -767,6 +776,50 @@ export default function MenuView({
     setCreationMode("edit");
     if (typeof window !== "undefined") {
       window.history.pushState(null, "", `/admin/menu/${dish.id}`);
+    }
+  };
+
+  const handleQuickStationChange = async (dish: MenuItem, newStation: string) => {
+    const norm = normalizeStationName(newStation);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("menu_items")
+        .update({ kitchen_station: norm })
+        .eq("id", dish.id);
+
+      if (error) {
+        console.error("Failed to update kitchen station:", error);
+        showToast(`Failed to update station: ${error.message}`);
+        return;
+      }
+
+      setCatalog((prev) =>
+        prev.map((d) =>
+          String(d.id) === String(dish.id)
+            ? { ...d, kitchen_station: norm, station: norm }
+            : d
+        )
+      );
+
+      const b = getStationBadgeInfo(norm);
+      showToast(`Assigned "${dish.name}" to ${b.label} Station`);
+
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("pos_menu_updated", {
+            detail: {
+              dish: { ...dish, kitchen_station: norm, station: norm },
+              action: "update",
+              timestamp: Date.now(),
+            },
+          })
+        );
+        window.dispatchEvent(new Event("storage"));
+      }
+    } catch (err) {
+      console.error("Station update error:", err);
+      showToast("Error updating kitchen station.");
     }
   };
 
@@ -1985,7 +2038,7 @@ export default function MenuView({
               <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-3">No menu items created yet</h3>
               <button
                 type="button"
-                onClick={openAddModal}
+                onClick={handleOpenAddDish}
                 className="btn-gold px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 cursor-pointer shadow-md"
               >
                 <Plus className="w-4 h-4" />
@@ -2027,17 +2080,40 @@ export default function MenuView({
                         <span className="font-bold text-[var(--text-hi)] text-sm truncate">
                           {dish.name}
                         </span>
-                        {dish.isPopular && (
+                        {(dish.isPopular || (dish as any).isFeatured || (dish as any).is_popular) && (
                           <span className="badge-pill badge-gold text-[9px] shrink-0">
                             <Star className="w-2.5 h-2.5 fill-current" />
-                            <span>Popular</span>
+                            <span>Featured</span>
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2 text-[10px] text-[var(--text-faint)] font-mono mt-0.5">
+                      <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-[var(--text-faint)] font-mono mt-0.5">
                         <span className="badge-pill badge-neutral text-[10px] uppercase font-semibold">
                           {dish.category}
                         </span>
+                        {(() => {
+                          const station = getMenuItemStation(dish);
+                          const b = getStationBadgeInfo(station);
+                          return (
+                            <div className="relative inline-flex items-center">
+                              <select
+                                value={station}
+                                onChange={(e) => handleQuickStationChange(dish, e.target.value)}
+                                className={`px-2 py-0.5 pr-5 rounded text-[9px] font-mono font-bold uppercase border cursor-pointer appearance-none bg-transparent hover:opacity-85 transition-all focus:outline-none ${b.className}`}
+                                title="Click to assign Kitchen Station"
+                              >
+                                <option value="desi" className="bg-[var(--bg-deep)] text-red-300">Desi</option>
+                                <option value="fast_food" className="bg-[var(--bg-deep)] text-amber-300">Fast Food</option>
+                                <option value="grill" className="bg-[var(--bg-deep)] text-orange-400">Grill</option>
+                                <option value="fry" className="bg-[var(--bg-deep)] text-yellow-300">Fry</option>
+                                <option value="pastry" className="bg-[var(--bg-deep)] text-pink-300">Pastry</option>
+                                <option value="beverages" className="bg-[var(--bg-deep)] text-cyan-300">Beverages</option>
+                                <option value="assembly" className="bg-[var(--bg-deep)] text-emerald-300">Assembly</option>
+                              </select>
+                              <ChevronDown className="w-2.5 h-2.5 pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 opacity-70" />
+                            </div>
+                          );
+                        })()}
                         <span>ID: {dish.id}</span>
                         <span>• ~{dish.prepTime || "15m"}</span>
                       </div>
@@ -2168,7 +2244,7 @@ export default function MenuView({
                       <h3 className="text-sm font-semibold text-[var(--text-hi)] tracking-wide mb-4">No menu items created yet</h3>
                       <button
                         type="button"
-                        onClick={openAddModal}
+                        onClick={handleOpenAddDish}
                         className="btn-gold px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-2 cursor-pointer shadow-md hover:scale-[1.02] transition-transform"
                       >
                         <Plus className="w-4 h-4" />
@@ -2214,10 +2290,10 @@ export default function MenuView({
                             <span className="font-bold text-[var(--text-hi)] block text-sm group-hover:text-[var(--gold)] transition-colors">
                               {dish.name}
                             </span>
-                            {dish.isPopular && (
+                            {(dish.isPopular || (dish as any).isFeatured || (dish as any).is_popular) && (
                               <span className="badge-pill badge-gold text-[9px]">
                                 <Star className="w-2.5 h-2.5 fill-current" />
-                                <span>Popular</span>
+                                <span>Featured</span>
                               </span>
                             )}
                           </div>
@@ -2230,9 +2306,34 @@ export default function MenuView({
                       </div>
                     </td>
                     <td className="py-3.5 px-4 font-mono uppercase text-[var(--text-lo)] font-semibold text-[11px] whitespace-nowrap">
-                      <span className="badge-pill badge-neutral text-[10px] uppercase font-semibold">
-                        {dish.category}
-                      </span>
+                      <div className="flex flex-col gap-1 items-start">
+                        <span className="badge-pill badge-neutral text-[10px] uppercase font-semibold">
+                          {dish.category}
+                        </span>
+                        {(() => {
+                          const station = getMenuItemStation(dish);
+                          const b = getStationBadgeInfo(station);
+                          return (
+                            <div className="relative inline-flex items-center">
+                              <select
+                                value={station}
+                                onChange={(e) => handleQuickStationChange(dish, e.target.value)}
+                                className={`px-2 py-0.5 pr-5 rounded-md text-[9.5px] font-mono font-bold uppercase border cursor-pointer appearance-none bg-transparent hover:opacity-85 transition-all focus:outline-none ${b.className}`}
+                                title="Click to assign Kitchen Station"
+                              >
+                                <option value="desi" className="bg-[var(--bg-deep)] text-red-300">Desi</option>
+                                <option value="fast_food" className="bg-[var(--bg-deep)] text-amber-300">Fast Food</option>
+                                <option value="grill" className="bg-[var(--bg-deep)] text-orange-400">Grill</option>
+                                <option value="fry" className="bg-[var(--bg-deep)] text-yellow-300">Fry</option>
+                                <option value="pastry" className="bg-[var(--bg-deep)] text-pink-300">Pastry</option>
+                                <option value="beverages" className="bg-[var(--bg-deep)] text-cyan-300">Beverages</option>
+                                <option value="assembly" className="bg-[var(--bg-deep)] text-emerald-300">Assembly</option>
+                              </select>
+                              <ChevronDown className="w-2.5 h-2.5 pointer-events-none absolute right-1 top-1/2 -translate-y-1/2 opacity-70" />
+                            </div>
+                          );
+                        })()}
+                      </div>
                     </td>
                     <td className="py-3.5 px-4 font-mono font-extrabold text-sm text-[var(--gold)] whitespace-nowrap">
                       {dish.variants && dish.variants.length > 0 ? (

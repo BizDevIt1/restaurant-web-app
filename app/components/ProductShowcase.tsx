@@ -30,8 +30,30 @@ export default function ProductShowcase() {
           </p>
         </div>
 
-        {/* 6-Tab Switcher */}
-        <div className="flex items-center justify-center mb-10 overflow-x-auto pb-2 scrollbar-none">
+        {/* 6-Tab Switcher: Mobile Dropdown (< 1024px) & Desktop Pills (>= 1024px) */}
+        <div className="lg:hidden max-w-xs mx-auto mb-8 px-4">
+          <div className="relative">
+            <select
+              value={activeTab}
+              onChange={(e) => setActiveTab(Number(e.target.value))}
+              className="w-full appearance-none bg-[var(--surface-hi)] border border-[var(--gold)]/40 focus:border-[var(--gold)] text-[var(--gold)] text-xs font-semibold rounded-xl pl-4 pr-10 py-2.5 outline-none transition-all cursor-pointer shadow-sm"
+            >
+              {tabs.map((tab, idx) => (
+                <option key={tab} value={idx} className="bg-[#140c0c] text-[var(--text-hi)]">
+                  {tab}
+                </option>
+              ))}
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-[var(--gold)]">
+              <svg className="w-4 h-4 fill-current" viewBox="0 0 20 20">
+                <path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" fillRule="evenodd"></path>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        {/* Desktop 6-Tab Switcher (>= 1024px) */}
+        <div className="hidden lg:flex items-center justify-center mb-10 overflow-x-auto pb-2 scrollbar-none">
           <div className="inline-flex items-center p-1.5 rounded-full bg-[var(--surface-hi)] border border-[var(--border)] backdrop-blur-md gap-1">
             {tabs.map((tab, idx) => (
               <button

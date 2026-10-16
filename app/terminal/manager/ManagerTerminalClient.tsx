@@ -29,6 +29,8 @@ import {
   ChevronRight,
   Eye,
   XCircle,
+  UtensilsCrossed,
+  Filter,
 } from "lucide-react";
 import { useAuth } from "@/app/admin/context/AuthContext";
 import { createClient } from "@/lib/supabase";
@@ -36,6 +38,11 @@ import { getValidTenantContext } from "@/lib/tenantResolver";
 import ResponsiveSelect from "@/app/admin/components/ResponsiveSelect";
 import { getStoredOrders, getStoredBranchSettings } from "@/lib/tenantStore";
 import { RawMaterial } from "@/app/admin/types";
+import {
+  fetchUniversalStaffShifts,
+  UniversalShiftRecord,
+  StaffRoleType,
+} from "@/lib/universalShiftLogging";
 
 export interface VoidApprovalItem {
   id: string;
@@ -61,6 +68,11 @@ export default function ManagerTerminalClient() {
   // Financial & Shifts State
   const [orders, setOrders] = useState<any[]>([]);
   const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>([]);
+  const [universalShifts, setUniversalShifts] = useState<UniversalShiftRecord[]>([]);
+  const [shiftRoleFilter, setShiftRoleFilter] = useState<"all" | StaffRoleType>("all");
+  const [shiftStatusFilter, setShiftStatusFilter] = useState<"all" | "OPEN" | "CLOSED" | "FLAGGED">("all");
+  const [shiftSearchQuery, setShiftSearchQuery] = useState("");
+  const [isRefreshingShifts, setIsRefreshingShifts] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   // Manager Override PIN
@@ -142,6 +154,12 @@ export default function ManagerTerminalClient() {
         if (matData && isMounted) {
           setRawMaterials(matData);
         }
+
+        // 3. Fetch Universal Staff Shifts (Cashiers, Waiters, Chefs, Managers)
+        const shiftsData = await fetchUniversalStaffShifts(restId);
+        if (shiftsData && isMounted) {
+          setUniversalShifts(shiftsData);
+        }
       } catch (err) {
         console.warn("[ManagerTerminal] Error loading manager data:", err);
       } finally {
@@ -151,6 +169,49 @@ export default function ManagerTerminalClient() {
 
     loadManagerData();
   }, [user, currentOrgId]);
+
+  const refreshShifts = useCallback(async () => {
+    try {
+      setIsRefreshingShifts(true);
+      const { restId } = await getValidTenantContext(user);
+      const updated = await fetchUniversalStaffShifts(restId);
+      setUniversalShifts(updated);
+      showToast("Staff shifts synchronized.");
+    } catch (err) {
+      console.warn("[ManagerTerminal] Error refreshing shifts:", err);
+    } finally {
+      setIsRefreshingShifts(false);
+    }
+  }, [user, showToast]);
+
+  const shiftRoleCounts = useMemo(() => {
+    return {
+      all: universalShifts.length,
+      cashier: universalShifts.filter((s) => s.staff_role === "cashier").length,
+      waiter: universalShifts.filter((s) => s.staff_role === "waiter").length,
+      chef: universalShifts.filter((s) => s.staff_role === "chef").length,
+      manager: universalShifts.filter((s) => s.staff_role === "manager").length,
+    };
+  }, [universalShifts]);
+
+  const filteredUniversalShifts = useMemo(() => {
+    return universalShifts.filter((s) => {
+      if (shiftRoleFilter !== "all" && s.staff_role !== shiftRoleFilter) {
+        return false;
+      }
+      if (shiftStatusFilter !== "all" && s.status !== shiftStatusFilter) {
+        return false;
+      }
+      if (shiftSearchQuery.trim()) {
+        const q = shiftSearchQuery.toLowerCase().trim();
+        const matchName = s.cashier_name.toLowerCase().includes(q);
+        const matchTerm = (s.terminal_label || "").toLowerCase().includes(q);
+        const matchType = (s.shift_type || "").toLowerCase().includes(q);
+        if (!matchName && !matchTerm && !matchType) return false;
+      }
+      return true;
+    });
+  }, [universalShifts, shiftRoleFilter, shiftStatusFilter, shiftSearchQuery]);
 
   // Today's Financial Audits
   const auditMetrics = useMemo(() => {
@@ -456,65 +517,358 @@ export default function ManagerTerminalClient() {
             </div>
 
             {/* Shift Oversight Table */}
-            <div className="glass-panel border border-[var(--border)] rounded-2xl overflow-hidden shadow-sm">
-              <div className="p-4 border-b border-[var(--border)] flex items-center justify-between">
+            {/* Shift Oversight Table with Universal Staff Shift Tracking */}
+            <div className="glass-panel border border-[var(--border)] rounded-2xl overflow-hidden shadow-sm space-y-3">
+              {/* Table Header & Controls */}
+              <div className="p-4 border-b border-[var(--border)] flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div>
-                  <h3 className="font-bold text-sm text-[var(--text-hi)] font-display">
-                    Active Counter Registers &amp; Cashiers
+                  <h3 className="font-bold text-sm text-[var(--text-hi)] font-display flex items-center gap-2">
+                    <span>Universal Staff Shift Tracking &amp; Audit Ledger</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                      Live Telemetry
+                    </span>
                   </h3>
                   <p className="text-xs font-mono text-[var(--text-lo)] mt-0.5">
-                    Live operational sessions and float tracking
+                    Track sessions across Cashiers, Waiters, Chefs, and Managers with role-adaptive audits
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => router.push("/terminal/pos/z-report")}
-                  className="px-3 py-1.5 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface-hi)]/80 border border-[var(--border)] text-xs font-mono font-bold text-[var(--text-hi)] flex items-center gap-1.5 cursor-pointer hover:border-[var(--gold)]/50 transition-all"
-                  title="Open Shift Financial Z-Report & Drawer Settlement"
-                >
-                  <FileText className="w-3.5 h-3.5 text-[var(--gold)]" />
-                  <span>Generate Z-Report</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={refreshShifts}
+                    disabled={isRefreshingShifts}
+                    className="px-3 py-1.5 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--border)] border border-[var(--border)] text-xs font-mono font-bold text-[var(--text-hi)] flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+                    title="Refresh staff shift telemetry from database"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 text-[var(--gold)] ${isRefreshingShifts ? "animate-spin" : ""}`} />
+                    <span>Sync Shifts</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => router.push("/terminal/pos/z-report")}
+                    className="px-3 py-1.5 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface-hi)]/80 border border-[var(--border)] text-xs font-mono font-bold text-[var(--text-hi)] flex items-center gap-1.5 cursor-pointer hover:border-[var(--gold)]/50 transition-all"
+                    title="Open Shift Financial Z-Report & Drawer Settlement"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-[var(--gold)]" />
+                    <span>Generate Z-Report</span>
+                  </button>
+                </div>
               </div>
 
+              {/* Toolbar: Role Filter Tabs, Status Select & Search */}
+              <div className="px-4 pb-2 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                {/* Role Tabs */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
+                  <span className="text-[11px] font-mono text-[var(--text-faint)] uppercase tracking-wider mr-1 hidden sm:inline">
+                    Role:
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => setShiftRoleFilter("all")}
+                    className={`px-3 py-1 rounded-xl text-xs font-mono font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                      shiftRoleFilter === "all"
+                        ? "bg-[var(--gold)] text-black shadow-sm"
+                        : "text-[var(--text-lo)] hover:text-[var(--text-hi)] bg-[var(--surface-hi)]/60 border border-[var(--border)]"
+                    }`}
+                  >
+                    <span>All Staff</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                        shiftRoleFilter === "all" ? "bg-black/20 text-black font-black" : "bg-[var(--surface)] text-[var(--text-lo)]"
+                      }`}
+                    >
+                      {shiftRoleCounts.all}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShiftRoleFilter("cashier")}
+                    className={`px-3 py-1 rounded-xl text-xs font-mono font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                      shiftRoleFilter === "cashier"
+                        ? "bg-emerald-500 text-black font-black shadow-sm"
+                        : "text-[var(--text-lo)] hover:text-emerald-400 bg-[var(--surface-hi)]/60 border border-[var(--border)]"
+                    }`}
+                  >
+                    <Receipt className="w-3 h-3" />
+                    <span>Cashiers</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                        shiftRoleFilter === "cashier" ? "bg-black/20 text-black font-black" : "bg-[var(--surface)] text-[var(--text-lo)]"
+                      }`}
+                    >
+                      {shiftRoleCounts.cashier}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShiftRoleFilter("waiter")}
+                    className={`px-3 py-1 rounded-xl text-xs font-mono font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                      shiftRoleFilter === "waiter"
+                        ? "bg-amber-500 text-black font-black shadow-sm"
+                        : "text-[var(--text-lo)] hover:text-amber-400 bg-[var(--surface-hi)]/60 border border-[var(--border)]"
+                    }`}
+                  >
+                    <UtensilsCrossed className="w-3 h-3" />
+                    <span>Waiters</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                        shiftRoleFilter === "waiter" ? "bg-black/20 text-black font-black" : "bg-[var(--surface)] text-[var(--text-lo)]"
+                      }`}
+                    >
+                      {shiftRoleCounts.waiter}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShiftRoleFilter("chef")}
+                    className={`px-3 py-1 rounded-xl text-xs font-mono font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                      shiftRoleFilter === "chef"
+                        ? "bg-orange-500 text-black font-black shadow-sm"
+                        : "text-[var(--text-lo)] hover:text-orange-400 bg-[var(--surface-hi)]/60 border border-[var(--border)]"
+                    }`}
+                  >
+                    <Flame className="w-3 h-3" />
+                    <span>Chefs</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                        shiftRoleFilter === "chef" ? "bg-black/20 text-black font-black" : "bg-[var(--surface)] text-[var(--text-lo)]"
+                      }`}
+                    >
+                      {shiftRoleCounts.chef}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShiftRoleFilter("manager")}
+                    className={`px-3 py-1 rounded-xl text-xs font-mono font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                      shiftRoleFilter === "manager"
+                        ? "bg-blue-500 text-black font-black shadow-sm"
+                        : "text-[var(--text-lo)] hover:text-blue-400 bg-[var(--surface-hi)]/60 border border-[var(--border)]"
+                    }`}
+                  >
+                    <ShieldCheck className="w-3 h-3" />
+                    <span>Managers</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                        shiftRoleFilter === "manager" ? "bg-black/20 text-black font-black" : "bg-[var(--surface)] text-[var(--text-lo)]"
+                      }`}
+                    >
+                      {shiftRoleCounts.manager}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Right Controls */}
+                <div className="flex items-center gap-2">
+                  <select
+                    value={shiftStatusFilter}
+                    onChange={(e) => setShiftStatusFilter(e.target.value as any)}
+                    className="h-8 pl-2.5 pr-6 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-mono text-[var(--text-hi)] focus:outline-none focus:border-[var(--gold)]/50 cursor-pointer"
+                  >
+                    <option value="all" className="bg-[#241d10] text-[#f7f0dd]">All Statuses</option>
+                    <option value="OPEN" className="bg-[#241d10] text-[#f7f0dd]">Open &amp; Active</option>
+                    <option value="CLOSED" className="bg-[#241d10] text-[#f7f0dd]">Closed Shifts</option>
+                    <option value="FLAGGED" className="bg-[#241d10] text-[#f7f0dd]">Flagged Shifts</option>
+                  </select>
+
+                  <div className="relative w-36 sm:w-44">
+                    <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--text-faint)]" />
+                    <input
+                      type="text"
+                      value={shiftSearchQuery}
+                      onChange={(e) => setShiftSearchQuery(e.target.value)}
+                      placeholder="Search staff / terminal..."
+                      className="w-full h-8 pl-8 pr-2.5 rounded-xl bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-mono text-[var(--text-hi)] placeholder:text-[var(--text-faint)] focus:outline-none focus:border-[var(--gold)]/50"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Contextual notice when inspecting non-financial roles */}
+              {(shiftRoleFilter === "waiter" || shiftRoleFilter === "chef") && (
+                <div className="mx-4 mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-mono text-amber-300">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>
+                    <strong>Contextual Table Layout:</strong> Financial settlement columns (Opening Float, Expected Cash, Counted, Variance) are automatically omitted for {shiftRoleFilter === "waiter" ? "Waiters" : "Chefs"} since they do not handle cash drawers.
+                  </span>
+                </div>
+              )}
+
+              {/* Table Viewport */}
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs font-mono">
-                  <thead className="bg-[var(--surface-hi)] text-[var(--text-lo)] border-b border-[var(--border)]">
+                  <thead className="bg-white/[0.02] text-[var(--text-faint)] text-[10.5px] uppercase tracking-wider border-b border-[var(--border)]">
                     <tr>
                       <th className="p-3.5">Counter / Terminal</th>
-                      <th className="p-3.5">Staff Cashier</th>
+                      <th className="p-3.5">Staff Member</th>
+                      <th className="p-3.5">Role</th>
                       <th className="p-3.5">Shift Window</th>
-                      <th className="p-3.5">Opening Float</th>
-                      <th className="p-3.5">Total Sales</th>
-                      <th className="p-3.5">Expected Till</th>
+
+                      {/* DYNAMIC FINANCIAL COLUMNS: Hidden for Waiter & Chef filters */}
+                      {shiftRoleFilter !== "waiter" && shiftRoleFilter !== "chef" && (
+                        <>
+                          <th className="p-3.5">Opening Float</th>
+                          <th className="p-3.5">Total Sales</th>
+                          <th className="p-3.5">Expected Till</th>
+                          <th className="p-3.5">Variance</th>
+                        </>
+                      )}
+
+                      {/* NON-FINANCIAL DETAIL COLUMN: Shown for Waiter & Chef filters */}
+                      {(shiftRoleFilter === "waiter" || shiftRoleFilter === "chef") && (
+                        <th className="p-3.5">Station Details / Notes</th>
+                      )}
+
                       <th className="p-3.5">Status</th>
                       <th className="p-3.5 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--border)]">
-                    <tr>
-                      <td className="p-3.5 font-bold text-[var(--text-hi)]">Register 01 (Main)</td>
-                      <td className="p-3.5 text-[var(--text-lo)]">Ali Raza</td>
-                      <td className="p-3.5 text-[var(--text-lo)]">Evening (04:00 PM - 12:00 AM)</td>
-                      <td className="p-3.5 text-[var(--text-lo)]">Rs. 10,000</td>
-                      <td className="p-3.5 text-emerald-400 font-bold">Rs. {auditMetrics.grossSales.toLocaleString()}</td>
-                      <td className="p-3.5 text-[var(--gold)] font-bold">Rs. {(auditMetrics.cashSales + 10000).toLocaleString()}</td>
-                      <td className="p-3.5">
-                        <span className="px-2 py-0.5 rounded-full text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold uppercase">
-                          Open &amp; Active
-                        </span>
-                      </td>
-                      <td className="p-3.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => showToast("Register 01 audited. Till verified.")}
-                          className="px-2.5 py-1 rounded-lg bg-[var(--surface-hi)] hover:bg-[var(--border)] text-[11px] font-bold text-[var(--text-hi)] cursor-pointer"
+                    {filteredUniversalShifts.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={shiftRoleFilter === "waiter" || shiftRoleFilter === "chef" ? 7 : 10}
+                          className="p-8 text-center text-xs font-mono text-[var(--text-faint)]"
                         >
-                          Audit Drawer
-                        </button>
-                      </td>
-                    </tr>
+                          {universalShifts.length === 0
+                            ? "No active or recorded shifts found for this restaurant."
+                            : `No shifts found matching the selected filter (${shiftRoleFilter.toUpperCase()}).`}
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredUniversalShifts.map((shiftRecord) => {
+                        const isCashier = shiftRecord.staff_role === "cashier";
+                        const isNonFinancialFiltered = shiftRoleFilter === "waiter" || shiftRoleFilter === "chef";
+
+                        return (
+                          <tr key={shiftRecord.id} className="hover:bg-white/[0.02] transition-colors">
+                            {/* 1. Terminal / Counter Label */}
+                            <td className="p-3.5 font-bold text-[var(--text-hi)]">
+                              {shiftRecord.terminal_label || "Register Station"}
+                            </td>
+
+                            {/* 2. Staff Member Name */}
+                            <td className="p-3.5 text-[var(--text-hi)] font-medium">
+                              {shiftRecord.cashier_name}
+                            </td>
+
+                            {/* 3. Distinctive Role Badge */}
+                            <td className="p-3.5 whitespace-nowrap">
+                              {shiftRecord.staff_role === "waiter" ? (
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-[var(--gold-dim)] text-[var(--gold)] border border-[var(--gold)]/40">
+                                  <UtensilsCrossed className="w-3 h-3 text-[var(--gold)]" />
+                                  <span>Waiter</span>
+                                </span>
+                              ) : shiftRecord.staff_role === "chef" ? (
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                                  <Flame className="w-3 h-3 text-amber-400" />
+                                  <span>Chef</span>
+                                </span>
+                              ) : shiftRecord.staff_role === "manager" ? (
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-blue-500/15 text-blue-400 border border-blue-500/30">
+                                  <ShieldCheck className="w-3 h-3 text-blue-400" />
+                                  <span>Manager</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-[#25d366]/15 text-[#25d366] border border-[#25d366]/30">
+                                  <Receipt className="w-3 h-3 text-[#25d366]" />
+                                  <span>Cashier</span>
+                                </span>
+                              )}
+                            </td>
+
+                            {/* 4. Shift Window */}
+                            <td className="p-3.5 text-[var(--text-lo)] whitespace-nowrap">
+                              <span className="text-amber-400 font-mono">
+                                {shiftRecord.shift_type || "Day Shift"}
+                              </span>
+                              <span className="block text-[10px] text-[var(--text-faint)]">
+                                {new Date(shiftRecord.shift_start).toLocaleTimeString("en-US", {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                  hour12: true,
+                                })}
+                                {" – "}
+                                {shiftRecord.shift_end
+                                  ? new Date(shiftRecord.shift_end).toLocaleTimeString("en-US", {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                      hour12: true,
+                                    })
+                                  : "Active Now"}
+                              </span>
+                            </td>
+
+                            {/* DYNAMIC FINANCIAL COLUMNS */}
+                            {!isNonFinancialFiltered && (
+                              <>
+                                <td className="p-3.5 text-[var(--text-lo)] font-mono whitespace-nowrap">
+                                  {isCashier ? `Rs. ${(shiftRecord.opening_float || 0).toLocaleString()}` : <span className="text-[var(--text-faint)] text-[10px]">— Non-Cashier</span>}
+                                </td>
+                                <td className="p-3.5 text-emerald-400 font-bold font-mono whitespace-nowrap">
+                                  {isCashier ? `Rs. ${(shiftRecord.gross_sales || 0).toLocaleString()}` : <span className="text-[var(--text-faint)] text-[10px]">—</span>}
+                                </td>
+                                <td className="p-3.5 text-[var(--gold)] font-bold font-mono whitespace-nowrap">
+                                  {isCashier ? `Rs. ${((shiftRecord.opening_float || 0) + (shiftRecord.system_cash_sales || shiftRecord.gross_sales || 0)).toLocaleString()}` : <span className="text-[var(--text-faint)] text-[10px]">—</span>}
+                                </td>
+                                <td className="p-3.5 font-bold font-mono whitespace-nowrap">
+                                  {!isCashier ? (
+                                    <span className="text-[var(--text-faint)] text-[10px]">—</span>
+                                  ) : shiftRecord.status === "OPEN" ? (
+                                    <span className="text-[var(--text-faint)]">— (Active)</span>
+                                  ) : (
+                                    <span className={shiftRecord.cash_variance === 0 ? "text-emerald-400" : "text-amber-400"}>
+                                      {shiftRecord.cash_variance && shiftRecord.cash_variance > 0 ? "+" : ""}
+                                      Rs. {(shiftRecord.cash_variance || 0).toLocaleString()}
+                                    </span>
+                                  )}
+                                </td>
+                              </>
+                            )}
+
+                            {/* NON-FINANCIAL DETAIL: Station Notes */}
+                            {isNonFinancialFiltered && (
+                              <td className="p-3.5 text-[var(--text-lo)] text-[11px]">
+                                {shiftRecord.closing_notes || "Assigned station active"}
+                              </td>
+                            )}
+
+                            {/* Status Badge */}
+                            <td className="p-3.5 whitespace-nowrap">
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                  shiftRecord.status === "OPEN"
+                                    ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                                    : shiftRecord.status === "FLAGGED"
+                                    ? "bg-red-500/20 text-red-400 border border-red-500/30"
+                                    : "bg-neutral-500/20 text-neutral-300 border border-neutral-500/30"
+                                }`}
+                              >
+                                {shiftRecord.status === "OPEN" ? "Open & Active" : shiftRecord.status}
+                              </span>
+                            </td>
+
+                            {/* Action */}
+                            <td className="p-3.5 text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => showToast(`Session verified for ${shiftRecord.cashier_name}.`)}
+                                className="px-2.5 py-1 rounded-lg bg-[var(--surface-hi)] hover:bg-[var(--border)] text-[11px] font-bold text-[var(--text-hi)] cursor-pointer"
+                              >
+                                {isCashier ? "Audit Till" : "Verify Session"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
               </div>

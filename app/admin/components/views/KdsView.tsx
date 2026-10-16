@@ -234,9 +234,8 @@ export default function KdsView({
   });
 
   return (
-    <div className={`px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200 transition-all ${
-      isBuzzerRinging ? "ring-4 ring-amber-500/50" : ""
-    }`}>
+    <div className={`px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200 transition-all ${isBuzzerRinging ? "ring-4 ring-amber-500/50" : ""
+      }`}>
       {/* Header Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -252,11 +251,10 @@ export default function KdsView({
           <button
             type="button"
             onClick={triggerBuzzerChime}
-            className={`px-4 py-2.5 rounded-xl border text-xs font-bold font-mono cursor-pointer flex items-center gap-2 transition-all shadow-md ${
-              isBuzzerRinging
+            className={`px-4 py-2.5 rounded-xl border text-xs font-bold font-mono cursor-pointer flex items-center gap-2 transition-all shadow-md ${isBuzzerRinging
                 ? "bg-amber-500 text-black border-amber-400 shadow-amber-500/40 scale-105"
                 : "bg-white/80 dark:bg-[var(--surface-hi)] border border-[var(--border)] hover:border-amber-500/50 text-amber-900 dark:text-amber-400 shadow-2xs"
-            }`}
+              }`}
           >
             <Volume2 className={`w-4 h-4 ${isBuzzerRinging ? "animate-bounce" : ""}`} />
             <span>Test Buzzer (Chime)</span>
@@ -329,11 +327,10 @@ export default function KdsView({
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id as any)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer whitespace-nowrap ${
-                activeTab === tab.id
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer whitespace-nowrap ${activeTab === tab.id
                   ? "btn-gold text-[#342c14] shadow-sm font-black"
                   : "text-[var(--text-lo)] hover:text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
-              }`}
+                }`}
             >
               {tab.label}
             </button>
@@ -375,19 +372,18 @@ export default function KdsView({
             return (
               <div
                 key={ticket.id}
-                className={`glass-panel p-5 rounded-2xl border space-y-4 transition-all duration-300 relative group overflow-hidden flex flex-col justify-between shadow-xl ${
-                  isStale
+                className={`glass-panel p-5 rounded-2xl border space-y-4 transition-all duration-300 relative group overflow-hidden flex flex-col justify-between shadow-xl ${isStale
                     ? "bg-red-950/20 border-red-500/50 shadow-red-950/30 opacity-90"
                     : isCompleted
-                    ? "opacity-60 border-[var(--border)] bg-[var(--surface-hi)]/30"
-                    : isReady
-                    ? "bg-[#25d366]/5 border-[#25d366]/50 hover:border-[#25d366]"
-                    : isOverdue
-                    ? "bg-red-500/10 border-red-500/50 shadow-red-500/20 hover:border-red-400"
-                    : isCooking
-                    ? "bg-amber-500/5 border-amber-500/40 hover:border-amber-400"
-                    : "border-[var(--border)] hover:border-[var(--gold)]/40"
-                }`}
+                      ? "opacity-60 border-[var(--border)] bg-[var(--surface-hi)]/30"
+                      : isReady
+                        ? "bg-[#25d366]/5 border-[#25d366]/50 hover:border-[#25d366]"
+                        : isOverdue
+                          ? "bg-red-500/10 border-red-500/50 shadow-red-500/20 hover:border-red-400"
+                          : isCooking
+                            ? "bg-amber-500/5 border-amber-500/40 hover:border-amber-400"
+                            : "border-[var(--border)] hover:border-[var(--gold)]/40"
+                  }`}
               >
                 {/* Stale Ticket Expiration Warning Banner */}
                 {isStale && (
@@ -401,11 +397,10 @@ export default function KdsView({
                 {isCooking && (
                   <div className="absolute top-0 left-0 right-0 h-1 bg-black/40 overflow-hidden">
                     <div
-                      className={`h-full transition-all duration-1000 ${
-                        isOverdue
+                      className={`h-full transition-all duration-1000 ${isOverdue
                           ? "bg-gradient-to-r from-red-600 via-rose-500 to-red-400 animate-pulse w-full"
                           : "bg-gradient-to-r from-amber-500 via-[#e3b13b] to-emerald-400"
-                      }`}
+                        }`}
                       style={{ width: isOverdue ? "100%" : `${timing.progressPercent}%` }}
                     />
                   </div>
@@ -422,19 +417,18 @@ export default function KdsView({
 
                     {/* Live Reverse Countdown Timer Badge / Stale Badge */}
                     <span
-                      className={`badge-pill ${
-                        isStale
+                      className={`badge-pill ${isStale
                           ? "badge-danger animate-pulse font-black"
                           : isCompleted
-                          ? "badge-neutral font-bold"
-                          : isReady
-                          ? "badge-success font-black"
-                          : isOverdue
-                          ? "badge-danger animate-pulse font-extrabold"
-                          : isCooking
-                          ? "badge-warning font-extrabold"
-                          : "badge-info"
-                      }`}
+                            ? "badge-neutral font-bold"
+                            : isReady
+                              ? "badge-success font-black"
+                              : isOverdue
+                                ? "badge-danger animate-pulse font-extrabold"
+                                : isCooking
+                                  ? "badge-warning font-extrabold"
+                                  : "badge-info"
+                        }`}
                     >
                       {isStale ? (
                         <>
@@ -453,10 +447,10 @@ export default function KdsView({
                             {ticket.status?.toLowerCase() === "cancelled"
                               ? "CANCELLED"
                               : ticket.status?.toLowerCase() === "archived"
-                              ? "ARCHIVED"
-                              : ticket.status?.toLowerCase() === "fulfilled"
-                              ? "FULFILLED"
-                              : "COMPLETED"}
+                                ? "ARCHIVED"
+                                : ticket.status?.toLowerCase() === "fulfilled"
+                                  ? "FULFILLED"
+                                  : "COMPLETED"}
                           </span>
                         </>
                       ) : isOverdue ? (
@@ -559,13 +553,12 @@ export default function KdsView({
                     <button
                       type="button"
                       onClick={() => handleTransition(ticket.id)}
-                      className={`w-full py-2.5 rounded-xl font-bold text-xs cursor-pointer flex items-center justify-center gap-2 transition-all ${
-                        isReady
+                      className={`w-full py-2.5 rounded-xl font-bold text-xs cursor-pointer flex items-center justify-center gap-2 transition-all ${isReady
                           ? "bg-[#25d366] text-[#140c0c] font-black shadow-lg shadow-[#25d366]/20 hover:bg-[#20ba59]"
                           : ticket.status === "preparing"
-                          ? "bg-amber-500 hover:bg-amber-400 text-black font-black shadow-md"
-                          : "btn-gold animate-sheen"
-                      }`}
+                            ? "bg-amber-500 hover:bg-amber-400 text-black font-black shadow-md"
+                            : "btn-gold animate-sheen"
+                        }`}
                     >
                       {isReady ? (
                         <>

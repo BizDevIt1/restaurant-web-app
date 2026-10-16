@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
-import { X, LayoutGrid, Check, Users } from "lucide-react";
+import { X, LayoutGrid, Check, Users, AlertTriangle } from "lucide-react";
 import { TableStatus, OrderRecord } from "@/app/admin/types";
+import { isTableMatchingIdentifier } from "@/lib/tableOccupancy";
 
 interface FloorMatrixModalProps {
   isOpen: boolean;
@@ -10,7 +11,7 @@ interface FloorMatrixModalProps {
   tables: TableStatus[];
   selectedTable: number;
   onSelectTable: (tableId: number) => void;
-  orders: OrderRecord[];
+  orders?: any[];
 }
 
 export default function FloorMatrixModal({
@@ -19,7 +20,7 @@ export default function FloorMatrixModal({
   tables,
   selectedTable,
   onSelectTable,
-  orders,
+  orders = [],
 }: FloorMatrixModalProps) {
   const [sectionFilter, setSectionFilter] = useState<string>("all");
 
@@ -28,12 +29,17 @@ export default function FloorMatrixModal({
   const sections = Array.from(new Set(tables.map((t) => t.section || "Main Dining")));
 
   const getRunningOrder = (table: TableStatus) => {
+    if (!orders || orders.length === 0) return undefined;
     return orders.find(
       (o) =>
-        (o.tableId === table.id ||
+        (isTableMatchingIdentifier(table, o.tableId) ||
+          isTableMatchingIdentifier(table, o.tableName) ||
           (table.activeOrderId && (o.id === table.activeOrderId || o.kotId === table.activeOrderId))) &&
-        o.status !== "completed" &&
-        o.status !== "cancelled"
+        o.status !== "cancelled" &&
+        o.status !== "voided" &&
+        o.status !== "archived" &&
+        o.payment_status !== "paid" &&
+        o.paymentStatus !== "paid"
     );
   };
 
@@ -60,7 +66,7 @@ export default function FloorMatrixModal({
                 Dining Room Floor Matrix
               </h3>
               <p className="text-xs font-mono text-[var(--text-lo)]">
-                Select a table to assign or recall running order tab.
+                Select an available table for a new order. Occupied tables are locked until settled.
               </p>
             </div>
           </div>
@@ -98,33 +104,41 @@ export default function FloorMatrixModal({
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 overflow-y-auto pr-1 py-1">
           {filteredTables.map((t) => {
             const isSelected = t.id === selectedTable;
-            const isOccupied = t.status === "seated" || t.status === "occupied";
+            const runningOrder = getRunningOrder(t);
             const isBilled = t.status === "billing";
             const isReserved = t.status === "reserved";
-            const runningOrder = getRunningOrder(t);
+            const isOccupied =
+              Boolean(runningOrder) ||
+              t.status === "seated" ||
+              t.status === "occupied" ||
+              Boolean(t.activeOrderId);
             const runningAmount = runningOrder?.total ?? t.activeAmount;
-
             return (
               <div
                 key={t.id}
                 onClick={() => {
+                  if (isOccupied) return;
                   onSelectTable(t.id);
                   onClose();
                 }}
-                className={`p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between space-y-2 select-none ${isSelected
-                    ? "border-[var(--gold)] bg-[var(--gold-dim)] shadow-md ring-1 ring-[var(--gold)]"
-                    : isOccupied
-                      ? "border-red-500/30 bg-red-500/5 hover:border-red-500/50"
-                      : isBilled
-                        ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/50"
-                        : isReserved
-                          ? "border-blue-500/30 bg-blue-500/5 hover:border-blue-500/50"
-                          : "glass-panel hover:border-[var(--gold)]/40"
-                  }`}
+                className={`p-3 rounded-xl border transition-all flex flex-col justify-between space-y-2 select-none ${
+                  isOccupied
+                    ? "border-red-500/20 bg-red-500/5 opacity-55 cursor-not-allowed"
+                    : isSelected
+                    ? "border-[var(--gold)] bg-[var(--gold-dim)] shadow-md ring-1 ring-[var(--gold)] cursor-pointer"
+                    : isBilled
+                    ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/50 cursor-pointer"
+                    : isReserved
+                    ? "border-blue-500/30 bg-blue-500/5 hover:border-blue-500/50 cursor-pointer"
+                    : "glass-panel hover:border-[var(--gold)]/60 cursor-pointer"
+                }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-mono font-bold text-xs text-[var(--text-hi)]">
+                  <span className="font-mono font-bold text-xs text-[var(--text-hi)] flex items-center gap-1.5">
                     {t.label}
+                    {isOccupied ? (
+                      <span className="text-[10px] text-red-400" title="Table is occupied with active order">🔒</span>
+                    ) : null}
                   </span>
                   {isSelected && <Check className="w-3.5 h-3.5 text-[var(--gold)]" />}
                 </div>
@@ -134,7 +148,9 @@ export default function FloorMatrixModal({
                     {t.section || "Main Dining"}
                   </span>
                   {runningAmount !== undefined && runningAmount > 0 && (
-                    <span className="font-bold text-red-500">Rs {runningAmount.toLocaleString()}</span>
+                    <span className="font-bold text-red-400">
+                      Rs {runningAmount.toLocaleString()}
+                    </span>
                   )}
                 </div>
 
@@ -145,16 +161,23 @@ export default function FloorMatrixModal({
                   </span>
 
                   <span
-                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${isOccupied
-                        ? "text-red-500 bg-red-500/15"
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase flex items-center gap-1 ${
+                      isOccupied
+                        ? "text-red-400 bg-red-500/20 border border-red-500/30 font-bold"
                         : isBilled
-                          ? "text-amber-500 bg-amber-500/15"
-                          : isReserved
-                            ? "text-blue-500 bg-blue-500/15"
-                            : "text-emerald-500 bg-emerald-500/15"
-                      }`}
+                        ? "text-amber-400 bg-amber-500/20 border border-amber-500/30"
+                        : isReserved
+                        ? "text-blue-400 bg-blue-500/20 border border-blue-500/30"
+                        : "text-emerald-400 bg-emerald-500/15 border border-emerald-500/20 font-bold"
+                    }`}
                   >
-                    {isOccupied ? "Occupied" : isBilled ? "Billed" : isReserved ? "Reserved" : "Available"}
+                    {isOccupied
+                      ? "OCCUPIED"
+                      : isBilled
+                      ? "BILLED"
+                      : isReserved
+                      ? "RESERVED"
+                      : "AVAILABLE"}
                   </span>
                 </div>
               </div>

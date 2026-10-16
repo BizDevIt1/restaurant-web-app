@@ -1,8 +1,9 @@
 "use client";
 
 import React from "react";
-import { Clock, RotateCcw, FileSpreadsheet, ArrowRight, ShieldCheck, Sparkles, X } from "lucide-react";
+import { Clock, RotateCcw, FileSpreadsheet, ArrowRight, ShieldCheck, Sparkles, X, LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { isShiftSnoozeAllowed, getMinutesSinceShiftEnd } from "@/lib/shiftSchedule";
 
 interface ShiftContinuationModalProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ interface ShiftContinuationModalProps {
   consecutiveShiftCount?: number;
   onStartNewShift: () => void;
   onProceedToZReport?: () => void;
+  onEndShiftLogout?: () => void;
   onDismiss: () => void;
 }
 
@@ -25,11 +27,15 @@ export default function ShiftContinuationModal({
   consecutiveShiftCount = 1,
   onStartNewShift,
   onProceedToZReport,
+  onEndShiftLogout,
   onDismiss,
 }: ShiftContinuationModalProps) {
   const router = useRouter();
 
   if (!isOpen) return null;
+
+  const isSnoozeAllowed = isShiftSnoozeAllowed(shiftShortName);
+  const minutesSinceEnd = getMinutesSinceShiftEnd(shiftShortName);
 
   const handleOpenZReport = () => {
     if (onProceedToZReport) {
@@ -51,15 +57,17 @@ export default function ShiftContinuationModal({
         <div className="absolute -top-24 -left-24 w-48 h-48 bg-amber-500/10 dark:bg-amber-500/15 rounded-full blur-3xl pointer-events-none" />
         <div className="absolute -bottom-24 -right-24 w-48 h-48 bg-[var(--gold)]/10 dark:bg-[var(--gold)]/15 rounded-full blur-3xl pointer-events-none" />
 
-        {/* Close / Remind Later button in top right */}
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="absolute top-4 right-4 p-2 rounded-full bg-zinc-100 hover:bg-zinc-200 dark:bg-[var(--surface-hi)] dark:hover:bg-[var(--surface-hi)]/80 text-zinc-600 dark:text-[var(--text-lo)] hover:text-zinc-900 dark:hover:text-[var(--text-hi)] border border-zinc-200 dark:border-[var(--border)] transition-colors cursor-pointer"
-          title="Remind me later"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        {/* Close / Remind Later button in top right — strictly active if within 60 minutes */}
+        {isSnoozeAllowed && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="absolute top-4 right-4 p-2 rounded-full bg-zinc-100 hover:bg-zinc-200 dark:bg-[var(--surface-hi)] dark:hover:bg-[var(--surface-hi)]/80 text-zinc-600 dark:text-[var(--text-lo)] hover:text-zinc-900 dark:hover:text-[var(--text-hi)] border border-zinc-200 dark:border-[var(--border)] transition-colors cursor-pointer"
+            title="Remind me later"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
 
         {/* Header Icon & Status Badge */}
         <div className="flex flex-col items-center text-center space-y-2">
@@ -141,15 +149,33 @@ export default function ShiftContinuationModal({
             <ArrowRight className="w-4 h-4 text-[#342c14]" />
           </button>
 
-          {/* Remind Me Later (5 min) */}
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="w-full py-2.5 px-4 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface-hi)]/80 border border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--text-hi)] text-xs font-mono font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
-          >
-            <Clock className="w-3.5 h-3.5 text-[var(--gold)]" />
-            <span>Remind Me Later (5 min)</span>
-          </button>
+          {/* Remind Me Later (15 min) — strictly visible within 60 minutes */}
+          {isSnoozeAllowed ? (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="w-full py-2.5 px-4 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface-hi)]/80 border border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--text-hi)] text-xs font-mono font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <Clock className="w-3.5 h-3.5 text-[var(--gold)]" />
+              <span>Remind Me Later (15 min)</span>
+            </button>
+          ) : (
+            <div className="py-2 px-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-center text-[10.5px] font-mono">
+              Snooze expired ({minutesSinceEnd}m past scheduled end). Action required.
+            </div>
+          )}
+
+          {/* End Shift & Logout — direct logout without Z-Report */}
+          {onEndShiftLogout && (
+            <button
+              type="button"
+              onClick={onEndShiftLogout}
+              className="w-full py-2.5 px-4 rounded-xl bg-[var(--surface)] hover:bg-rose-500/10 border border-[var(--border)] hover:border-rose-500/30 text-[var(--text-lo)] hover:text-rose-400 text-xs font-mono font-medium flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5 text-rose-400" />
+              <span>End Shift &amp; Logout</span>
+            </button>
+          )}
         </div>
       </div>
     </div>

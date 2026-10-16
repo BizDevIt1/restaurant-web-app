@@ -31,6 +31,10 @@ import { useAuth } from "../../context/AuthContext";
 import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
 import { saveStoredOrders, getStoredOrders } from "../../../../lib/tenantStore";
+import {
+  subscribeToDeliveryReadyAlerts,
+  playRemoteAudioChime,
+} from "../../../../lib/kitchenWaiterBridge";
 
 interface RiderStaffRecord {
   id: string;
@@ -109,6 +113,8 @@ export default function RiderDispatchView({
   // Fetch real delivery orders directly from Supabase
   useEffect(() => {
     let isMounted = true;
+    let channel: any = null;
+
     const fetchDeliveryOrders = async () => {
       try {
         const supabase = createClient();
@@ -124,27 +130,67 @@ export default function RiderDispatchView({
           .order("created_at", { ascending: false });
 
         if (!error && data && isMounted && (!externalOrders || externalOrders.length === 0)) {
-          const mapped: OrderRecord[] = data.map((o: any) => ({
-            id: o.order_number || String(o.id),
-            orderChannel: "delivery",
-            customerName: o.customer_name || "Delivery Customer",
-            customerPhone: o.customer_phone || "",
-            delivery_zone: o.delivery_zone || "",
-            rider_id: o.rider_id || null,
-            assignedRiderId: o.rider_id || undefined,
-            assignedRiderName: o.assigned_rider_name || undefined,
-            items: o.items || [],
-            subtotal: Number(o.subtotal || 0),
-            taxAmount: Number(o.tax_amount || 0),
-            discountPercent: 0,
-            discountAmount: Number(o.discount_amount || 0),
-            total: Number(o.total_amount || 0),
-            paymentMethod: o.payment_method || "cash",
-            cashierName: o.cashier_name || "Cashier",
-            timestamp: o.created_at || new Date().toISOString(),
-            status: o.order_status || "queued",
-          }));
+          const mapped: OrderRecord[] = data.map((o: any) => {
+            const rawNum = String(o.order_number || o.id || "");
+            const tokenDigits = rawNum.replace(/[^0-9]/g, "").slice(-4) || String(o.id).slice(-4);
+            const token = o.bag_token || o.token || `#${tokenDigits.padStart(4, "0")}`;
+
+            return {
+              id: o.order_number || String(o.id),
+              orderChannel: "delivery",
+              customerName: o.customer_name || "Delivery Customer",
+              customerPhone: o.customer_phone || "",
+              delivery_zone: o.delivery_zone || "",
+              rider_id: o.rider_id || null,
+              assignedRiderId: o.rider_id || undefined,
+              assignedRiderName: o.assigned_rider_name || undefined,
+              items: o.items || [],
+              subtotal: Number(o.subtotal || 0),
+              taxAmount: Number(o.tax_amount || 0),
+              discountPercent: 0,
+              discountAmount: Number(o.discount_amount || 0),
+              total: Number(o.total_amount || 0),
+              paymentMethod: o.payment_method || "cash",
+              cashierName: o.cashier_name || "Cashier",
+              timestamp: o.created_at || new Date().toISOString(),
+              status: o.order_status || "queued",
+              token,
+              bag_token: token,
+            } as any;
+          });
           setInternalOrders(mapped);
+        }
+
+        // Realtime subscription on orders
+        if (!channel) {
+          const subId = Math.random().toString(36).substring(2, 7);
+          channel = supabase
+            .channel(`rider_dispatch_${resolvedRestId}_${subId}`)
+            .on(
+              "postgres_changes",
+              {
+                event: "*",
+                schema: "public",
+                table: "orders",
+                filter: `restaurant_id=eq.${resolvedRestId}`,
+              },
+              (payload: any) => {
+                const row = payload.new;
+                if (row && row.order_channel === "delivery") {
+                  if (row.order_status === "ready") {
+                    try {
+                      playRemoteAudioChime(true);
+                    } catch {}
+                    const rawNum = String(row.order_number || row.id || "");
+                    const tokenDigits = rawNum.replace(/[^0-9]/g, "").slice(-4) || String(row.id).slice(-4);
+                    const token = row.bag_token || row.token || `#${tokenDigits.padStart(4, "0")}`;
+                    showToast(`🛵 Delivery Order ${row.order_number || row.id} is Ready for Dispatch! Bag Token: ${token}`);
+                  }
+                  fetchDeliveryOrders();
+                }
+              }
+            )
+            .subscribe();
         }
       } catch (err) {
         console.warn("[RiderDispatchView] Error fetching orders:", err);
@@ -152,10 +198,24 @@ export default function RiderDispatchView({
     };
 
     fetchDeliveryOrders();
+
+    // Cross-terminal instant ready alert subscription
+    const unsubDelivery = subscribeToDeliveryReadyAlerts((alert) => {
+      try {
+        playRemoteAudioChime(true);
+      } catch {}
+      showToast(
+        `🛵 Delivery Order ${alert.orderNumber || alert.ticketId} is Ready for Dispatch! Bag Token: ${alert.token || ""}`
+      );
+      fetchDeliveryOrders();
+    });
+
     return () => {
       isMounted = false;
+      if (channel) channel.unsubscribe();
+      unsubDelivery();
     };
-  }, [user, externalOrders]);
+  }, [user, externalOrders, showToast]);
 
   // Fetch active riders directly from Supabase staff_members
   useEffect(() => {
@@ -627,14 +687,22 @@ export default function RiderDispatchView({
                   <div className="space-y-3">
                     {/* Header: Order ID & Status Badge */}
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono font-black text-sm text-[var(--gold)]">
-                        {ord.id}
-                      </span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono font-black text-sm text-[var(--gold)]">
+                          {ord.id}
+                        </span>
+                        {((ord as any).bag_token || (ord as any).token) && (
+                          <span className="px-2 py-0.5 rounded-lg bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 font-mono font-black text-[11px] flex items-center gap-1 shadow-xs">
+                            <Package className="w-3 h-3 text-indigo-400" />
+                            <span>Bag: {(ord as any).bag_token || (ord as any).token}</span>
+                          </span>
+                        )}
+                      </div>
 
                       {isReady ? (
-                        <span className="badge-pill badge-success">
+                        <span className="badge-pill badge-success animate-pulse font-black">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Ready for Handoff</span>
+                          <span>Ready for Pickup / Out for Delivery</span>
                         </span>
                       ) : isOut ? (
                         <span className="badge-pill badge-info">

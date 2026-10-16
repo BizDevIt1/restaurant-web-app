@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { AuthProvider, useAuth } from "../admin/context/AuthContext";
 import { clearUserSession } from "../../lib/tenantStore";
+import { recordStaffShiftLogout } from "../../lib/universalShiftLogging";
 import ConfirmModal from "./pos/components/ConfirmModal";
 import { TerminalSidebarProvider, useTerminalSidebar } from "./TerminalSidebarContext";
 
@@ -99,6 +100,57 @@ function TerminalShell({ children }: { children: React.ReactNode }) {
     if (!user) {
       const redirectUrl = `/login?redirect=${encodeURIComponent(pathname || "/terminal")}`;
       router.replace(redirectUrl);
+      return;
+    }
+
+    // Strict Role-Based Financial Isolation Guard:
+    // Ensure Waiters, Chefs, and Riders cannot access POS registers or financial Z-Report views
+    const staffRoleClean = (user.staffRole || "").toLowerCase().trim();
+    const roleClean = (user.role || "").toLowerCase().trim();
+    const terminalAccessClean = String(user.terminalAccess || "").toUpperCase().trim();
+
+    const isWaiter =
+      staffRoleClean === "waiter" ||
+      staffRoleClean === "server" ||
+      roleClean === "waiter" ||
+      roleClean === "server" ||
+      terminalAccessClean === "WAITER_ONLY" ||
+      terminalAccessClean === "WAITER";
+
+    const isChef =
+      staffRoleClean === "chef" ||
+      staffRoleClean === "kitchen" ||
+      staffRoleClean === "cook" ||
+      staffRoleClean === "kds" ||
+      roleClean === "chef" ||
+      roleClean === "kitchen" ||
+      roleClean === "cook" ||
+      roleClean === "kds" ||
+      terminalAccessClean === "KDS_ONLY" ||
+      terminalAccessClean === "KITCHEN_ONLY";
+
+    const isRider =
+      staffRoleClean === "rider" ||
+      roleClean === "rider" ||
+      terminalAccessClean === "RIDER_ONLY";
+
+    const isFinancialPath =
+      pathname.startsWith("/terminal/pos") ||
+      pathname.startsWith("/terminal/z-report");
+
+    if (isFinancialPath) {
+      if (isWaiter) {
+        router.replace("/terminal/waiter");
+        return;
+      }
+      if (isChef) {
+        router.replace("/terminal/kitchen");
+        return;
+      }
+      if (isRider) {
+        router.replace("/terminal/rider");
+        return;
+      }
     }
   }, [user, isMounted, pathname, router]);
 
@@ -106,7 +158,12 @@ function TerminalShell({ children }: { children: React.ReactNode }) {
     setIsLogoutConfirmOpen(true);
   };
 
-  const handleConfirmLogout = () => {
+  const handleConfirmLogout = async () => {
+    try {
+      await recordStaffShiftLogout(user);
+    } catch (e) {
+      console.warn("Failed recording staff shift logout:", e);
+    }
     clearUserSession();
     logout();
     router.replace("/login");
@@ -206,7 +263,24 @@ function TerminalShell({ children }: { children: React.ReactNode }) {
             {/* Operator Profile Interactive Pill - Routes to dedicated profile page */}
             <button
               type="button"
-              onClick={() => router.push("/terminal/profile")}
+              onClick={() => {
+                const rawRole = (user.staffRole || "").toLowerCase().trim();
+                const isChef =
+                  rawRole === "chef" ||
+                  rawRole === "kitchen" ||
+                  rawRole === "cook" ||
+                  rawRole === "kds" ||
+                  user.terminalAccess === "KDS_ONLY" ||
+                  (user.terminalAccess as string) === "KITCHEN_ONLY";
+                if (pathname?.startsWith("/terminal/kitchen") || isChef) {
+                  router.push("/terminal/kitchen?tab=profile");
+                  if (typeof window !== "undefined") {
+                    window.dispatchEvent(new CustomEvent("kitchen-tab-change", { detail: "profile" }));
+                  }
+                } else {
+                  router.push("/terminal/profile");
+                }
+              }}
               className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-xl bg-[var(--surface-hi)]/80 hover:bg-[var(--surface-hi)] border border-[var(--border)] hover:border-[var(--gold)]/40 text-xs font-mono shadow-xs cursor-pointer transition-all active:scale-95 group text-left shrink-0"
               title="Open Staff Profile & Shift Schedule"
             >

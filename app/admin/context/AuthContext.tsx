@@ -16,6 +16,7 @@ import {
 } from "../../../lib/tenantStore";
 import {
   validateCashierShiftWindow,
+  validateStaffShiftWindow,
   ShiftWindowValidation,
   isShiftWindowConcluded,
 } from "../../../lib/shiftSchedule";
@@ -510,18 +511,26 @@ export function AuthProvider({
   const isAdmin = isStandaloneAdmin || isBranchAdmin;
   const isFranchiser = isFranchiseOwner;
 
-  // Shift window validation for cashiers
-  const isCashier = Boolean(
+  // Shift window validation for all terminal staff (Cashiers, Waiters, Chefs)
+  const rawStaffRole = String(user?.staffRole || (user as { role?: unknown })?.role || "").toLowerCase();
+  const rawAccess = String(user?.terminalAccess || "").toUpperCase();
+  const isTerminalStaff = Boolean(
     user &&
-    (user.staffRole === "cashier" ||
-      (user.role as string) === "cashier" ||
-      user.terminalAccess === "POS_ONLY")
+    (rawStaffRole === "cashier" ||
+      rawStaffRole === "waiter" ||
+      rawStaffRole === "server" ||
+      rawStaffRole === "chef" ||
+      rawStaffRole === "kitchen" ||
+      rawStaffRole === "cook" ||
+      rawAccess === "POS_ONLY" ||
+      rawAccess === "WAITER_ONLY" ||
+      rawAccess === "KDS_ONLY")
   );
 
   const shiftValidation = useMemo<ShiftWindowValidation | null>(() => {
-    if (!user || !isCashier || !user.assignedShift) return null;
-    return validateCashierShiftWindow(user.assignedShift);
-  }, [user, isCashier]);
+    if (!user || !isTerminalStaff || !user.assignedShift) return null;
+    return validateStaffShiftWindow(user.assignedShift, new Date(), user);
+  }, [user, isTerminalStaff]);
 
   const isShiftLocked = Boolean(isShiftWindowConcluded(shiftValidation));
 

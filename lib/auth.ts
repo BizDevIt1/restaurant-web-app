@@ -13,7 +13,7 @@ export interface AuthSession {
   organizationId: number;
   restaurantName: string;
   role: string; // e.g. 'owner', 'manager', 'cashier', 'chef', 'rider', 'STANDALONE_ADMIN'
-  terminalAccess: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY" | "MANAGER_ONLY";
+  terminalAccess: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY" | "MANAGER_ONLY" | "WAITER_ONLY";
   branchId?: number | null;
   // UI & branding hydration metadata
   name?: string;

@@ -49,6 +49,53 @@ export default function ZReportClient() {
     return sanitizeUserSession(getActiveUserSession()) || user;
   }, [user]);
 
+  // Strict Role-Based Financial Isolation Guard:
+  // Immediately redirect Waiters, Chefs, and Riders away from Z-Report & Cash balancing views
+  useEffect(() => {
+    const activeStaff = user || activeSessionUser;
+    if (!activeStaff) return;
+    const staffRoleClean = (activeStaff.staffRole || "").toLowerCase().trim();
+    const roleClean = (activeStaff.role || "").toLowerCase().trim();
+    const terminalAccessClean = String(activeStaff.terminalAccess || "").toUpperCase().trim();
+
+    if (
+      staffRoleClean === "waiter" ||
+      staffRoleClean === "server" ||
+      roleClean === "waiter" ||
+      roleClean === "server" ||
+      terminalAccessClean === "WAITER_ONLY" ||
+      terminalAccessClean === "WAITER"
+    ) {
+      router.replace("/terminal/waiter");
+      return;
+    }
+
+    if (
+      staffRoleClean === "chef" ||
+      staffRoleClean === "kitchen" ||
+      staffRoleClean === "cook" ||
+      staffRoleClean === "kds" ||
+      roleClean === "chef" ||
+      roleClean === "kitchen" ||
+      roleClean === "cook" ||
+      roleClean === "kds" ||
+      terminalAccessClean === "KDS_ONLY" ||
+      terminalAccessClean === "KITCHEN_ONLY"
+    ) {
+      router.replace("/terminal/kitchen");
+      return;
+    }
+
+    if (
+      staffRoleClean === "rider" ||
+      roleClean === "rider" ||
+      terminalAccessClean === "RIDER_ONLY"
+    ) {
+      router.replace("/terminal/rider");
+      return;
+    }
+  }, [user, activeSessionUser, router]);
+
   // Strict Shift Window Lockout for Cashiers
   const isCashier = Boolean(
     (user && (user.staffRole === "cashier" || (user.role as string) === "cashier" || user.terminalAccess === "POS_ONLY")) ||

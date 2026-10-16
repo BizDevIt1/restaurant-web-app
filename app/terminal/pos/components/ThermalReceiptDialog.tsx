@@ -1,9 +1,8 @@
 "use client";
 
 import React from "react";
-import { X, Printer, Sparkles, CheckCircle2 } from "lucide-react";
+import { X, Printer, CheckCircle2 } from "lucide-react";
 import { OrderRecord } from "@/app/admin/types";
-import { useAuth } from "@/app/admin/context/AuthContext";
 
 interface ThermalReceiptDialogProps {
   order: OrderRecord | null;
@@ -26,17 +25,7 @@ export default function ThermalReceiptDialog({
   address,
   phone,
   autoPrint = false,
-  enableKitchenKds,
 }: ThermalReceiptDialogProps) {
-  const { user } = useAuth();
-
-  // Strict Kitchen KDS module entitlement evaluation
-  const isKdsEnabled =
-    enableKitchenKds === false || user?.enableKitchenKds === false
-      ? false
-      : user?.assignedFeatures && user.assignedFeatures.length > 0 && !user.assignedFeatures.some((f) => f.toUpperCase() === "KITCHEN" || f.toUpperCase() === "KDS")
-      ? false
-      : Boolean(user?.enableKitchenKds ?? enableKitchenKds ?? true);
 
   // Auto-invoke browser print dialog when autoPrint is enabled (Pure POS / Direct Thermal mode)
   React.useEffect(() => {
@@ -57,9 +46,6 @@ export default function ThermalReceiptDialog({
       window.print();
     }
   };
-
-  const cleanTrackingId = String(order.id || "").replace(/^[#%23]+/, "").trim();
-  const trackingUrl = `/track/${encodeURIComponent(cleanTrackingId)}`;
 
   return (
     <div
@@ -258,18 +244,7 @@ export default function ThermalReceiptDialog({
         </div>
 
         {/* Bottom Actions */}
-        <div className={`w-full grid ${isKdsEnabled ? "grid-cols-3" : "grid-cols-2"} gap-2.5 no-print pt-2`}>
-          {isKdsEnabled && (
-            <button
-              type="button"
-              onClick={() => window.open(trackingUrl, "_blank")}
-              className="py-3 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-400/35 text-xs font-bold cursor-pointer transition-colors text-center flex items-center justify-center gap-1.5 font-mono shadow-xs"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-              <span>Tracker</span>
-            </button>
-          )}
-
+        <div className="w-full grid grid-cols-2 gap-2.5 no-print pt-2">
           <button
             type="button"
             onClick={handlePrintSlip}

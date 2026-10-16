@@ -83,17 +83,17 @@ export async function getValidTenantContext(user: any): Promise<TenantContext> {
       const { data: tenant } = await supabase
         .from("restaurants")
         .select("id, brand_name")
-        .order("id", { ascending: true })
+        .order("id", { ascending: false })
         .limit(1)
         .maybeSingle();
 
       if (tenant && tenant.id) {
         restId = Number(tenant.id);
       } else {
-        restId = 33; // verified fallback tenant
+        restId = 40; // verified active tenant
       }
     } catch {
-      restId = 33;
+      restId = 40;
     }
   }
 

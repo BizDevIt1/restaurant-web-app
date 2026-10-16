@@ -749,16 +749,23 @@ export function calculateVariantPortions(
 /**
  * Simulates raw material consumption for items currently in cart,
  * producing an effective inventory state in memory without touching the database.
+ * Supports temporary reservations from active, undelivered orders to prevent double-ordering.
  * Every size variant strictly consumes its own unique recipe quantities.
  */
 export function simulateCartRawMaterials(
   cart: CartItemLike[],
   recipeRows: RecipeItemData[] | any[],
-  baseMaterials: Map<string, RawMaterialStockData>
+  baseMaterials: Map<string, RawMaterialStockData>,
+  reservedMaterials?: Map<string, number>
 ): Map<string, RawMaterialStockData> {
   const effective = new Map<string, RawMaterialStockData>();
   baseMaterials.forEach((v, k) => {
-    effective.set(String(k), { ...v, current_stock: Math.max(0, Number(v.current_stock) || 0) });
+    const rawStock = Math.max(0, Number(v.current_stock) || 0);
+    const reserved = reservedMaterials
+      ? (reservedMaterials.get(String(k)) ?? reservedMaterials.get(String(v.id ?? "")) ?? 0)
+      : 0;
+    const effectiveStock = Math.max(0, Math.round((rawStock - reserved) * 1000) / 1000);
+    effective.set(String(k), { ...v, current_stock: effectiveStock });
   });
 
   // Seed any raw materials from recipeRows if not already in effective
@@ -766,10 +773,15 @@ export function simulateCartRawMaterials(
     for (const r of recipeRows) {
       const rawObj = Array.isArray(r.raw_materials) ? r.raw_materials[0] : r.raw_materials;
       if (rawObj && rawObj.id && !effective.has(String(rawObj.id))) {
+        const rawStock = Math.max(0, Number(rawObj.current_stock) || 0);
+        const reserved = reservedMaterials
+          ? (reservedMaterials.get(String(rawObj.id)) ?? 0)
+          : 0;
+        const effectiveStock = Math.max(0, Math.round((rawStock - reserved) * 1000) / 1000);
         effective.set(String(rawObj.id), {
           id: rawObj.id,
           name: rawObj.name,
-          current_stock: Math.max(0, Number(rawObj.current_stock) || 0),
+          current_stock: effectiveStock,
           min_safety_stock: Number(rawObj.min_safety_stock) || 0,
           cost_per_unit: Number(rawObj.cost_per_unit) || 0,
           unit: rawObj.unit,
@@ -929,3 +941,214 @@ export function getItemCartQuantity(
     return total;
   }, 0);
 }
+
+export interface ActiveOrderLike {
+  id?: string | number;
+  status?: string;
+  order_status?: string;
+  is_deducted?: boolean;
+  isDeducted?: boolean;
+  items?: Array<{
+    id?: string | number;
+    name?: string;
+    qty?: number;
+    quantity?: number;
+    selectedVariant?: any;
+    variant?: any;
+    variant_id?: string | number | null;
+    variant_name?: string | null;
+    price?: number;
+    preparation_time?: number;
+    is_deducted?: boolean;
+    isDeducted?: boolean;
+    item?: any;
+  }>;
+}
+
+/**
+ * Computes raw material quantities temporarily reserved across all active, undelivered orders.
+ * Orders marked 'completed', 'served', 'cancelled', 'voided', 'archived', or with isDeducted: true
+ * are excluded from reservation since their raw material impact is either permanently settled or canceled.
+ */
+export function computeReservedMaterialsFromActiveOrders(
+  activeOrders: ActiveOrderLike[] = [],
+  recipeRows: RecipeItemData[] | any[] = []
+): Map<string, number> {
+  const reservedMap = new Map<string, number>();
+  if (!activeOrders || activeOrders.length === 0) return reservedMap;
+
+  const addReservation = (matId: string | number, qty: number) => {
+    if (!matId || qty <= 0) return;
+    const strId = String(matId);
+    const existing = reservedMap.get(strId) || 0;
+    reservedMap.set(strId, Math.round((existing + qty) * 1000) / 1000);
+  };
+
+  for (const ord of activeOrders) {
+    const status = String(ord.status || ord.order_status || "").toLowerCase().trim();
+    const isOrderDeducted = Boolean(
+      ord.is_deducted === true ||
+      ord.isDeducted === true ||
+      String((ord as any).is_deducted) === "true" ||
+      String((ord as any).isDeducted) === "true" ||
+      (Array.isArray(ord.items) && ord.items.some((it: any) => it.is_deducted === true || it.isDeducted === true)) ||
+      (typeof ord.items === "object" && ord.items !== null && ((ord.items as any).is_deducted === true || (ord.items as any).isDeducted === true))
+    );
+
+    if (
+      status === "completed" ||
+      status === "served" ||
+      status === "cancelled" ||
+      status === "voided" ||
+      status === "archived" ||
+      isOrderDeducted
+    ) {
+      continue;
+    }
+
+    const items = ord.items;
+    if (!items || !Array.isArray(items)) continue;
+
+    for (const it of items) {
+      const qty = Number(it.qty ?? it.quantity ?? (it as any).item?.quantity ?? 1);
+      if (qty <= 0) continue;
+
+      const rawItemId = it.id ? String(it.id) : (it as any).item?.id ? String((it as any).item.id) : "";
+      const baseId = rawItemId.includes("_") ? rawItemId.split("_")[0] : rawItemId;
+
+      let allDishRecipes = (recipeRows || []).filter(
+        (r: any) =>
+          String(r.menu_item_id) === baseId ||
+          String(r.menu_item_id) === rawItemId
+      );
+
+      if (allDishRecipes.length === 0) {
+        if (Array.isArray((it as any).recipe) && (it as any).recipe.length > 0) {
+          allDishRecipes = (it as any).recipe;
+        } else if (Array.isArray((it as any).recipe_items) && (it as any).recipe_items.length > 0) {
+          allDishRecipes = (it as any).recipe_items;
+        }
+      }
+
+      // Identify variant object
+      let variantObj =
+        it.selectedVariant ||
+        it.variant ||
+        (it as any).item?.selectedVariant ||
+        (it as any).item?.variant;
+
+      if (!variantObj && (it.variant_id || it.variant_name)) {
+        variantObj = { id: it.variant_id, name: it.variant_name };
+      }
+
+      if (variantObj) {
+        const bom = resolveVariantBOM(variantObj, allDishRecipes, it.price ?? (it as any).item?.price);
+        if (bom.length > 0) {
+          for (const ing of bom) {
+            const reqQty = Number(ing.quantity_required) || 0;
+            addReservation(ing.raw_material_id, reqQty * qty);
+          }
+          continue;
+        }
+      }
+
+      // Base recipes
+      const baseRecipes = allDishRecipes.filter((r: any) => !r.variant_id && !r.variant_name);
+      const activeRecipes = baseRecipes.length > 0 ? baseRecipes : allDishRecipes;
+
+      for (const r of activeRecipes) {
+        const reqQty = Number(r.quantity_required) || 0;
+        addReservation(r.raw_material_id, reqQty * qty);
+      }
+    }
+  }
+
+  return reservedMap;
+}
+
+/**
+ * Calculates the total portion count of a specific menu item or variant currently reserved in active orders.
+ */
+export function getItemActiveReservedQuantity(
+  activeOrders: ActiveOrderLike[] = [],
+  item: { id: string | number; name?: string },
+  variant?: { id?: string | number; name?: string }
+): number {
+  if (!activeOrders || activeOrders.length === 0) return 0;
+  const rawItemId = String(item.id);
+  const baseItemId = rawItemId.includes("_") ? rawItemId.split("_")[0] : rawItemId;
+  const itemName = (item.name || "").trim().toLowerCase();
+
+  let totalReserved = 0;
+
+  for (const ord of activeOrders) {
+    const status = String(ord.status || ord.order_status || "").toLowerCase().trim();
+    const isOrderDeducted = Boolean(
+      ord.is_deducted === true ||
+      ord.isDeducted === true ||
+      String((ord as any).is_deducted) === "true" ||
+      String((ord as any).isDeducted) === "true" ||
+      (Array.isArray(ord.items) && ord.items.some((it: any) => it.is_deducted === true || it.isDeducted === true)) ||
+      (typeof ord.items === "object" && ord.items !== null && ((ord.items as any).is_deducted === true || (ord.items as any).isDeducted === true))
+    );
+
+    if (
+      status === "completed" ||
+      status === "served" ||
+      status === "cancelled" ||
+      status === "voided" ||
+      status === "archived" ||
+      isOrderDeducted
+    ) {
+      continue;
+    }
+
+    const items = ord.items;
+    if (!items || !Array.isArray(items)) continue;
+
+    for (const it of items) {
+      const itRawId = String(it.id || (it as any).item?.id || "");
+      const itBaseId = itRawId.includes("_") ? itRawId.split("_")[0] : itRawId;
+      const itName = (it.name || (it as any).item?.name || "").trim().toLowerCase();
+      const parenthesizedMatch = itName.match(/^(.+?)\s*\(([^)]+)\)$/);
+      const cleanBaseName = parenthesizedMatch ? parenthesizedMatch[1].trim() : itName;
+
+      const matchesItem =
+        (itBaseId && itBaseId === baseItemId) ||
+        (itRawId && itRawId === rawItemId) ||
+        (itemName && (cleanBaseName === itemName || itName === itemName));
+
+      if (!matchesItem) continue;
+
+      const qty = Number(it.qty ?? it.quantity ?? (it as any).item?.quantity ?? 1);
+      if (qty <= 0) continue;
+
+      if (variant) {
+        const vId = variant.id !== undefined && variant.id !== null ? String(variant.id) : "";
+        const vName = (variant.name || "").trim().toLowerCase();
+        const itVar = it.selectedVariant || it.variant || (it as any).item?.selectedVariant;
+        const itExtractedVar = parenthesizedMatch ? parenthesizedMatch[2].trim().toLowerCase() : "";
+        const itVarId = it.variant_id ? String(it.variant_id) : (itVar?.id ? String(itVar.id) : "");
+        const itVarName = (it.variant_name || itVar?.name || itExtractedVar || "").trim().toLowerCase();
+
+        const matchesVariant =
+          (vId && itVarId === vId) ||
+          (vName && itVarName === vName) ||
+          (itVar && vId && String(itVar.id) === vId) ||
+          (itVar && vName && itVar.name && String(itVar.name).trim().toLowerCase() === vName) ||
+          (vName && itExtractedVar === vName) ||
+          (vId && itRawId.endsWith(`_${vId}`)) ||
+          (vName && itRawId.endsWith(`_${vName.replace(/\s+/g, "_")}`));
+
+        if (matchesVariant) {
+          totalReserved += qty;
+        }
+      } else {
+        totalReserved += qty;
+      }
+    }
+  }
+
+  return totalReserved;
+}
+

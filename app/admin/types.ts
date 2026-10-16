@@ -38,9 +38,11 @@ export interface AuthenticatedUser {
   branchesCount?: number;
   organizationId?: string;
   restaurantId?: string;
-  terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY" | "MANAGER_ONLY";
+  terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY" | "MANAGER_ONLY" | "WAITER_ONLY";
   staffRole?: "manager" | "cashier" | "chef" | "rider" | "waiter";
   assignedShift?: string;
+  assigned_station?: "grill" | "fry" | "pastry" | "beverages" | "assembly" | string | null;
+  assignedStation?: "grill" | "fry" | "pastry" | "beverages" | "assembly" | string | null;
   enableKitchenKds?: boolean;
   enableTableService?: boolean;
   enableDirectThermalPrint?: boolean;
@@ -155,11 +157,33 @@ export interface StaffMember {
     | "Night Owl"
     | string;
   status: "active" | "on_break" | "offline" | "inactive" | "suspended";
-  assignedScreen: "POS Counter" | "Kitchen (KDS)" | "Rider Dispatch" | "Full Admin";
-  terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY";
+  assignedScreen: "POS Counter" | "Kitchen (KDS)" | "Rider Dispatch" | "Full Admin" | "Waiter Station" | "Manager Terminal";
+  terminalAccess?: "FULL_ADMIN" | "POS_ONLY" | "KDS_ONLY" | "RIDER_ONLY" | "WAITER_ONLY" | "MANAGER_ONLY";
   assigned_zones?: string[];
+  assigned_station?: "grill" | "fry" | "pastry" | "beverages" | "assembly" | string | null;
+  assignedStation?: "grill" | "fry" | "pastry" | "beverages" | "assembly" | string | null;
   avatar: string;
   joinedDate: string;
+}
+
+export type KitchenStationType =
+  | "all"
+  | "grill"
+  | "fry"
+  | "pastry"
+  | "beverages"
+  | "assembly"
+  | "desi"
+  | "fast_food"
+  | string;
+
+export interface KitchenStation {
+  id: number | string;
+  restaurant_id: number | string;
+  station_name: KitchenStationType | string;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface RiderDelivery {
@@ -243,6 +267,9 @@ export interface MenuItem {
   imageIcon: string;
   description?: string;
   isPopular?: boolean;
+  is_popular?: boolean;
+  isFeatured?: boolean;
+  is_featured?: boolean;
   recipeCost?: number;
   recipeMargin?: number;
   hasRecipe?: boolean;
@@ -250,6 +277,8 @@ export interface MenuItem {
   image_url?: string;
   imageUrl?: string;
   selectedVariant?: ItemVariant;
+  kitchen_station?: KitchenStationType | string;
+  station?: KitchenStationType | string;
   // Dynamic Recipe Availability & Stock Persistence helpers:
   is_available?: boolean;
   in_stock?: boolean;
@@ -282,6 +311,8 @@ export interface TableStatus {
 
 export interface KitchenTicket {
   id: string;
+  dbId?: string | number;
+  ticket_number?: string;
   tableOrChannel: string;
   orderType: "dine_in" | "takeaway" | "delivery";
   elapsedMinutes: number;
@@ -296,10 +327,15 @@ export interface KitchenTicket {
     variant?: ItemVariant;
     variant_id?: string | number | null;
     variant_name?: string | null;
+    modifiers?: string[];
+    category?: string;
+    station?: KitchenStationType | string;
+    kitchen_station?: KitchenStationType | string;
   }[];
-  status: "queued" | "preparing" | "ready" | "completed" | "cancelled" | "archived" | "fulfilled" | string;
+  status: "queued" | "preparing" | "ready" | "completed" | "cancelled" | "archived" | "fulfilled" | "paused" | "voided" | string;
   serverName: string;
-  priority?: "urgent" | "normal";
+  priority?: KitchenTicketPriority;
+  priority_reason?: KitchenTicketPriorityReason | string | null;
   createdAt?: string;
   created_at?: string;
   isDeducted?: boolean;
@@ -308,6 +344,100 @@ export interface KitchenTicket {
   prep_timer_started_at?: string;
   estimatedPrepTime?: number;
   estimated_prep_time?: number;
+  station_assigned?: "grill" | "fry" | "pastry" | "beverages" | "assembly" | string | null;
+  station?: "grill" | "fry" | "pastry" | "beverages" | "assembly" | string | null;
+  items_status?: KdsItemStatusRecord[] | null;
+  printed_at?: string | null;
+  reprint_count?: number;
+  ready_for_pickup_at?: string | null;
+  picked_up_at?: string | null;
+  completed_at?: string | null;
+  completedAt?: string | null;
+  order_type?: "dine_in" | "takeaway" | "delivery" | string;
+  customer_name?: string | null;
+  customerName?: string | null;
+  tableId?: number | string;
+  tableName?: string;
+  table_id?: number | string;
+  table_number?: string;
+  customer_phone?: string | null;
+  customerPhone?: string | null;
+  delivery_address?: string | null;
+  deliveryAddress?: string | null;
+  delivery_area?: string | null;
+  deliveryArea?: string | null;
+  rider_name?: string | null;
+  riderName?: string | null;
+  rider_eta?: number | string | null;
+  riderEta?: number | string | null;
+  rider_delayed?: boolean | null;
+  riderDelayed?: boolean | null;
+  rider_waiting_minutes?: number | null;
+  rider_waiting_since?: string | null;
+  notes?: string | null;
+  chef_notes?: string | null;
+  paused_at?: string | null;
+  pausedAt?: string | null;
+  pause_reason?: string | null;
+  pauseReason?: string | null;
+  total_paused_seconds?: number | null;
+  totalPausedSeconds?: number | null;
+  modifications?: KitchenTicketModification[] | null;
+  void_reason?: string | null;
+  voidReason?: string | null;
+  voided_at?: string | null;
+  voidedAt?: string | null;
+  isExpired?: boolean;
+  is_expired?: boolean;
+  orderId?: string | number;
+}
+
+export interface KitchenTicketModification {
+  type: "added" | "removed" | "qty_changed";
+  item_name: string;
+  qty?: number;
+  old_qty?: number;
+  new_qty?: number;
+  modified_at: string;
+  modified_by?: string;
+}
+
+export interface KitchenPerformanceDaily {
+  id?: number | string;
+  chef_id: string;
+  restaurant_id: number | string;
+  date: string;
+  orders_completed: number;
+  avg_prep_time_seconds: number;
+  on_time_orders: number;
+  overdue_orders: number;
+  items_cooked: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type KitchenTicketPriority = "rush" | "high" | "normal" | "chill" | "urgent";
+
+export type KitchenTicketPriorityReason =
+  | "vip_customer"
+  | "delivery_sla"
+  | "manager_marked"
+  | "auto_escalated";
+
+export type KdsDishStatus = "waiting" | "cooking" | "ready";
+
+export interface KdsItemStatusRecord {
+  item_id: string;
+  name: string;
+  quantity: number;
+  status: KdsDishStatus;
+  started_at?: string | null;
+  completed_at?: string | null;
+  prep_time_minutes?: number;
+  notes?: string;
+  modifiers?: string[];
+  variant_name?: string | null;
+  special_instructions?: string | null;
 }
 
 export type KdsTicket = KitchenTicket;
@@ -335,6 +465,8 @@ export interface OrderRecord {
     variant?: ItemVariant;
     variant_id?: string | number | null;
     variant_name?: string | null;
+    is_deducted?: boolean;
+    isDeducted?: boolean;
   }[];
   subtotal: number;
   taxAmount: number;
@@ -350,6 +482,7 @@ export interface OrderRecord {
   status: "completed" | "cancelled" | "active" | "queued" | "preparing" | "ready" | "out_for_delivery" | string;
   payment_status?: "paid" | "pending" | "refunded" | string;
   paymentStatus?: "paid" | "pending" | "refunded" | string;
+  is_deducted?: boolean;
   isDeducted?: boolean;
   deductedAt?: string;
   estimatedPrepTime?: number;
@@ -357,6 +490,8 @@ export interface OrderRecord {
   prepStartedAt?: string;
   prep_started_at?: string;
   shift_id?: number | string | null;
+  isExpired?: boolean;
+  is_expired?: boolean;
 }
 
 export interface BillingInvoice {
@@ -453,5 +588,19 @@ export interface OperatingExpense {
   logged_by?: string;
   notes?: string;
   created_at?: string;
+}
+
+export function isMenuItemFeatured(item?: Partial<MenuItem> | null): boolean {
+  if (!item) return false;
+  return Boolean(
+    item.isPopular ||
+    item.is_popular ||
+    item.isFeatured ||
+    item.is_featured ||
+    (Array.isArray((item as any).tags) &&
+      ((item as any).tags.includes("featured") ||
+       (item as any).tags.includes("popular") ||
+       (item as any).tags.includes("best_seller")))
+  );
 }
 

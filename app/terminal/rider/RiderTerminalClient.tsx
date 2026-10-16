@@ -27,6 +27,10 @@ import { useAuth } from "@/app/admin/context/AuthContext";
 import { createClient } from "@/lib/supabase";
 import { getValidTenantContext } from "@/lib/tenantResolver";
 import ResponsiveSelect from "@/app/admin/components/ResponsiveSelect";
+import {
+  subscribeToDeliveryReadyAlerts,
+  playRemoteAudioChime,
+} from "@/lib/kitchenWaiterBridge";
 
 export interface RiderDeliveryOrder {
   id: string;
@@ -35,6 +39,7 @@ export interface RiderDeliveryOrder {
   customerPhone: string;
   deliveryAddress: string;
   zone?: string;
+  token?: string;
   totalAmount: number;
   paymentMethod: string;
   paymentStatus: string;
@@ -80,31 +85,38 @@ export default function RiderTerminalClient() {
           .limit(60);
 
         if (!error && data && isMounted) {
-          const mapped: RiderDeliveryOrder[] = data.map((o: any) => ({
-            id: String(o.id),
-            orderNumber: o.order_number || `#ORD-${o.id}`,
-            customerName: o.customer_name || "Delivery Customer",
-            customerPhone: o.customer_phone || "",
-            deliveryAddress: o.delivery_address || o.delivery_zone || "Main Delivery Area",
-            zone: o.delivery_zone || undefined,
-            totalAmount: Number(o.total_amount || 0),
-            paymentMethod: o.payment_method || "cash",
-            paymentStatus: o.payment_status || "pending",
-            status: (o.order_status as any) || "ready",
-            items: Array.isArray(o.items)
-              ? o.items.map((it: any) => ({
-                  name: it.name || it.item?.name || "Dish",
-                  quantity: Number(it.quantity || it.qty || 1),
-                  notes: it.notes,
-                }))
-              : [],
-            createdAt: o.created_at
-              ? new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-              : "Just now",
-            pickedUpAt: o.picked_up_at || undefined,
-            deliveredAt: o.delivered_at || undefined,
-            riderName: o.rider_name || undefined,
-          }));
+          const mapped: RiderDeliveryOrder[] = data.map((o: any) => {
+            const rawNum = String(o.order_number || o.id || "");
+            const tokenDigits = rawNum.replace(/[^0-9]/g, "").slice(-4) || String(o.id).slice(-4);
+            const token = o.bag_token || o.token || `#${tokenDigits.padStart(4, "0")}`;
+
+            return {
+              id: String(o.id),
+              orderNumber: o.order_number || `#ORD-${o.id}`,
+              customerName: o.customer_name || "Delivery Customer",
+              customerPhone: o.customer_phone || "",
+              deliveryAddress: o.delivery_address || o.delivery_zone || "Main Delivery Area",
+              zone: o.delivery_zone || undefined,
+              token,
+              totalAmount: Number(o.total_amount || 0),
+              paymentMethod: o.payment_method || "cash",
+              paymentStatus: o.payment_status || "pending",
+              status: (o.order_status as any) || "ready",
+              items: Array.isArray(o.items)
+                ? o.items.map((it: any) => ({
+                    name: it.name || it.item?.name || "Dish",
+                    quantity: Number(it.quantity || it.qty || 1),
+                    notes: it.notes,
+                  }))
+                : [],
+              createdAt: o.created_at
+                ? new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                : "Just now",
+              pickedUpAt: o.picked_up_at || undefined,
+              deliveredAt: o.delivered_at || undefined,
+              riderName: o.rider_name || undefined,
+            };
+          });
 
           setOrders(mapped);
         }
@@ -124,6 +136,10 @@ export default function RiderTerminalClient() {
             (payload) => {
               const row: any = payload.new;
               if (row && row.order_channel === "delivery") {
+                const rawNum = String(row.order_number || row.id || "");
+                const tokenDigits = rawNum.replace(/[^0-9]/g, "").slice(-4) || String(row.id).slice(-4);
+                const token = row.bag_token || row.token || `#${tokenDigits.padStart(4, "0")}`;
+
                 const mappedOrder: RiderDeliveryOrder = {
                   id: String(row.id),
                   orderNumber: row.order_number || `#ORD-${row.id}`,
@@ -131,6 +147,7 @@ export default function RiderTerminalClient() {
                   customerPhone: row.customer_phone || "",
                   deliveryAddress: row.delivery_address || row.delivery_zone || "Main Delivery Area",
                   zone: row.delivery_zone || undefined,
+                  token,
                   totalAmount: Number(row.total_amount || 0),
                   paymentMethod: row.payment_method || "cash",
                   paymentStatus: row.payment_status || "pending",
@@ -145,6 +162,13 @@ export default function RiderTerminalClient() {
                 };
 
                 setOrders((prev) => {
+                  const existing = prev.find((o) => o.id === mappedOrder.id);
+                  if (mappedOrder.status === "ready" && (!existing || existing.status !== "ready")) {
+                    try {
+                      playRemoteAudioChime(true);
+                    } catch {}
+                    showToast(`🛵 Order ${mappedOrder.orderNumber} is Ready for Pickup! Bag Token: ${mappedOrder.token}`);
+                  }
                   const filtered = prev.filter((o) => o.id !== mappedOrder.id);
                   return [mappedOrder, ...filtered];
                 });
@@ -163,9 +187,42 @@ export default function RiderTerminalClient() {
 
     fetchDeliveryOrders();
 
+    // Cross-terminal Delivery Ready Alerts (BroadcastChannel + Window Events + Supabase broadcast)
+    const unsubDelivery = subscribeToDeliveryReadyAlerts((readyAlert) => {
+      try {
+        playRemoteAudioChime(true);
+      } catch {}
+      showToast(
+        `🛵 Delivery Order ${readyAlert.orderNumber || readyAlert.ticketId} is Ready for Pickup! Bag Token: ${readyAlert.token || ""}`
+      );
+
+      setOrders((prev) => {
+        const found = prev.find(
+          (o) =>
+            o.id === readyAlert.ticketId ||
+            o.orderNumber === readyAlert.ticketId ||
+            o.orderNumber.includes(readyAlert.ticketId) ||
+            (readyAlert.orderNumber && o.orderNumber.includes(readyAlert.orderNumber))
+        );
+        if (found) {
+          return prev.map((o) =>
+            o.id === found.id
+              ? {
+                  ...o,
+                  status: "ready",
+                  token: readyAlert.token || o.token,
+                }
+              : o
+          );
+        }
+        return prev;
+      });
+    });
+
     return () => {
       isMounted = false;
       if (channel) channel.unsubscribe();
+      unsubDelivery();
     };
   }, [user, showToast]);
 
@@ -451,6 +508,7 @@ export default function RiderTerminalClient() {
               const isCash = order.paymentMethod === "cash";
               const isDelivered = order.status === "delivered" || order.status === "completed";
               const isOnRoute = order.status === "on_route" || order.status === "picked_up";
+              const isReady = order.status === "ready";
 
               return (
                 <div
@@ -460,16 +518,24 @@ export default function RiderTerminalClient() {
                       ? "border-emerald-500/40 bg-emerald-50/60 dark:bg-emerald-950/10"
                       : isOnRoute
                       ? "border-orange-500/40 bg-orange-50/60 dark:bg-orange-950/10"
+                      : isReady
+                      ? "border-amber-500/50 bg-amber-500/5 ring-1 ring-amber-500/30 shadow-lg shadow-amber-950/20"
                       : "border-[var(--border)] bg-[var(--surface-hi)]/40"
                   }`}
                 >
                   {/* Top Bar */}
                   <div className="p-4 border-b border-[var(--border)] space-y-2">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-mono font-bold text-sm text-[var(--text-hi)]">
                           {order.orderNumber}
                         </span>
+                        {order.token && (
+                          <span className="px-2 py-0.5 rounded-lg bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 font-mono font-black text-[11px] flex items-center gap-1 shadow-xs">
+                            <Package className="w-3 h-3 text-indigo-400" />
+                            <span>Bag: {order.token}</span>
+                          </span>
+                        )}
                         <span className="text-[11px] font-mono text-[var(--text-faint)]">
                           {order.createdAt}
                         </span>
@@ -481,10 +547,18 @@ export default function RiderTerminalClient() {
                             ? "bg-emerald-50 text-emerald-800 border border-emerald-200/80 dark:bg-emerald-500/20 dark:text-emerald-400 dark:border-emerald-500/30"
                             : isOnRoute
                             ? "bg-orange-50 text-orange-800 border border-orange-200/80 dark:bg-orange-500/20 dark:text-orange-400 dark:border-orange-500/30"
+                            : isReady
+                            ? "bg-amber-500/20 text-amber-300 border border-amber-500/50 animate-pulse font-black"
                             : "bg-blue-50 text-blue-700 border border-blue-200/80 dark:bg-blue-500/20 dark:text-blue-400 dark:border-blue-500/30"
                         }`}
                       >
-                        {isOnRoute ? "In Transit" : order.status}
+                        {isDelivered
+                          ? "Delivered"
+                          : isOnRoute
+                          ? "Out for Delivery"
+                          : isReady
+                          ? "Ready for Pickup / Out for Delivery"
+                          : order.status}
                       </span>
                     </div>
 
@@ -516,6 +590,17 @@ export default function RiderTerminalClient() {
 
                   {/* Destination & Map Link */}
                   <div className="p-4 space-y-3 flex-1">
+                    {/* Kitchen Ready Alert Callout */}
+                    {isReady && (
+                      <div className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono text-xs flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 font-bold">
+                          <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span>Kitchen Ready - Collect Bag</span>
+                        </div>
+                        <span className="font-extrabold text-amber-200">{order.token}</span>
+                      </div>
+                    )}
+
                     <div className="p-3 rounded-xl bg-[var(--bg-deep)]/80 border border-[var(--border)] space-y-2">
                       <div className="flex items-start gap-2">
                         <MapPin className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
@@ -579,10 +664,14 @@ export default function RiderTerminalClient() {
                       <button
                         type="button"
                         onClick={() => handleUpdateDeliveryStatus(order.id, "picked_up")}
-                        className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white font-mono font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer"
+                        className={`w-full py-2.5 px-3 rounded-xl text-white font-mono font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all cursor-pointer ${
+                          isReady
+                            ? "bg-gradient-to-r from-amber-500 via-orange-500 to-indigo-600 hover:brightness-110 shadow-amber-500/20 ring-1 ring-amber-400/40"
+                            : "bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700"
+                        }`}
                       >
                         <Bike className="w-4 h-4" />
-                        <span>Accept &amp; Start Delivery</span>
+                        <span>{isReady ? "Confirm Pickup & Start Delivery" : "Accept & Start Delivery"}</span>
                       </button>
                     )}
 

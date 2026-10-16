@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node -e \"try{require('fs').rmSync('.next/dev',{recursive:true,force:true})}catch(e){}\" && next dev",
+    "clean": "node -e \"try{require('fs').rmSync('.next',{recursive:true,force:true})}catch(e){}\"",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -17,6 +18,7 @@
     "next": "^16.3.6",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "recharts": "^3.10.1",
     "resend": "^6.25.0"
   },
   "devDependencies": {

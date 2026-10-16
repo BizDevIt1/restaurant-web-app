@@ -509,7 +509,7 @@ export function saveStoredTables(
  * Real Web Audio API Kitchen Buzzer / Chime.
  * Synthesizes a crisp dual-tone order alert bell without any external audio file dependencies.
  */
-export function playKitchenBuzzer(): void {
+export function playKitchenBuzzer(isRush: boolean = false): void {
   if (typeof window === "undefined") return;
   try {
     const AudioContextClass =
@@ -518,6 +518,28 @@ export function playKitchenBuzzer(): void {
 
     const ctx = new AudioContextClass();
     const now = ctx.currentTime;
+
+    if (isRush) {
+      // Urgent, rapid high-pitched triple-burst buzzer for rush orders
+      const bursts = [
+        { time: now, freq: 1100, dur: 0.12 },
+        { time: now + 0.15, freq: 1320, dur: 0.12 },
+        { time: now + 0.30, freq: 1540, dur: 0.22 },
+      ];
+      bursts.forEach(({ time, freq, dur }) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(freq, time);
+        gain.gain.setValueAtTime(0.35, time);
+        gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(time);
+        osc.stop(time + dur);
+      });
+      return;
+    }
 
     // Tone 1 - Crisp initial ding (A5, 880Hz)
     const osc1 = ctx.createOscillator();
@@ -544,6 +566,145 @@ export function playKitchenBuzzer(): void {
     osc2.stop(now + 0.55);
   } catch {
     // AudioContext permission or browser autoplay policies safely handled
+  }
+}
+
+/**
+ * Synthesizes a bright, pleasant 3-tone service bell chime (C6 -> E6 -> G6)
+ * for waiter terminals when orders become ready for pickup.
+ * Pure Web Audio API synthesis without external audio files.
+ */
+export function playWaiterChime(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const AudioContextClass =
+      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    const ctx = new AudioContextClass();
+    const now = ctx.currentTime;
+
+    // Harmonic 3-note ascending restaurant service bell chime (C6: 1046.5Hz -> E6: 1318.5Hz -> G6: 1568Hz)
+    const notes = [
+      { freq: 1046.5, time: now, dur: 0.35, gain: 0.28 },
+      { freq: 1318.51, time: now + 0.12, dur: 0.45, gain: 0.32 },
+      { freq: 1567.98, time: now + 0.24, dur: 0.8, gain: 0.38 },
+    ];
+
+    notes.forEach(({ freq, time, dur, gain: targetGain }) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, time);
+      gain.gain.setValueAtTime(targetGain, time);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(time);
+      osc.stop(time + dur);
+    });
+  } catch {
+    // AudioContext permission or browser autoplay policies safely caught
+  }
+}
+
+/**
+ * Synthesizes a loud, distinct restaurant service buzzer / buzzer chime
+ * specifically for active Waiter Terminal sessions when an order or dish is marked ready in the kitchen.
+ */
+export function playWaiterBuzzer(isRush?: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    const AudioContextClass =
+      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    const ctx = new AudioContextClass();
+    if (ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
+    const now = ctx.currentTime;
+
+    if (isRush) {
+      // Rapid urgent 3-burst attention buzzer for rush orders
+      const bursts = [
+        { time: now, freq: 1174.66, dur: 0.14, gain: 0.4 },
+        { time: now + 0.16, freq: 1396.91, dur: 0.14, gain: 0.45 },
+        { time: now + 0.32, freq: 1760.00, dur: 0.35, gain: 0.5 },
+      ];
+      bursts.forEach(({ time, freq, dur, gain: targetGain }) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(freq, time);
+        gain.gain.setValueAtTime(targetGain, time);
+        gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(time);
+        osc.stop(time + dur);
+      });
+      return;
+    }
+
+    // Standard restaurant service bell chime: crisp ding (1046Hz C6) followed by ringing harmonic (1568Hz G6)
+    const tones = [
+      { freq: 1046.50, time: now, dur: 0.32, gain: 0.38, type: "sine" as OscillatorType },
+      { freq: 1318.51, time: now + 0.12, dur: 0.40, gain: 0.42, type: "sine" as OscillatorType },
+      { freq: 1567.98, time: now + 0.22, dur: 0.75, gain: 0.48, type: "triangle" as OscillatorType },
+    ];
+
+    tones.forEach(({ freq, time, dur, gain: targetGain, type }) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, time);
+      gain.gain.setValueAtTime(targetGain, time);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(time);
+      osc.stop(time + dur);
+    });
+  } catch {
+    // AudioContext permission or browser autoplay policies safely caught
+  }
+}
+
+/**
+ * Synthesizes a distinctive dual-tone notification chime (F6 -> A6)
+ * for kitchen terminals when an active ticket is modified (items added/removed/changed).
+ * Pure Web Audio API synthesis without external audio files.
+ */
+export function playModificationChime(): void {
+  if (typeof window === "undefined") return;
+  try {
+    const AudioContextClass =
+      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    const ctx = new AudioContextClass();
+    const now = ctx.currentTime;
+
+    const notes = [
+      { freq: 1396.91, time: now, dur: 0.25, gain: 0.3 }, // F6
+      { freq: 1760.00, time: now + 0.1, dur: 0.5, gain: 0.35 }, // A6
+    ];
+
+    notes.forEach(({ freq, time, dur, gain: targetGain }) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, time);
+      gain.gain.setValueAtTime(targetGain, time);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(time);
+      osc.stop(time + dur);
+    });
+  } catch {
+    // AudioContext permission or browser autoplay policies safely caught
   }
 }
 

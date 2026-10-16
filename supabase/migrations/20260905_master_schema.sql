@@ -169,7 +169,14 @@ CREATE TABLE IF NOT EXISTS public.kitchen_tickets (
     completed_at TIMESTAMPTZ,
     items JSONB NOT NULL DEFAULT '[]'::jsonb,
     server_name TEXT DEFAULT 'Front Desk',
-    priority TEXT DEFAULT 'normal' CHECK (priority IN ('normal', 'urgent')),
+    priority TEXT DEFAULT 'normal' CHECK (priority IN ('rush', 'high', 'normal', 'chill', 'urgent')),
+    priority_reason TEXT CHECK (priority_reason IS NULL OR priority_reason IN ('vip_customer', 'delivery_sla', 'manager_marked', 'auto_escalated')),
+    station_assigned TEXT,
+    items_status JSONB DEFAULT '[]'::jsonb,
+    printed_at TIMESTAMPTZ,
+    reprint_count INTEGER DEFAULT 0,
+    ready_for_pickup_at TIMESTAMPTZ,
+    picked_up_at TIMESTAMPTZ,
     elapsed_minutes INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now()
 );
@@ -293,7 +300,29 @@ DROP POLICY IF EXISTS "Allow all operations on branch_settings" ON public.branch
 CREATE POLICY "Allow all operations on branch_settings" ON public.branch_settings FOR ALL USING (true) WITH CHECK (true);
 
 -- ==============================================================================
--- 13. SUPABASE REALTIME REPLICATION CONFIGURATION
+-- 13. TABLE: kitchen_performance_daily
+-- Daily chef operational performance telemetry, prep duration, and SLA adherence
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.kitchen_performance_daily (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    chef_id TEXT NOT NULL,
+    restaurant_id BIGINT NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    date DATE NOT NULL DEFAULT CURRENT_DATE,
+    orders_completed INTEGER NOT NULL DEFAULT 0,
+    avg_prep_time_seconds INTEGER NOT NULL DEFAULT 0,
+    on_time_orders INTEGER NOT NULL DEFAULT 0,
+    overdue_orders INTEGER NOT NULL DEFAULT 0,
+    items_cooked INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_chef_restaurant_date UNIQUE (restaurant_id, chef_id, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kpd_restaurant_date ON public.kitchen_performance_daily (restaurant_id, date);
+CREATE INDEX IF NOT EXISTS idx_kpd_chef_date ON public.kitchen_performance_daily (chef_id, date);
+
+-- ==============================================================================
+-- 14. SUPABASE REALTIME REPLICATION CONFIGURATION
 -- Enables live Supabase Realtime broadcast for order dispatch, KDS and tables
 -- ==============================================================================
 DO $$

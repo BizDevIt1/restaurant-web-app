@@ -137,13 +137,21 @@ export const LuxuryFoodCard = function LuxuryFoodCard({
     return 0;
   }, [hasMultipleSizes, representativeVariant, totalVariantYield, getVariantPortions, item, inventoryTick]);
 
-  // Strict Out-of-Stock Rule: only disabled when total available yield across all sizes/variants drops strictly to 0
+  // Strict Out-of-Stock Rule: disabled when stock count or available portion drops to 0 or marked out of stock
   const isOutOfStock = useMemo(() => {
+    if (
+      item.in_stock === false ||
+      item.is_available === false ||
+      item.stockStatus === "out_of_stock" ||
+      (item as any).isAutoOutOfStock === true
+    ) {
+      return true;
+    }
     if (hasMultipleSizes) {
       return totalVariantYield <= 0;
     }
     return portionCount <= 0;
-  }, [hasMultipleSizes, totalVariantYield, portionCount]);
+  }, [hasMultipleSizes, totalVariantYield, portionCount, item.in_stock, item.is_available, item.stockStatus, (item as any).isAutoOutOfStock]);
 
   const [fallbackSrc, setFallbackSrc] = useState<string | null>(null);
 
@@ -185,6 +193,19 @@ export const LuxuryFoodCard = function LuxuryFoodCard({
     }
   };
 
+  const isFeatured = useMemo(() => {
+    return Boolean(
+      item.isPopular ||
+      (item as any).is_popular ||
+      (item as any).isFeatured ||
+      (item as any).is_featured ||
+      (Array.isArray((item as any).tags) &&
+        ((item as any).tags.includes("featured") ||
+         (item as any).tags.includes("popular") ||
+         (item as any).tags.includes("best_seller")))
+    );
+  }, [item]);
+
   const minPrice = useMemo(() => {
     return item.variants && item.variants.length > 0
       ? Math.min(...item.variants.map((v) => v.price))
@@ -198,7 +219,7 @@ export const LuxuryFoodCard = function LuxuryFoodCard({
       }}
       className={`glass-panel bg-[var(--surface-hi)] border border-[var(--border)] rounded-2xl p-2.5 flex flex-col justify-between group transition-all duration-150 shadow-xs relative overflow-hidden select-none ${
         isOutOfStock
-          ? "opacity-55 grayscale-[25%] cursor-not-allowed border-rose-500/30"
+          ? "opacity-60 grayscale-[20%] cursor-not-allowed border-rose-500/40"
           : "hover:border-[var(--gold)]/60 hover:shadow-md cursor-pointer active:scale-[0.98]"
       }`}
     >
@@ -210,6 +231,18 @@ export const LuxuryFoodCard = function LuxuryFoodCard({
           className="absolute top-2.5 right-2.5 z-20 flex items-center justify-center w-7 h-7 rounded-full bg-red-600/90 text-white shadow-md border border-red-400/40 backdrop-blur-sm pointer-events-none"
         >
           <Ban className="w-4 h-4 text-white stroke-[2.5]" />
+        </div>
+      )}
+
+      {/* Featured / Best Seller Badge on Food Card */}
+      {isFeatured && (
+        <div
+          title="Featured / Best Seller"
+          aria-label="Featured Item"
+          className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] text-[#1c1202] font-black text-[9.5px] uppercase tracking-wider shadow-md border border-amber-300/60 backdrop-blur-md pointer-events-none"
+        >
+          <Star className="w-2.5 h-2.5 fill-[#1c1202] stroke-[#1c1202]" />
+          <span>Featured</span>
         </div>
       )}
 
@@ -230,9 +263,19 @@ export const LuxuryFoodCard = function LuxuryFoodCard({
       {/* 2. Item Name & Universal Portion Badge & 3. Price & 4. Quick Add Button */}
       <div className="w-full flex-1 flex flex-col justify-between">
         <div>
-          <h4 className="text-xs sm:text-sm font-bold text-[var(--text-hi)] group-hover:text-[var(--gold)] transition-colors line-clamp-1 w-full text-left leading-tight truncate">
-            {item.name}
-          </h4>
+          <div className="flex items-center gap-1.5 w-full">
+            <h4 className="text-xs sm:text-sm font-bold text-[var(--text-hi)] group-hover:text-[var(--gold)] transition-colors line-clamp-1 text-left leading-tight truncate flex-1">
+              {item.name}
+            </h4>
+            {isFeatured && (
+              <span
+                title="Featured / Best Seller"
+                className="inline-flex shrink-0 items-center justify-center text-[#e3b13b]"
+              >
+                <Star className="w-3.5 h-3.5 fill-[#e3b13b] stroke-[#e3b13b]" />
+              </span>
+            )}
+          </div>
 
           {/* Plain Text Stock Portion Display */}
           <p

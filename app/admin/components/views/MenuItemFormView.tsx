@@ -27,6 +27,7 @@ import { useAuth } from "../../context/AuthContext";
 import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
 import { calculateIngredientsPortionYield } from "@/lib/recipePortions";
+import { getMenuItemStation, normalizeStationName, getStationBadgeInfo, STATION_OPTIONS } from "@/lib/kitchenStationRouting";
 
 export interface MenuItemFormViewProps {
   initialData?: MenuItem | null;
@@ -49,6 +50,12 @@ export default function MenuItemFormView({
   // General Form States
   const [formName, setFormName] = useState(initialData?.name || "");
   const [formCategory, setFormCategory] = useState(initialData?.category || "");
+  const [formKitchenStation, setFormKitchenStation] = useState<string>(() => {
+    if (initialData?.kitchen_station) return normalizeStationName(initialData.kitchen_station);
+    if (initialData?.station) return normalizeStationName(initialData.station);
+    if (mode === "edit" && initialData) return normalizeStationName(getMenuItemStation(initialData));
+    return "";
+  });
   const [formPrice, setFormPrice] = useState(
     initialData?.price !== undefined ? String(initialData.price) : ""
   );
@@ -59,7 +66,14 @@ export default function MenuItemFormView({
   const [formStockCount, setFormStockCount] = useState(
     initialData?.stockCount !== undefined ? String(initialData.stockCount) : "50"
   );
-  const [formIsPopular, setFormIsPopular] = useState(Boolean(initialData?.isPopular));
+  const [formIsPopular, setFormIsPopular] = useState(
+    Boolean(
+      initialData?.isPopular ||
+      (initialData as any)?.is_popular ||
+      (initialData as any)?.isFeatured ||
+      (initialData as any)?.is_featured
+    )
+  );
   const [formImageUrl, setFormImageUrl] = useState(
     initialData?.imageUrl || initialData?.image_url || ""
   );
@@ -463,6 +477,12 @@ export default function MenuItemFormView({
       return;
     }
 
+    const resolvedStation = formKitchenStation.trim().toLowerCase();
+    if (!resolvedStation) {
+      showToast("Please select a Kitchen Station (e.g. Desi, Fast Food, Grill, etc.).");
+      return;
+    }
+
     // Validate Variants if enabled
     if (hasVariants) {
       if (formVariants.length === 0) {
@@ -520,6 +540,7 @@ export default function MenuItemFormView({
         branch_id: branchId || user?.branchId || null,
         name: trimmedName,
         category: resolvedCategory,
+        kitchen_station: resolvedStation,
         price: Math.round(primaryPrice),
         prep_time: formattedPrepTime,
         preparation_time: prepMinutes,
@@ -539,6 +560,13 @@ export default function MenuItemFormView({
           .insert([payload])
           .select()
           .single();
+
+        if (error && (error.message?.includes("kitchen_station") || error.code === "PGRST204" || error.code === "42703")) {
+          delete payload.kitchen_station;
+          const retryStation = await supabase.from("menu_items").insert([payload]).select().single();
+          data = retryStation.data;
+          error = retryStation.error;
+        }
 
         if (error && (error.message?.includes("variants") || error.code === "PGRST204")) {
           delete payload.variants;
@@ -562,6 +590,15 @@ export default function MenuItemFormView({
           .from("menu_items")
           .update(payload)
           .eq("id", initialData!.id);
+
+        if (error && (error.message?.includes("kitchen_station") || error.code === "PGRST204" || error.code === "42703")) {
+          delete payload.kitchen_station;
+          const retryStation = await supabase
+            .from("menu_items")
+            .update(payload)
+            .eq("id", initialData!.id);
+          error = retryStation.error;
+        }
 
         if (error && (error.message?.includes("variants") || error.code === "PGRST204")) {
           delete payload.variants;
@@ -647,6 +684,8 @@ export default function MenuItemFormView({
         id: String(dishId),
         name: trimmedName,
         category: resolvedCategory,
+        kitchen_station: resolvedStation,
+        station: resolvedStation,
         price: Math.round(primaryPrice),
         prepTime: formattedPrepTime,
         preparation_time: prepMinutes,
@@ -655,7 +694,10 @@ export default function MenuItemFormView({
         imageIcon: "",
         imageUrl: formImageUrl.trim() || undefined,
         image_url: formImageUrl.trim() || undefined,
-        isPopular: formIsPopular,
+        isPopular: Boolean(formIsPopular),
+        is_popular: Boolean(formIsPopular),
+        isFeatured: Boolean(formIsPopular),
+        is_featured: Boolean(formIsPopular),
         description: initialData?.description || undefined,
         variants: cleanedVariants || undefined,
         hasRecipe: hasVariants
@@ -827,6 +869,78 @@ export default function MenuItemFormView({
                 placeholder="e.g. 15m"
                 className="w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)]/70 rounded-xl px-4 py-2.5 text-xs text-[var(--text-hi)] placeholder:text-[var(--text-lo)]/40 focus:outline-none transition-all font-sans"
               />
+            </div>
+
+            {/* Kitchen Station Routing */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-[var(--text-hi)] flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <ChefHat className="w-3.5 h-3.5 text-[var(--gold)]" />
+                  <span>Kitchen Station <span className="text-red-400">*</span></span>
+                </span>
+                <span className="text-[10px] font-mono text-[var(--gold)] font-bold uppercase tracking-wider">
+                  Required
+                </span>
+              </label>
+              <div className="relative">
+                <select
+                  required
+                  value={formKitchenStation}
+                  onChange={(e) => setFormKitchenStation(e.target.value)}
+                  className={`w-full bg-[var(--surface-hi)] border rounded-xl px-4 py-2.5 pr-10 text-xs text-[var(--text-hi)] appearance-none cursor-pointer focus:outline-none transition-all font-sans ${
+                    !formKitchenStation
+                      ? "border-amber-500/60 focus:border-[var(--gold)]"
+                      : "border-[var(--border)] focus:border-[var(--gold)]/70"
+                  }`}
+                >
+                  <option value="" disabled className="bg-[var(--bg-deep)] text-[var(--text-faint)]">
+                    -- Select Kitchen Station * --
+                  </option>
+                  <option value="desi" className="bg-[var(--bg-deep)] text-red-300">
+                    Desi (Karahi, Handi, Biryani, Curries, Tandoor)
+                  </option>
+                  <option value="fast_food" className="bg-[var(--bg-deep)] text-amber-300">
+                    Fast Food (Burgers, Sandwiches, Pizza, Wraps)
+                  </option>
+                  <option value="grill" className="bg-[var(--bg-deep)] text-orange-400">
+                    Grill (BBQ, Steaks, Tikkas, Kebabs, Charcoals)
+                  </option>
+                  <option value="fry" className="bg-[var(--bg-deep)] text-yellow-300">
+                    Fry (Fryers, Wings, Nuggets, Crispy Fries)
+                  </option>
+                  <option value="pastry" className="bg-[var(--bg-deep)] text-pink-300">
+                    Pastry (Cakes, Desserts, Bakery, Sweets)
+                  </option>
+                  <option value="beverages" className="bg-[var(--bg-deep)] text-cyan-300">
+                    Beverages (Drinks, Shakes, Juices, Mocktails, Coffee)
+                  </option>
+                  <option value="assembly" className="bg-[var(--bg-deep)] text-emerald-300">
+                    Assembly (Salads, Soups, Appetizers, Packaging)
+                  </option>
+                </select>
+                <ChevronDown className="w-4 h-4 text-[var(--text-faint)] pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2" />
+              </div>
+
+              {/* Station Tag Preview / Explanation */}
+              {formKitchenStation ? (
+                (() => {
+                  const badge = getStationBadgeInfo(formKitchenStation);
+                  return (
+                    <div className="flex items-center gap-2 pt-1 text-[11px] font-mono text-[var(--text-lo)]">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border uppercase ${badge.className}`}>
+                        [{badge.shortCode}] {badge.label}
+                      </span>
+                      <span className="text-[10px] text-[var(--text-faint)]">
+                        Routes to this station on Send to KOT
+                      </span>
+                    </div>
+                  );
+                })()
+              ) : (
+                <p className="text-[10px] text-amber-400/90 font-mono pt-0.5">
+                  ⚠️ Explicit station assignment is required for kitchen routing.
+                </p>
+              )}
             </div>
 
             {/* Stock Status */}

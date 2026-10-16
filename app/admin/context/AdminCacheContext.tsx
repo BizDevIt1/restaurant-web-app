@@ -17,6 +17,19 @@ import {
   calculateItemPortions,
   PortionYieldResult,
 } from "@/lib/posLedgerSync";
+import {
+  fetchActiveUnpaidTableRecords,
+  reconcileTableStatuses,
+  reconcileRestaurantTables,
+  autoHealDatabaseTableOccupancy,
+  subscribeToTableReleased,
+  isTableMatchingIdentifier,
+} from "@/lib/tableOccupancy";
+import {
+  computeUnifiedMenuCatalog,
+  calculateUnifiedAvailableStock,
+  subscribeToStockRefresh,
+} from "@/lib/unifiedStock";
 
 export interface BranchSettingsCache {
   taxRatePercent: number;
@@ -129,6 +142,8 @@ export function mapRowToTableStatus(row: any, fallbackIdx: number = 0): TableSta
     tableLabel = `Table ${tableLabel}`;
   }
 
+  const isAvail = statusUpper === "AVAILABLE";
+
   return {
     id: resolvedId,
     label: tableLabel,
@@ -143,9 +158,12 @@ export function mapRowToTableStatus(row: any, fallbackIdx: number = 0): TableSta
         : "available",
     section: row.section_name || row.floor_name || "Main Dining",
     sectionName: row.section_name || row.floor_name || "Main Dining",
-    activeOrderId: (row.active_order_id || row.current_order_id)
-      ? String(row.active_order_id || row.current_order_id)
-      : undefined,
+    activeOrderId: isAvail
+      ? undefined
+      : (row.active_order_id || row.current_order_id)
+        ? String(row.active_order_id || row.current_order_id)
+        : undefined,
+    activeAmount: undefined,
     dbId: row.id,
   };
 }
@@ -237,22 +255,51 @@ export function AdminCacheProvider({ children }: { children: React.ReactNode }) 
     return bMap;
   }, [rawMaterials, rawRecipes, inventoryTick]);
 
-  // Synchronous memo of simulated raw materials ledger deducting active POS cart
+  // Synchronous memo of raw materials ledger (clean base ledger without local cart deduction)
   const effectiveLedger = useMemo(() => {
-    return simulateCartRawMaterials(posCart, rawRecipes, baseMaterialsMap);
-  }, [posCart, rawRecipes, baseMaterialsMap, inventoryTick]);
+    return baseMaterialsMap;
+  }, [baseMaterialsMap, inventoryTick]);
 
-  // Synchronous memo of live simulated menu items reflecting active ledger
+  // Synchronous memo of live simulated menu items directly bound to menuItems (unified via computeUnifiedMenuCatalog)
   const liveSimulatedMenuItems = useMemo(() => {
-    return applyRecipeCalculationsToMenu(menuItems, rawRecipes, effectiveLedger);
-  }, [menuItems, rawRecipes, effectiveLedger, inventoryTick]);
+    return menuItems;
+  }, [menuItems, inventoryTick]);
 
-  // Exact per-variant BOM calculation with integer flooring floor(Stock / Req)
+  const activeOrdersRef = useRef<any[]>([]);
+
+  // Exact per-variant unified stock calculation without local cart deduction
   const getVariantPortions = useCallback(
     (item: MenuItem, variant?: ItemVariant) => {
-      return calculateItemPortions(item, variant, rawRecipes, effectiveLedger, posCart);
+      const rawItemId = String(item.id);
+      const baseId = rawItemId.includes("_") ? rawItemId.split("_")[0] : rawItemId;
+      let dishRecipes = rawRecipes.filter(
+        (r) => String(r.menu_item_id) === baseId || String(r.menu_item_id) === rawItemId
+      );
+      if (dishRecipes.length === 0) {
+        if (Array.isArray((item as any).recipe) && (item as any).recipe.length > 0) {
+          dishRecipes = (item as any).recipe;
+        } else if (Array.isArray((item as any).recipe_items) && (item as any).recipe_items.length > 0) {
+          dishRecipes = (item as any).recipe_items;
+        }
+      }
+
+      const res = calculateUnifiedAvailableStock({
+        item,
+        variant,
+        rawMaterialsLookup: baseMaterialsMap,
+        dishRecipes,
+        activeOrders: activeOrdersRef.current || [],
+      });
+
+      return {
+        maxPortions: res.availableStock,
+        availablePortions: res.availableStock,
+        isOutOfStock: res.isOutOfStock,
+        stockStatus: res.stockStatus,
+        limitingIngredient: res.limitingIngredient?.name || res.limitingIngredient,
+      } as PortionYieldResult;
     },
-    [rawRecipes, effectiveLedger, posCart, inventoryTick]
+    [rawRecipes, baseMaterialsMap, inventoryTick]
   );
 
   const [isRevalidating, setIsRevalidating] = useState({
@@ -305,21 +352,32 @@ export function AdminCacheProvider({ children }: { children: React.ReactNode }) 
     try {
       const supabase = createClient();
       const { restId } = await getValidTenantContext(userRef.current);
-      const { data, error } = await supabase
-        .from("restaurant_tables")
-        .select("*")
-        .eq("restaurant_id", restId)
-        .order("table_number", { ascending: true });
+      const [tableRes, activeRecords] = await Promise.all([
+        supabase
+          .from("restaurant_tables")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .order("table_number", { ascending: true }),
+        fetchActiveUnpaidTableRecords(restId, supabase),
+      ]);
+
+      const data = tableRes.data;
+      const error = tableRes.error;
 
       if (!error && data) {
         const mappedTables: RestaurantTable[] = data.map(mapRowToRestaurantTable);
         const mappedStatuses: TableStatus[] = data.map((r, idx) => mapRowToTableStatus(r, idx));
 
-        moduleCache.restaurantTables = mappedTables;
-        moduleCache.tableStatuses = mappedStatuses;
+        const reconciledTables = reconcileRestaurantTables(mappedTables, activeRecords);
+        const reconciledStatuses = reconcileTableStatuses(mappedStatuses, activeRecords);
 
-        setRestaurantTables(mappedTables);
-        setTableStatuses(mappedStatuses);
+        moduleCache.restaurantTables = reconciledTables;
+        moduleCache.tableStatuses = reconciledStatuses;
+
+        setRestaurantTables(reconciledTables);
+        setTableStatuses(reconciledStatuses);
+
+        autoHealDatabaseTableOccupancy(restId, reconciledStatuses, activeRecords, supabase);
       }
     } catch (err) {
       console.warn("[AdminCacheContext] revalidateTables warning:", err);
@@ -343,111 +401,52 @@ export function AdminCacheProvider({ children }: { children: React.ReactNode }) 
     try {
       const supabase = createClient();
       const { restId } = await getValidTenantContext(userRef.current);
+      if (!restId) return;
 
-      const { data, error } = await supabase
-        .from("menu_items")
-        .select("*")
-        .eq("restaurant_id", restId)
-        .order("created_at", { ascending: false });
+      const [menuRes, recipeRes, materialsRes, ordersRes] = await Promise.all([
+        supabase
+          .from("menu_items")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("recipe_items")
+          .select(
+            "menu_item_id, variant_id, variant_name, raw_material_id, quantity_required, unit, raw_materials(id, name, current_stock, min_safety_stock, cost_per_unit, unit)"
+          )
+          .eq("restaurant_id", restId),
+        supabase
+          .from("raw_materials")
+          .select("id, name, current_stock, min_safety_stock, cost_per_unit, unit")
+          .eq("restaurant_id", restId),
+        supabase
+          .from("orders")
+          .select("id, order_number, order_status, items")
+          .eq("restaurant_id", restId)
+          .eq("order_status", "active"),
+      ]);
 
-      if (!error && data) {
-        let mapped: MenuItem[] = data.map((row: any) => {
-          const prepMinutes =
-            Number(row.preparation_time) ||
-            parseInt(String(row.prep_time || "15").replace(/[^0-9]/g, "")) ||
-            15;
+      const menuRows = menuRes.data || [];
+      const recipeRows = recipeRes.data || [];
+      const materialRows = materialsRes.data || [];
+      const activeOrdersRows = ordersRes.data || [];
+      activeOrdersRef.current = activeOrdersRows;
 
-          let rawVariants: any[] | null = null;
-          if (Array.isArray(row.variants) && row.variants.length > 0) {
-            rawVariants = row.variants;
-          } else if (typeof row.variants === "string") {
-            try {
-              const parsed = JSON.parse(row.variants);
-              if (Array.isArray(parsed) && parsed.length > 0) rawVariants = parsed;
-            } catch {}
-          }
-          if (!rawVariants && row.description) {
-            try {
-              const parsed = JSON.parse(row.description);
-              if (Array.isArray(parsed.variants) && parsed.variants.length > 0) rawVariants = parsed.variants;
-            } catch {}
-          }
-          if (!rawVariants && Array.isArray(row.metadata?.variants) && row.metadata.variants.length > 0) {
-            rawVariants = row.metadata.variants;
-          }
+      if (recipeRows && recipeRows.length > 0) {
+        setRawRecipes(recipeRows);
+        moduleCache.rawRecipes = recipeRows;
+      }
 
-          return {
-            id: row.id,
-            name: row.name,
-            category: row.category || "karahi",
-            price: Number(row.price),
-            prepTime: row.prep_time || `${prepMinutes}m`,
-            preparation_time: prepMinutes,
-            stockStatus: row.stock_status || "in_stock",
-            stockCount: row.stock_count ?? 20,
-            imageIcon: row.image_icon || "🍲",
-            image_url: row.image_url || undefined,
-            imageUrl: row.image_url || undefined,
-            isPopular: Boolean(row.is_popular),
-            variants: rawVariants || undefined,
-            is_available: (row.stock_status || "in_stock") !== "out_of_stock",
-            in_stock: (row.stock_status || "in_stock") !== "out_of_stock",
-          };
+      if (menuRows && menuRows.length > 0) {
+        const unified = computeUnifiedMenuCatalog({
+          menuRows,
+          recipeRows,
+          materialRows,
+          activeOrders: activeOrdersRows,
         });
 
-        // Try to fetch recipes to compute live cost and auto-stock
-        try {
-          const { data: recipeRows } = await supabase
-            .from("recipe_items")
-            .select(
-              "menu_item_id, variant_id, variant_name, raw_material_id, quantity_required, unit, raw_materials(id, name, current_stock, min_safety_stock, cost_per_unit, unit)"
-            )
-            .eq("restaurant_id", restId);
-
-          if (recipeRows && recipeRows.length > 0) {
-            // Ensure any variants missing recipe array get populated from recipeRows
-            mapped = mapped.map((item) => {
-              if (item.variants && Array.isArray(item.variants)) {
-                const enrichedVars = item.variants.map((v) => {
-                  if (v.recipe && Array.isArray(v.recipe) && v.recipe.length > 0) return v;
-                  const matched = recipeRows.filter(
-                    (r: any) =>
-                      String(r.menu_item_id) === String(item.id) &&
-                      ((r.variant_id && String(r.variant_id) === String(v.id)) ||
-                        (r.variant_name && v.name && r.variant_name.trim().toLowerCase() === v.name.trim().toLowerCase()))
-                  );
-                  if (matched.length > 0) {
-                    return {
-                      ...v,
-                      recipe: matched.map((r: any) => {
-                        const raw = Array.isArray(r.raw_materials) ? r.raw_materials[0] : r.raw_materials;
-                        return {
-                          raw_material_id: r.raw_material_id,
-                          raw_material_name: raw?.name || "Ingredient",
-                          quantity_required: Number(r.quantity_required) || 0,
-                          unit: r.unit || raw?.unit || "",
-                          cost_per_unit: Number(raw?.cost_per_unit) || 0,
-                        };
-                      }),
-                    };
-                  }
-                  return v;
-                });
-                return { ...item, variants: enrichedVars };
-              }
-              return item;
-            });
-
-            setRawRecipes(recipeRows);
-            moduleCache.rawRecipes = recipeRows;
-            mapped = applyRecipeCalculationsToMenu(mapped, recipeRows, effectiveLedger);
-          }
-        } catch (rErr) {
-          console.warn("[AdminCacheContext] recipe check warning:", rErr);
-        }
-
-        moduleCache.menuItems = mapped;
-        setMenuItems(mapped);
+        moduleCache.menuItems = unified;
+        setMenuItems(unified);
       }
     } catch (err) {
       console.warn("[AdminCacheContext] revalidateMenuItems warning:", err);
@@ -585,20 +584,96 @@ export function AdminCacheProvider({ children }: { children: React.ReactNode }) 
       }, 0);
     };
 
+    let tablesTimeout: NodeJS.Timeout | null = null;
+    const handleTablesUpdated = () => {
+      if (tablesTimeout) clearTimeout(tablesTimeout);
+      tablesTimeout = setTimeout(() => {
+        revalidateTables(true);
+      }, 0);
+    };
+
+    const handleTableReleased = (data?: any) => {
+      if (data) {
+        const { tableId, tableNumber, orderId } = data;
+        setTableStatuses((prev) =>
+          prev.map((t) => {
+            const matches =
+              (tableId && (String(t.dbId) === String(tableId) || String(t.id) === String(tableId))) ||
+              (tableNumber && isTableMatchingIdentifier(t, tableNumber)) ||
+              (orderId && t.activeOrderId === orderId);
+            if (matches) {
+              return {
+                ...t,
+                status: "available",
+                activeOrderId: undefined,
+                activeAmount: undefined,
+              };
+            }
+            return t;
+          })
+        );
+        setRestaurantTables((prev) =>
+          prev.map((t) => {
+            const matches =
+              (tableId && String(t.id) === String(tableId)) ||
+              (tableNumber && isTableMatchingIdentifier(t, tableNumber)) ||
+              (orderId && t.current_order_id === orderId);
+            if (matches) {
+              return {
+                ...t,
+                status: "AVAILABLE",
+                current_order_id: null,
+              };
+            }
+            return t;
+          })
+        );
+      }
+      handleTablesUpdated();
+    };
+
+    const handleTableReleasedWindow = (e: Event) => {
+      handleTableReleased((e as CustomEvent).detail);
+    };
+
     if (typeof window !== "undefined") {
       window.addEventListener("inventory_stock_deducted", handleStockDeducted);
       window.addEventListener("pos_menu_updated", handleMenuUpdated);
+      window.addEventListener("restaurant_tables_changed", handleTablesUpdated);
+      window.addEventListener("pos_tables_updated", handleTablesUpdated);
+      window.addEventListener("table_released", handleTableReleasedWindow);
     }
+
+    let unsubRelease: (() => void) | null = null;
+    let unsubStock: (() => void) | null = null;
+    getValidTenantContext(userRef.current).then(({ restId }) => {
+      if (restId) {
+        const supabase = createClient();
+        unsubStock = subscribeToStockRefresh(restId, () => {
+          revalidateMenuItems(true);
+          revalidateRawMaterials(true);
+        });
+        unsubRelease = subscribeToTableReleased(restId, (data) => {
+          handleTableReleased(data);
+        }, supabase);
+      }
+    });
 
     return () => {
       if (stockTimeout) clearTimeout(stockTimeout);
       if (menuTimeout) clearTimeout(menuTimeout);
+      if (tablesTimeout) clearTimeout(tablesTimeout);
+      if (unsubStock) unsubStock();
+      if (unsubRelease) unsubRelease();
       if (typeof window !== "undefined") {
         window.removeEventListener("inventory_stock_deducted", handleStockDeducted);
         window.removeEventListener("pos_menu_updated", handleMenuUpdated);
+        window.removeEventListener("restaurant_tables_changed", handleTablesUpdated);
+        window.removeEventListener("pos_tables_updated", handleTablesUpdated);
+        window.removeEventListener("table_released", handleTableReleasedWindow);
       }
     };
-  }, [revalidateRawMaterials, revalidateMenuItems]);
+  }, [revalidateRawMaterials, revalidateMenuItems, revalidateTables]);
 
   // =========================================================================
   // ATOMIC REALTIME DELTA MUTATORS (Zero Full Refetch)
@@ -663,7 +738,18 @@ export function AdminCacheProvider({ children }: { children: React.ReactNode }) 
           imageIcon: updatedRow.image_icon ?? item.imageIcon,
           image_url: updatedRow.image_url !== undefined ? (updatedRow.image_url || undefined) : item.image_url,
           imageUrl: updatedRow.image_url !== undefined ? (updatedRow.image_url || undefined) : item.imageUrl,
-          isPopular: updatedRow.is_popular !== undefined ? Boolean(updatedRow.is_popular) : item.isPopular,
+          isPopular: updatedRow.is_popular !== undefined || updatedRow.isFeatured !== undefined || updatedRow.is_featured !== undefined
+            ? Boolean(updatedRow.is_popular || updatedRow.is_featured || updatedRow.isPopular || updatedRow.isFeatured)
+            : item.isPopular,
+          is_popular: updatedRow.is_popular !== undefined || updatedRow.isFeatured !== undefined || updatedRow.is_featured !== undefined
+            ? Boolean(updatedRow.is_popular || updatedRow.is_featured || updatedRow.isPopular || updatedRow.isFeatured)
+            : item.isPopular,
+          isFeatured: updatedRow.is_popular !== undefined || updatedRow.isFeatured !== undefined || updatedRow.is_featured !== undefined
+            ? Boolean(updatedRow.is_popular || updatedRow.is_featured || updatedRow.isPopular || updatedRow.isFeatured)
+            : item.isPopular,
+          is_featured: updatedRow.is_popular !== undefined || updatedRow.isFeatured !== undefined || updatedRow.is_featured !== undefined
+            ? Boolean(updatedRow.is_popular || updatedRow.is_featured || updatedRow.isPopular || updatedRow.isFeatured)
+            : item.isPopular,
           is_available: (updatedRow.stock_status || item.stockStatus) !== "out_of_stock",
           in_stock: (updatedRow.stock_status || item.stockStatus) !== "out_of_stock",
         };
@@ -690,7 +776,10 @@ export function AdminCacheProvider({ children }: { children: React.ReactNode }) 
       imageIcon: newRow.image_icon || "🍲",
       image_url: newRow.image_url || undefined,
       imageUrl: newRow.image_url || undefined,
-      isPopular: Boolean(newRow.is_popular),
+      isPopular: Boolean(newRow.is_popular || newRow.is_featured || newRow.isPopular || newRow.isFeatured),
+      is_popular: Boolean(newRow.is_popular || newRow.is_featured || newRow.isPopular || newRow.isFeatured),
+      isFeatured: Boolean(newRow.is_popular || newRow.is_featured || newRow.isPopular || newRow.isFeatured),
+      is_featured: Boolean(newRow.is_popular || newRow.is_featured || newRow.isPopular || newRow.isFeatured),
       is_available: (newRow.stock_status || "in_stock") !== "out_of_stock",
       in_stock: (newRow.stock_status || "in_stock") !== "out_of_stock",
     };

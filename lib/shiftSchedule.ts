@@ -251,7 +251,7 @@ export function validateCashierShiftWindow(
   date: Date = new Date(),
   activeShift?: any | null
 ): ShiftWindowValidation {
-  const currentActiveShift = activeShift || getStoredActiveShift();
+  const currentActiveShift = activeShift !== undefined ? activeShift : getStoredActiveShift();
   const isOpenToday = Boolean(currentActiveShift && isShiftForCurrentDayAndValid(currentActiveShift));
 
   // If cashier holds an open active shift from today with an assigned shift_type (e.g. rolled over consecutive shift),
@@ -340,6 +340,45 @@ export function validateCashierShiftWindow(
 }
 
 /**
+ * Universal Staff Shift Window Validation (Cashiers, Waiters, Chefs)
+ * Validates whether any staff member is within their scheduled shift hours,
+ * accounting for active rolled-over shifts and early start grace periods.
+ */
+export function validateStaffShiftWindow(
+  assignedShiftRaw?: string | null,
+  date: Date = new Date(),
+  userOrShift?: any | null
+): ShiftWindowValidation {
+  let activeShift: any = null;
+  if (userOrShift && (userOrShift.id || userOrShift.email || userOrShift.staffRole)) {
+    const staffKey = String(userOrShift.id || userOrShift.email || userOrShift.name || userOrShift.staffRole)
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, "_");
+    const restId = userOrShift.restaurantId || userOrShift.organizationId || "default";
+    const staffRole = userOrShift.staffRole || "staff";
+
+    if (typeof window !== "undefined") {
+      try {
+        const cachedStr =
+          sessionStorage.getItem(`staff_active_shift_${staffKey}`) ||
+          localStorage.getItem(`staff_active_shift_${staffKey}`) ||
+          sessionStorage.getItem(`staff_active_shift_${restId}_${staffRole}`) ||
+          localStorage.getItem(`staff_active_shift_${restId}_${staffRole}`);
+        if (cachedStr) {
+          activeShift = JSON.parse(cachedStr);
+        }
+      } catch {}
+    }
+  } else if (userOrShift !== undefined) {
+    activeShift = userOrShift;
+  } else {
+    activeShift = getStoredActiveShift();
+  }
+
+  return validateCashierShiftWindow(assignedShiftRaw, date, activeShift);
+}
+
+/**
  * Check if a shift was opened on a prior calendar date (before today 00:00:00).
  */
 export function isShiftFromPreviousDate(shift: any): boolean {
@@ -372,7 +411,7 @@ export function isShiftForCurrentDayAndValid(shift: any): boolean {
 export function clearStaleShiftStorage(currentOrgId?: string, staffKey?: string): void {
   if (typeof window === "undefined") return;
   try {
-    const orgs = [currentOrgId, "default", "27"].filter(Boolean) as string[];
+    const orgs = Array.from(new Set([currentOrgId, "40", "default", "27"].filter(Boolean))) as string[];
     orgs.forEach((org) => {
       sessionStorage.removeItem(`pos_active_shift_${org}`);
       localStorage.removeItem(`pos_active_shift_${org}`);
@@ -392,6 +431,97 @@ export function clearStaleShiftStorage(currentOrgId?: string, staffKey?: string)
   } catch (e) {
     console.warn("[shiftSchedule] Error clearing stale shift storage:", e);
   }
+}
+
+/**
+ * Resolves the scheduled end Date for a given shift relative to a reference Date.
+ * - Morning Shift: ends at 16:00 (04:00 PM)
+ * - Evening Shift: ends at 00:00 (midnight, 12:00 AM)
+ * - Night Shift: ends at 08:00 (08:00 AM)
+ */
+export function getShiftEndDateTime(
+  shiftTypeRaw?: ShiftTypeOption | string | null,
+  referenceDate: Date = new Date()
+): Date | null {
+  const parsed = parseShiftOption(shiftTypeRaw);
+  if (!parsed) return null;
+
+  const d = new Date(referenceDate);
+  const currentTotalMin = d.getHours() * 60 + d.getMinutes();
+
+  if (parsed === "First Shift (Morning)") {
+    // 08:00 AM - 04:00 PM (16:00)
+    const end = new Date(d);
+    if (currentTotalMin < 480) {
+      end.setDate(end.getDate() - 1);
+    }
+    end.setHours(16, 0, 0, 0);
+    return end;
+  }
+
+  if (parsed === "Second Shift (Evening)") {
+    // 04:00 PM - 12:00 AM (24:00 / 00:00)
+    const end = new Date(d);
+    if (currentTotalMin >= 960) {
+      end.setDate(end.getDate() + 1);
+      end.setHours(0, 0, 0, 0);
+    } else {
+      end.setHours(0, 0, 0, 0);
+    }
+    return end;
+  }
+
+  if (parsed === "Third Shift (Night / Closing)") {
+    // 12:00 AM - 08:00 AM (08:00)
+    const end = new Date(d);
+    if (currentTotalMin >= 960) {
+      end.setDate(end.getDate() + 1);
+    }
+    end.setHours(8, 0, 0, 0);
+    return end;
+  }
+
+  return null;
+}
+
+/**
+ * Calculates elapsed minutes since the scheduled shift end time.
+ * Returns 0 if the shift has not yet concluded.
+ */
+export function getMinutesSinceShiftEnd(
+  shiftTypeRaw?: ShiftTypeOption | string | null,
+  referenceDate: Date = new Date(),
+  activeShift?: any | null
+): number {
+  if (activeShift?.shift_end) {
+    const endMs = new Date(activeShift.shift_end).getTime();
+    if (!isNaN(endMs)) {
+      return Math.max(0, Math.floor((referenceDate.getTime() - endMs) / (60 * 1000)));
+    }
+  }
+
+  const shiftEnd = getShiftEndDateTime(shiftTypeRaw, referenceDate);
+  if (!shiftEnd) return 0;
+
+  const diffMs = referenceDate.getTime() - shiftEnd.getTime();
+  if (diffMs <= 0) return 0;
+
+  return Math.floor(diffMs / (60 * 1000));
+}
+
+/**
+ * 1-Hour Strict Grace Period Rule:
+ * Returns true if current time is within 60 minutes of the scheduled shift end.
+ * Returns false if more than 60 minutes have elapsed since scheduled shift end.
+ */
+export function isShiftSnoozeAllowed(
+  shiftTypeRaw?: ShiftTypeOption | string | null,
+  referenceDate: Date = new Date(),
+  activeShift?: any | null,
+  maxGraceMinutes: number = 60
+): boolean {
+  const minutesPast = getMinutesSinceShiftEnd(shiftTypeRaw, referenceDate, activeShift);
+  return minutesPast <= maxGraceMinutes;
 }
 
 

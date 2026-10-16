@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Users,
   Plus,
@@ -23,6 +23,7 @@ import {
   X,
   Navigation,
   MapPin,
+  Eye,
 } from "lucide-react";
 import { StaffMember, PersonaRole } from "../../types";
 import ResponsiveSelect from "../ResponsiveSelect";
@@ -32,8 +33,9 @@ import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
 import { useRouter } from "next/navigation";
 import StaffProvisioningView from "./StaffProvisioningView";
-import StaffShiftAuditTable from "../StaffShiftAuditTable";
+import StaffReconciliationView from "./StaffReconciliationView";
 import { analyzeStaffMultiShifts } from "../../../../lib/shiftAuditNotifications";
+import { fetchUniversalStaffShifts } from "../../../../lib/universalShiftLogging";
 
 interface StaffViewProps {
   staffList: StaffMember[];
@@ -44,18 +46,42 @@ interface StaffViewProps {
   persona: PersonaRole;
   selectedBranchId: string;
   showToast: (msg: string) => void;
-  routeAction?: { action: "new" | "edit"; id?: string } | null;
+  routeAction?: { action: "new" | "edit" | "reconciliation"; id?: string } | null;
 }
 
-// Helper to strictly eliminate duplicate staff records by ID
+// Helper to strictly eliminate duplicate staff records by ID and normalize terminal access
 const deduplicateStaff = (list: StaffMember[]): StaffMember[] => {
   const seen = new Set<string>();
-  return (list || []).filter((item) => {
+  return (list || []).map((item) => {
+    const isWaiter =
+      (item.role || "").toLowerCase() === "waiter" ||
+      (item.role || "").toLowerCase() === "server" ||
+      item.terminalAccess === "WAITER_ONLY";
+    if (isWaiter) {
+      return {
+        ...item,
+        assignedScreen: "Waiter Station" as const,
+        terminalAccess: "WAITER_ONLY" as const,
+      };
+    }
+    return item;
+  }).filter((item) => {
     if (!item?.id) return false;
     if (seen.has(item.id)) return false;
     seen.add(item.id);
     return true;
   });
+};
+
+// Helper to strictly display only the clean shift label (e.g. "Morning", "Evening", "Night") without time ranges
+export const getCleanShiftLabel = (rawShift?: string): string => {
+  if (!rawShift) return "Evening";
+  const lower = rawShift.toLowerCase().trim();
+  if (lower.includes("morning")) return "Morning";
+  if (lower.includes("evening")) return "Evening";
+  if (lower.includes("night") || lower.includes("closing")) return "Night";
+  const cleaned = rawShift.replace(/\s*\([^)]*\)/g, "").replace(/\s*-\s*\d+.*$/, "").trim();
+  return cleaned || "Evening";
 };
 
 export default function StaffView({
@@ -76,6 +102,7 @@ export default function StaffView({
   // Local roster synchronized with Supabase & deduplicated
   const [roster, setRoster] = useState<StaffMember[]>(() => deduplicateStaff(staffList));
   const [shiftSettlements, setShiftSettlements] = useState<any[]>([]);
+  const [isFetchingShifts, setIsFetchingShifts] = useState(false);
 
   const staffShiftStats = useMemo(() => {
     return analyzeStaffMultiShifts(shiftSettlements);
@@ -87,112 +114,122 @@ export default function StaffView({
     }
   }, [staffList]);
 
-  // Load staff records directly from Supabase public.staff_members
-  useEffect(() => {
-    let isMounted = true;
-    const fetchStaffFromSupabase = async () => {
-      try {
-        const supabase = createClient();
-        const { restId } = await getValidTenantContext(user);
-        const { data, error } = await supabase
-          .from("staff_members")
-          .select("*")
-          .eq("restaurant_id", restId)
-          .order("created_at", { ascending: false });
+  // Load staff records and shift logs directly from Supabase
+  const fetchStaffFromSupabase = useCallback(async () => {
+    setIsFetchingShifts(true);
+    try {
+      const supabase = createClient();
+      const { restId } = await getValidTenantContext(user);
+      const { data, error } = await supabase
+        .from("staff_members")
+        .select("*")
+        .eq("restaurant_id", restId)
+        .order("created_at", { ascending: false });
 
-        if (error) {
-          console.warn("[StaffView] Supabase load error:", error);
-          return;
+      if (error) {
+        console.warn("[StaffView] Supabase load error:", error);
+      } else if (data) {
+        const mapped: StaffMember[] = data.map((s: any) => ({
+          id: s.id,
+          name: s.full_name,
+          email: s.email,
+          password: s.password_hash,
+          role: s.role,
+          branchId: s.branch_id || "main",
+          branchName: s.branch_name || "Main Outlet",
+          phone: s.phone || "",
+          shift: s.shift || "Evening",
+          status: s.status || "active",
+          terminalAccess: (s.role === "waiter" || s.role === "server" || s.terminal_access === "WAITER_ONLY") ? "WAITER_ONLY" : s.terminal_access,
+          assignedScreen:
+            (s.role === "waiter" || s.role === "server" || s.terminal_access === "WAITER_ONLY")
+              ? "Waiter Station"
+              : s.terminal_access === "POS_ONLY"
+              ? "POS Counter"
+              : s.terminal_access === "KDS_ONLY"
+              ? "Kitchen (KDS)"
+              : s.terminal_access === "RIDER_ONLY"
+              ? "Rider Dispatch"
+              : "Full Admin",
+          avatar: (s.full_name || "ST").substring(0, 2).toUpperCase(),
+          joinedDate: "Active",
+          assigned_zones: Array.isArray(s.assigned_zones) ? s.assigned_zones : [],
+          assigned_station: s.assigned_station || (s as any).assignedStation || undefined,
+          assignedStation: s.assigned_station || (s as any).assignedStation || undefined,
+        }));
+
+        const cleanList = deduplicateStaff(mapped);
+        setRoster(cleanList);
+        if (setStaffList) {
+          setStaffList(cleanList);
+          saveStoredStaff(currentOrgId, cleanList);
         }
-
-        if (data && isMounted) {
-          const mapped: StaffMember[] = data.map((s: any) => ({
-            id: s.id,
-            name: s.full_name,
-            email: s.email,
-            password: s.password_hash,
-            role: s.role,
-            branchId: s.branch_id || "main",
-            branchName: s.branch_name || "Main Outlet",
-            phone: s.phone || "",
-            shift: s.shift || "Evening",
-            status: s.status || "active",
-            terminalAccess: s.terminal_access,
-            assignedScreen:
-              s.terminal_access === "POS_ONLY"
-                ? "POS Counter"
-                : s.terminal_access === "KDS_ONLY"
-                ? "Kitchen (KDS)"
-                : s.terminal_access === "RIDER_ONLY"
-                ? "Rider Dispatch"
-                : "Full Admin",
-            avatar: (s.full_name || "ST").substring(0, 2).toUpperCase(),
-            joinedDate: "Active",
-            assigned_zones: Array.isArray(s.assigned_zones) ? s.assigned_zones : [],
-          }));
-
-          const cleanList = deduplicateStaff(mapped);
-          setRoster(cleanList);
-          if (setStaffList) {
-            setStaffList(cleanList);
-            saveStoredStaff(currentOrgId, cleanList);
-          }
-        }
-
-        // Fetch shift settlements to calculate multi-shift performance and hours
-        const { data: shifts } = await supabase
-          .from("shift_settlements")
-          .select("*")
-          .eq("restaurant_id", restId)
-          .order("created_at", { ascending: false })
-          .limit(40);
-
-        if (shifts && isMounted) {
-          // Admin shifts are excluded: register shift audit trail is strictly for cashier terminals
-          const staffOnlyShifts = shifts.filter((s: any) => {
-            const name = (s.cashier_name || "").toLowerCase().trim();
-            const role = (s.cashier_role || s.role || "").toLowerCase().trim();
-            const notes = (s.closing_notes || "").toLowerCase();
-            return !(
-              name === "admin" ||
-              role === "admin" ||
-              name.startsWith("admin ") ||
-              name.endsWith(" admin") ||
-              notes.includes("admin pos session")
-            );
-          });
-          setShiftSettlements(staffOnlyShifts);
-        }
-      } catch (err) {
-        console.error("[StaffView] Supabase fetch exception:", err);
       }
-    };
 
+      // Fetch shift settlements strictly for authenticated restaurant_id
+      const shifts = await fetchUniversalStaffShifts(restId);
+
+      const staffOnlyShifts = (shifts || []).filter((s: any) => {
+        const name = (s.cashier_name || "").toLowerCase().trim();
+        const role = (s.staff_role || s.cashier_role || s.role || "").toLowerCase().trim();
+        const notes = (s.closing_notes || "").toLowerCase();
+        return !(
+          name === "admin" ||
+          role === "admin" ||
+          name.startsWith("admin ") ||
+          name.endsWith(" admin") ||
+          notes.includes("admin pos session")
+        );
+      });
+
+      // Strict 100% Realtime Database Sourcing: zero mock fallback data
+      setShiftSettlements(staffOnlyShifts);
+    } catch (err) {
+      console.error("[StaffView] Supabase fetch exception:", err);
+    } finally {
+      setIsFetchingShifts(false);
+    }
+  }, [user, currentOrgId, setStaffList]);
+
+  useEffect(() => {
     fetchStaffFromSupabase();
-    return () => {
-      isMounted = false;
-    };
-  }, [user?.organizationId, user?.restaurantId, user?.id]);
+  }, [fetchStaffFromSupabase]);
 
   // Filtering & Search
   const [roleFilter, setRoleFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
-  // Dedicated Full-Page Staff Provisioning Mode (No Popup Modals)
+  // Dedicated Full-Page Staff Provisioning & Reconciliation Modes (No Popup Modals)
   const [provisioningMode, setProvisioningMode] = useState<"add" | "edit" | null>(null);
+  const [isReconciliationMode, setIsReconciliationMode] = useState<boolean>(
+    () => routeAction?.action === "reconciliation"
+  );
   const [staffToEdit, setStaffToEdit] = useState<StaffMember | null>(null);
   const [staffToDelete, setStaffToDelete] = useState<StaffMember | null>(null);
+  const [viewingStaff, setViewingStaff] = useState<StaffMember | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Synchronize routeAction with provisioningMode (support bookmarking & direct URLs)
+  // Synchronize routeAction with provisioningMode & reconciliationMode
   useEffect(() => {
     if (!routeAction) {
       if (provisioningMode !== null) {
         setProvisioningMode(null);
         setStaffToEdit(null);
       }
+      if (isReconciliationMode) {
+        setIsReconciliationMode(false);
+      }
       return;
     }
+
+    if (routeAction.action === "reconciliation") {
+      setProvisioningMode(null);
+      setStaffToEdit(null);
+      setIsReconciliationMode(true);
+      return;
+    }
+
+    setIsReconciliationMode(false);
 
     if (routeAction.action === "new") {
       setStaffToEdit(null);
@@ -225,9 +262,11 @@ export default function StaffView({
                 phone: data.phone || "",
                 shift: data.shift || "Evening",
                 status: data.status || "active",
-                terminalAccess: data.terminal_access,
+                terminalAccess: (data.role === "waiter" || data.role === "server" || data.terminal_access === "WAITER_ONLY") ? "WAITER_ONLY" : data.terminal_access,
                 assignedScreen:
-                  data.terminal_access === "POS_ONLY"
+                  (data.role === "waiter" || data.role === "server" || data.terminal_access === "WAITER_ONLY")
+                    ? "Waiter Station"
+                    : data.terminal_access === "POS_ONLY"
                     ? "POS Counter"
                     : data.terminal_access === "KDS_ONLY"
                     ? "Kitchen (KDS)"
@@ -237,6 +276,8 @@ export default function StaffView({
                 avatar: (data.full_name || "ST").substring(0, 2).toUpperCase(),
                 joinedDate: "Active",
                 assigned_zones: Array.isArray(data.assigned_zones) ? data.assigned_zones : [],
+                assigned_station: data.assigned_station || (data as any).assignedStation || undefined,
+                assignedStation: data.assigned_station || (data as any).assignedStation || undefined,
               };
               setStaffToEdit(mapped);
               setProvisioningMode("edit");
@@ -250,6 +291,7 @@ export default function StaffView({
   }, [routeAction, roster]);
 
   const handleStartAddStaff = () => {
+    setIsReconciliationMode(false);
     setStaffToEdit(null);
     setProvisioningMode("add");
     if (typeof window !== "undefined") {
@@ -258,10 +300,27 @@ export default function StaffView({
   };
 
   const handleStartEditStaff = (staff: StaffMember) => {
+    setIsReconciliationMode(false);
     setStaffToEdit(staff);
     setProvisioningMode("edit");
     if (typeof window !== "undefined") {
       window.history.pushState(null, "", `/admin/staff/${staff.id}`);
+    }
+  };
+
+  const handleOpenReconciliation = () => {
+    setProvisioningMode(null);
+    setStaffToEdit(null);
+    setIsReconciliationMode(true);
+    if (typeof window !== "undefined") {
+      window.history.pushState(null, "", "/admin/staff/reconciliation");
+    }
+  };
+
+  const handleCloseReconciliation = () => {
+    setIsReconciliationMode(false);
+    if (typeof window !== "undefined") {
+      window.history.pushState(null, "", "/admin/staff");
     }
   };
 
@@ -450,6 +509,19 @@ export default function StaffView({
     );
   }
 
+  // Render Dedicated Full-Page Staff Reconciliation View
+  if (isReconciliationMode) {
+    return (
+      <StaffReconciliationView
+        settlements={shiftSettlements}
+        currencySymbol="Rs"
+        onBack={handleCloseReconciliation}
+        onRefresh={fetchStaffFromSupabase}
+        isRefreshing={isFetchingShifts}
+      />
+    );
+  }
+
   return (
     <div className="px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200">
       {/* Header & Controls */}
@@ -461,16 +533,32 @@ export default function StaffView({
               Terminal Access
             </span>
           </h1>
+          <p className="text-xs font-mono text-[var(--text-lo)] mt-1">
+            Manage roles, terminal provisioning, stations, and shift assignments
+          </p>
         </div>
 
-        <button
-          type="button"
-          onClick={handleStartAddStaff}
-          className="btn-gold animate-sheen px-5 py-2.5 text-xs font-bold cursor-pointer inline-flex items-center gap-2 shrink-0 self-start sm:self-auto rounded-xl shadow-md hover:scale-[1.02] transition-transform"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Add Staff Member</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
+          <button
+            type="button"
+            onClick={handleOpenReconciliation}
+            id="staff-reconciliation-btn"
+            className="px-4 py-2.5 text-xs font-bold cursor-pointer inline-flex items-center gap-2 shrink-0 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface)] border border-[var(--border)] hover:border-[var(--gold)]/50 text-[var(--text-hi)] hover:text-[var(--gold)] transition-all shadow-sm group font-mono"
+          >
+            <Clock className="w-4 h-4 text-[var(--gold)] group-hover:scale-110 transition-transform" />
+            <span>Staff Reconciliation</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleStartAddStaff}
+            id="add-staff-member-btn"
+            className="btn-gold animate-sheen px-5 py-2.5 text-xs font-bold cursor-pointer inline-flex items-center gap-2 shrink-0 rounded-xl shadow-md hover:scale-[1.02] transition-transform"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add Staff Member</span>
+          </button>
+        </div>
       </div>
 
       {/* Roster Telemetry Metrics Bar */}
@@ -582,241 +670,113 @@ export default function StaffView({
           <p className="text-xs text-[var(--text-lo)] max-w-sm mt-1 mb-4">Try adjusting your search query or role filter tab.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5 sm:gap-5">
-          {uniqueFilteredStaff.map((staff) => (
-            <div
-              key={staff.id}
-              className="glass-panel p-4 sm:p-6 rounded-2xl border border-[var(--border)] transition-all duration-300 flex flex-col justify-between relative group hover:border-[var(--gold)]/50 hover:shadow-xl hover:shadow-black/20 overflow-hidden"
-            >
-              {/* Top Accent Color Line by Role */}
-              <div
-                className={`absolute top-0 left-0 right-0 h-1 ${
-                  staff.role === "cashier"
-                    ? "bg-gradient-to-r from-emerald-500 to-teal-400"
-                    : staff.role === "chef"
-                    ? "bg-gradient-to-r from-amber-500 to-orange-500"
-                    : staff.role === "rider"
-                    ? "bg-gradient-to-r from-blue-500 to-cyan-400"
-                    : staff.role === "waiter"
-                    ? "bg-gradient-to-r from-teal-400 to-emerald-500"
-                    : "bg-gradient-to-r from-[var(--gold)] to-amber-600"
-                }`}
-              />
+        <div className="space-y-2.5 sm:space-y-3">
+          {/* Column Header for Desktop: Strictly Staff Member, Role, and Actions */}
+          <div className="hidden md:flex items-center justify-between px-4 py-2 text-[11px] font-mono uppercase tracking-wider text-[var(--text-faint)]">
+            <div className="flex items-center gap-4 flex-1 min-w-0 pl-1.5 sm:pl-2">
+              <span className="w-56 lg:w-72 shrink-0">Staff Member</span>
+              <span className="flex-1 min-w-0">Role</span>
+            </div>
+            <span className="shrink-0 text-right pr-2">Actions</span>
+          </div>
 
-              <div className="space-y-4">
-                {/* Header: Avatar, Name, Role Badge, Status Toggle */}
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
+          {uniqueFilteredStaff.map((staff) => {
+            const cleanShift = getCleanShiftLabel(staff.shift);
+            return (
+              <div
+                key={staff.id}
+                className="glass-panel px-2.5 py-2 sm:px-3 sm:py-2.5 md:px-4 md:py-3.5 rounded-xl sm:rounded-2xl border border-[var(--border)] hover:border-[var(--gold)]/40 hover:bg-[var(--surface-hi)]/30 transition-all duration-200 flex flex-row items-center justify-between gap-2 sm:gap-3 md:gap-4 relative group overflow-hidden"
+              >
+                {/* Left vertical role accent line */}
+                <div
+                  className={`absolute left-0 top-0 bottom-0 w-1 ${
+                    staff.role === "cashier"
+                      ? "bg-gradient-to-b from-emerald-500 to-teal-400"
+                      : staff.role === "chef"
+                      ? "bg-gradient-to-b from-amber-500 to-orange-500"
+                      : staff.role === "rider"
+                      ? "bg-gradient-to-b from-blue-500 to-cyan-400"
+                      : staff.role === "waiter"
+                      ? "bg-gradient-to-b from-teal-400 to-emerald-500"
+                      : "bg-gradient-to-b from-[var(--gold)] to-amber-600"
+                  }`}
+                />
+
+                {/* Left Core Columns - Staff Member (with Shift subtext) & Role */}
+                <div className="flex flex-row items-center gap-2 sm:gap-3 md:gap-4 flex-1 min-w-0 pl-1 sm:pl-1.5 md:pl-2">
+                  {/* 1. Staff Member Name, Avatar & Shift Subtext (Consistent fixed width across all rows for vertical column alignment) */}
+                  <div className="flex items-center gap-2 sm:gap-2.5 md:gap-3 w-36 xs:w-40 sm:w-52 md:w-56 lg:w-72 shrink-0">
                     <div className="relative shrink-0">
-                      <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#f5c85c] to-[#e04e17] text-[#342c14] flex items-center justify-center font-display font-black text-base shadow-md border border-white/40">
+                      <div className="w-8 h-8 sm:w-9 sm:h-9 md:w-10 md:h-10 rounded-xl bg-gradient-to-br from-[#f5c85c] to-[#e04e17] text-[#342c14] flex items-center justify-center font-display font-black text-xs sm:text-sm shadow-sm border border-white/40">
                         {staff.avatar || (staff.name || "ST").substring(0, 2).toUpperCase()}
                       </div>
-                      {/* Presence status ring */}
-                      <span
-                        className={`absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full border-2 border-[var(--surface-hi)] ${
-                          staff.status === "active"
-                            ? "bg-emerald-500 ring-2 ring-emerald-500/30"
-                            : staff.status === "on_break"
-                            ? "bg-amber-500 ring-2 ring-amber-500/30"
-                            : "bg-rose-500 ring-2 ring-rose-500/30"
-                        }`}
-                      />
                     </div>
-                    <div className="min-w-0">
-                      <h4 className="font-display font-bold text-base text-[var(--text-hi)] group-hover:text-[var(--gold)] transition-colors truncate">
+                    <div className="min-w-0 flex-1 flex flex-col justify-center">
+                      <h4 className="font-display font-bold text-xs sm:text-sm md:text-base text-[var(--text-hi)] group-hover:text-[var(--gold)] transition-colors truncate">
                         {staff.name}
                       </h4>
-                      <p className="text-[11px] font-mono text-[var(--text-lo)] truncate flex items-center gap-1.5 mt-0.5">
-                        <Mail className="w-3 h-3 text-[var(--gold)] shrink-0" />
-                        <span className="truncate">{staff.email || "No email"}</span>
-                      </p>
+                      <span
+                        className="inline-flex items-center gap-1 text-[10.5px] sm:text-[11px] font-mono text-[var(--text-lo)] mt-0.5"
+                        title={`Duty Shift: ${cleanShift}`}
+                      >
+                        <Clock className="w-2.5 h-2.5 text-[var(--gold)] shrink-0" />
+                        <span className="truncate">{cleanShift}</span>
+                      </span>
                     </div>
                   </div>
 
-                  {/* Role Pill & Status Toggle */}
-                  <div className="flex flex-col items-end gap-1.5 shrink-0">
-                    <span
-                      className={`badge-pill uppercase ${
-                        staff.role === "cashier"
-                          ? "badge-success"
-                          : staff.role === "chef"
-                          ? "badge-warning"
-                          : staff.role === "rider"
-                          ? "badge-info"
-                          : staff.role === "waiter"
-                          ? "badge-info"
-                          : "badge-gold"
-                      }`}
-                    >
+                  {/* 2. Role Column - Clean, perfectly aligned vertically */}
+                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                    <span className="uppercase text-xs sm:text-sm font-semibold tracking-wide text-[var(--text-hi)] truncate">
                       {staff.role}
                     </span>
-
-                    {/* Interactive Status Chip */}
-                    <button
-                      type="button"
-                      onClick={() => handleToggleStatus(staff)}
-                      className={`badge-pill uppercase cursor-pointer transition-all hover:scale-105 ${
-                        staff.status === "active"
-                          ? "badge-success"
-                          : staff.status === "on_break"
-                          ? "badge-warning"
-                          : "badge-danger"
-                      }`}
-                      title="Cycle status"
-                    >
-                      <span className="badge-dot" />
-                      <span>{staff.status === "on_break" ? "On Break" : staff.status}</span>
-                    </button>
+                    {staff.role === "chef" && (staff.assigned_station || (staff as any).assignedStation) && (
+                      <span className="hidden sm:inline-flex text-[11px] font-mono text-[var(--text-lo)] font-medium truncate">
+                        ({String(staff.assigned_station || (staff as any).assignedStation).replace(/_/g, " ")})
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                {/* Metadata Grid: Branch, Shift, Phone */}
-                <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                  <div className="flex items-center gap-2 p-2 rounded-xl bg-[var(--surface-hi)]/40 border border-[var(--border)]/50 text-[var(--text-lo)] truncate">
-                    <Building2 className="w-3.5 h-3.5 text-[var(--gold)] shrink-0" />
-                    <span className="truncate">{staff.branchName || "Main Outlet"}</span>
-                  </div>
+                {/* 3. Actions Column: Clean Transparent Borderless Icon Buttons */}
+                <div className="flex flex-row items-center gap-2 sm:gap-3 shrink-0 ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => setViewingStaff(staff)}
+                    className="p-1 text-[var(--text-lo)] hover:text-[var(--gold)] hover:scale-115 transition-all cursor-pointer bg-transparent border-0 flex items-center justify-center focus:outline-none"
+                    title="View Details"
+                    aria-label="View details"
+                  >
+                    <Eye className="w-4 h-4" />
+                  </button>
 
-                  <div className="flex items-center gap-2 p-2 rounded-xl bg-[var(--surface-hi)]/40 border border-[var(--border)]/50 text-[var(--text-lo)] truncate">
-                    <Clock className="w-3.5 h-3.5 text-[var(--gold)] shrink-0" />
-                    <span className="truncate">{staff.shift || "Evening"}</span>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleStartEditStaff(staff)}
+                    className="p-1 text-[var(--text-lo)] hover:text-[var(--gold)] hover:scale-115 transition-all cursor-pointer bg-transparent border-0 flex items-center justify-center focus:outline-none"
+                    title="Edit Staff"
+                    aria-label="Edit staff"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </button>
 
-                  <div className="col-span-2 flex items-center justify-between p-2 rounded-xl bg-[var(--surface-hi)]/40 border border-[var(--border)]/50 text-[var(--text-lo)]">
-                    <div className="flex items-center gap-2 truncate">
-                      <Phone className="w-3.5 h-3.5 text-[var(--gold)] shrink-0" />
-                      <span className="truncate">{staff.phone || "No phone registered"}</span>
-                    </div>
-                    {staff.password && (
-                      <span className="text-[10px] text-[var(--text-faint)] flex items-center gap-1 shrink-0">
-                        <Lock className="w-3 h-3 text-[var(--text-faint)]" />
-                        ••••••
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Multi-Shift & Consecutive Hours Badge */}
-                  {staffShiftStats[staff.name] && (
-                    <div className="col-span-2 p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-between text-[11px] font-mono">
-                      <span className="flex items-center gap-1.5 font-bold">
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                        <span>
-                          {staffShiftStats[staff.name].totalShiftsCount > 1
-                            ? `Consecutive (${staffShiftStats[staff.name].totalShiftsCount} Shifts)`
-                            : "1 Shift Logged"}
-                        </span>
-                      </span>
-                      <span className="font-bold text-emerald-300">
-                        {staffShiftStats[staff.name].totalHoursWorked.toFixed(1)} hrs worked
-                      </span>
-                    </div>
-                  )}
-
-                  {staff.role === "rider" && (
-                    <div className="col-span-2 space-y-1.5 p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400">
-                      <div className="flex items-center justify-between text-xs font-bold">
-                        <div className="flex items-center gap-1.5">
-                          <MapPin className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                          <span>Assigned Locations</span>
-                        </div>
-                        <span className="text-[10px] font-mono opacity-80">
-                          {staff.assigned_zones?.length || 0} {staff.assigned_zones?.length === 1 ? "area" : "areas"}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap gap-1 pt-0.5">
-                        {staff.assigned_zones && staff.assigned_zones.length > 0 ? (
-                          staff.assigned_zones.map((zone, idx) => (
-                            <span
-                              key={idx}
-                              className="px-2 py-0.5 rounded-md bg-blue-500/20 border border-blue-500/30 text-blue-300 font-mono text-[11px] font-semibold"
-                            >
-                              {zone}
-                            </span>
-                          ))
-                        ) : (
-                          <span className="text-[11px] font-mono text-blue-400/60 italic">
-                            No locations assigned
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Terminal Screen Routing Access Panel */}
-                <div className="p-3 rounded-xl bg-[var(--surface-hi)]/60 border border-[var(--border)]/80 space-y-1.5">
-                  <div className="flex items-center justify-between text-[10px] font-mono text-[var(--text-faint)]">
-                    <span className="tracking-wider uppercase">TERMINAL ROUTING ACCESS</span>
-                    <span className="font-bold text-[var(--gold)]">
-                      {staff.terminalAccess || "FULL_ADMIN"}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs font-bold text-[var(--text-hi)]">
-                    {staff.assignedScreen === "POS Counter" && (
-                      <Receipt className="w-4 h-4 text-emerald-400 shrink-0" />
-                    )}
-                    {staff.assignedScreen === "Kitchen (KDS)" && (
-                      <Flame className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                    )}
-                    {staff.assignedScreen === "Rider Dispatch" && (
-                      <Bike className="w-4 h-4 text-blue-400 shrink-0" />
-                    )}
-                    {staff.assignedScreen === "Full Admin" && (
-                      <ShieldCheck className="w-4 h-4 text-[var(--gold)] shrink-0" />
-                    )}
-                    <span>{staff.assignedScreen || "Full Admin"}</span>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setStaffToDelete(staff)}
+                    className="p-1 text-[var(--text-lo)] hover:text-rose-400 hover:scale-115 transition-all cursor-pointer bg-transparent border-0 flex items-center justify-center focus:outline-none"
+                    title="Delete Staff"
+                    aria-label="Delete staff"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
-
-              {/* Bottom Card Actions: Prominent [Edit Details] & [Delete] Buttons */}
-              <div className="grid grid-cols-2 gap-2.5 pt-4 mt-3 border-t border-[var(--border)]/60">
-                <button
-                  type="button"
-                  onClick={() => handleStartEditStaff(staff)}
-                  className="py-2.5 px-3 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--gold-dim)] text-[var(--text-hi)] hover:text-[var(--gold)] border border-[var(--border)] hover:border-[var(--gold)]/40 transition-all cursor-pointer font-sans text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm active:scale-98"
-                >
-                  <Edit2 className="w-3.5 h-3.5" />
-                  <span>Edit Details</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setStaffToDelete(staff)}
-                  className="py-2.5 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/30 hover:border-rose-500/50 transition-all cursor-pointer font-sans text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm active:scale-98"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Delete</span>
-                </button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
-      {/* Staff Shift Audit Trail & Drawer Settlements */}
-      <div className="glass-panel p-6 sm:p-8 rounded-2xl border border-[var(--border)] space-y-5 shadow-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[var(--border)]">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[var(--gold)]/10 text-[var(--gold)] border border-[var(--gold)]/20 flex items-center justify-center">
-              <Clock className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-[var(--text-hi)]">
-                Staff Shift Audit Trail &amp; Daily Reconciliation
-              </h3>
-              <p className="text-[11px] font-mono text-[var(--text-lo)]">
-                Consolidated daily staff shift windows, cash collections, and closing drawer balances
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <StaffShiftAuditTable
-          settlements={shiftSettlements}
-          currencySymbol="Rs"
-        />
-      </div>
+      {/* Pure staff list view without heavy audit table */}
 
       {/* ========================================================================= */}
       {/* DELETE STAFF CONFIRMATION DIALOG (Pure Supabase DB Delete)                 */}
@@ -875,6 +835,190 @@ export default function StaffView({
                     <span>Yes, Delete</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* VIEW STAFF DETAILS MODAL (Eye Button)                                     */}
+      {/* ========================================================================= */}
+      {viewingStaff && (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setViewingStaff(null);
+          }}
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-[var(--bg-deep)] border border-[var(--border-hi)] rounded-2xl sm:rounded-3xl w-full max-w-lg p-5 sm:p-6 space-y-4 sm:space-y-5 shadow-2xl relative animate-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#f5c85c] to-[#e04e17] text-[#342c14] flex items-center justify-center font-display font-black text-lg shadow-md border border-white/40">
+                  {viewingStaff.avatar || (viewingStaff.name || "ST").substring(0, 2).toUpperCase()}
+                </div>
+                <div>
+                  <h3 className="font-display font-black text-lg text-[var(--text-hi)]">
+                    {viewingStaff.name}
+                  </h3>
+                  <p className="text-xs font-mono text-[var(--text-lo)] flex items-center gap-1 mt-0.5">
+                    <Mail className="w-3.5 h-3.5 text-[var(--gold)]" />
+                    {viewingStaff.email || "No email"}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingStaff(null)}
+                className="p-1.5 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface)] text-[var(--text-lo)] hover:text-[var(--text-hi)] border border-[var(--border)] transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Details Grid */}
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-3 text-xs font-mono">
+              <div className="p-3 rounded-xl bg-[var(--surface-hi)]/50 border border-[var(--border)]/60 space-y-1">
+                <span className="text-[10px] uppercase text-[var(--text-faint)] tracking-wider">Role</span>
+                <div className="font-bold text-[var(--text-hi)] uppercase">
+                  {viewingStaff.role}
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[var(--surface-hi)]/50 border border-[var(--border)]/60 space-y-1">
+                <span className="text-[10px] uppercase text-[var(--text-faint)] tracking-wider">Duty Shift</span>
+                <div className="font-bold text-[var(--gold)] flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-[var(--gold)]" />
+                  {getCleanShiftLabel(viewingStaff.shift)}
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[var(--surface-hi)]/50 border border-[var(--border)]/60 space-y-1">
+                <span className="text-[10px] uppercase text-[var(--text-faint)] tracking-wider">Assigned Outlet</span>
+                <div className="font-bold text-[var(--text-hi)] flex items-center gap-1.5 truncate">
+                  <Building2 className="w-3.5 h-3.5 text-[var(--gold)] shrink-0" />
+                  <span className="truncate">{viewingStaff.branchName || "Main Outlet"}</span>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[var(--surface-hi)]/50 border border-[var(--border)]/60 space-y-1">
+                <span className="text-[10px] uppercase text-[var(--text-faint)] tracking-wider">Presence Status</span>
+                <div className="flex items-center gap-1.5 font-bold">
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      viewingStaff.status === "active"
+                        ? "bg-emerald-500 ring-2 ring-emerald-500/30"
+                        : viewingStaff.status === "on_break"
+                        ? "bg-amber-500 ring-2 ring-amber-500/30"
+                        : "bg-rose-500 ring-2 ring-rose-500/30"
+                    }`}
+                  />
+                  <span className="capitalize text-[var(--text-hi)]">
+                    {viewingStaff.status === "on_break" ? "On Break" : viewingStaff.status}
+                  </span>
+                </div>
+              </div>
+
+              <div className="col-span-2 p-3 rounded-xl bg-[var(--surface-hi)]/50 border border-[var(--border)]/60 space-y-1.5">
+                <div className="flex items-center justify-between text-[10px] font-mono text-[var(--text-faint)]">
+                  <span className="tracking-wider uppercase">TERMINAL ACCESS ROUTING</span>
+                  <span className="font-bold text-[var(--gold)]">
+                    {viewingStaff.terminalAccess || "FULL_ADMIN"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 font-bold text-sm text-[var(--text-hi)]">
+                  {(viewingStaff.assignedScreen === "Waiter Station" || (viewingStaff.role || "").toLowerCase() === "waiter" || (viewingStaff.role || "").toLowerCase() === "server") ? (
+                    <>
+                      <UtensilsCrossed className="w-4 h-4 text-violet-400 shrink-0" />
+                      <span className="text-violet-300 font-mono">Waiter Portal</span>
+                    </>
+                  ) : (
+                    <>
+                      {viewingStaff.assignedScreen === "POS Counter" && (
+                        <Receipt className="w-4 h-4 text-emerald-400 shrink-0" />
+                      )}
+                      {viewingStaff.assignedScreen === "Kitchen (KDS)" && (
+                        <Flame className="w-4 h-4 text-amber-500 dark:text-amber-400 shrink-0" />
+                      )}
+                      {viewingStaff.assignedScreen === "Rider Dispatch" && (
+                        <Bike className="w-4 h-4 text-blue-400 shrink-0" />
+                      )}
+                      {viewingStaff.assignedScreen === "Full Admin" && (
+                        <ShieldCheck className="w-4 h-4 text-[var(--gold)] shrink-0" />
+                      )}
+                      <span>{viewingStaff.assignedScreen || "Full Admin"}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {viewingStaff.phone && (
+                <div className="col-span-2 p-3 rounded-xl bg-[var(--surface-hi)]/50 border border-[var(--border)]/60 space-y-1">
+                  <span className="text-[10px] uppercase text-[var(--text-faint)] tracking-wider">Contact Phone</span>
+                  <div className="font-bold text-[var(--text-hi)] flex items-center gap-1.5">
+                    <Phone className="w-3.5 h-3.5 text-[var(--gold)]" />
+                    <span>{viewingStaff.phone}</span>
+                  </div>
+                </div>
+              )}
+
+              {viewingStaff.role === "rider" && viewingStaff.assigned_zones && viewingStaff.assigned_zones.length > 0 && (
+                <div className="col-span-2 p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-300 space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-blue-400">
+                    <MapPin className="w-3.5 h-3.5" />
+                    <span>Assigned Delivery Areas ({viewingStaff.assigned_zones.length})</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {viewingStaff.assigned_zones.map((zone, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 py-0.5 rounded-md bg-blue-500/20 border border-blue-500/30 text-blue-200 text-[11px]"
+                      >
+                        {zone}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {staffShiftStats[viewingStaff.name] && (
+                <div className="col-span-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <span className="font-bold">
+                      {staffShiftStats[viewingStaff.name].totalShiftsCount > 1
+                        ? `Consecutive (${staffShiftStats[viewingStaff.name].totalShiftsCount} Shifts)`
+                        : "1 Shift Logged"}
+                    </span>
+                  </div>
+                  <span className="font-bold text-emerald-400">
+                    {staffShiftStats[viewingStaff.name].totalHoursWorked.toFixed(1)} hrs worked
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Footer Actions */}
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-[var(--border)]">
+              <button
+                type="button"
+                onClick={() => {
+                  const target = viewingStaff;
+                  setViewingStaff(null);
+                  handleStartEditStaff(target);
+                }}
+                className="px-4 py-2 rounded-xl bg-[var(--gold)] hover:bg-[var(--gold-hi)] text-[#2a2415] text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5 shadow-md active:scale-95"
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+                <span>Edit Staff Member</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewingStaff(null)}
+                className="px-4 py-2 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface)] text-[var(--text-hi)] border border-[var(--border)] text-xs font-bold cursor-pointer transition-colors"
+              >
+                Close
               </button>
             </div>
           </div>

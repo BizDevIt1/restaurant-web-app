@@ -19,6 +19,8 @@ import {
   RefreshCw,
   MapPin,
   Phone,
+  AlertTriangle,
+  Lock,
 } from "lucide-react";
 import { OrderRecord } from "@/app/admin/types";
 import { ParkedOrder } from "./HoldOrdersDrawer";
@@ -794,7 +796,6 @@ export default function UnifiedOrdersView({
 
                   {/* Action Buttons */}
                   <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                    {/* Settle & Charge */}
                     {(isPending || isHeld) && (
                       <button
                         type="button"

@@ -151,6 +151,16 @@ export function notifyInventoryStockDeducted(orgId: string = "default"): void {
       });
       bc.close();
     } catch { }
+
+    try {
+      const legacyBc = new BroadcastChannel("pos_ledger_sync_channel");
+      legacyBc.postMessage({
+        type: "INVENTORY_DEDUCTED",
+        orgId,
+        timestamp: Date.now(),
+      });
+      legacyBc.close();
+    } catch { }
   }
 
   safeQueueMicrotask(() => {
@@ -158,6 +168,11 @@ export function notifyInventoryStockDeducted(orgId: string = "default"): void {
       window.dispatchEvent(
         new CustomEvent("inventory_stock_deducted", {
           detail: { orgId, timestamp: Date.now() },
+        })
+      );
+      window.dispatchEvent(
+        new CustomEvent("pos_menu_updated", {
+          detail: { orgId, action: "stock_deducted", timestamp: Date.now() },
         })
       );
       window.dispatchEvent(

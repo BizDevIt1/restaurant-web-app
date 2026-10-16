@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/app/admin/context/AuthContext";
 import { clearUserSession } from "@/lib/tenantStore";
+import { recordStaffShiftLogout } from "@/lib/universalShiftLogging";
 import ConfirmModal from "./ConfirmModal";
 import { useTerminalSidebar } from "../../TerminalSidebarContext";
 
@@ -161,22 +162,15 @@ export default function PosSidebar({
   const totalOrdersBadge = propsTotal > 0 ? propsTotal : cachedBadge;
 
   const handleInitiateLogout = () => {
-    // If cashier has an active open / unsettled shift, strictly block logout
-    const isShiftOpen =
-      activeShift &&
-      (activeShift.status === "OPEN" ||
-        activeShift.status === "active" ||
-        (!activeShift.status && !activeShift.closed_at));
-
-    if (isShiftOpen) {
-      setIsBlockedLogoutModalOpen(true);
-      return;
-    }
-
     setIsLogoutConfirmOpen(true);
   };
 
-  const handleConfirmLogout = () => {
+  const handleConfirmLogout = async () => {
+    try {
+      await recordStaffShiftLogout(user, { station: "cashier" });
+    } catch (e) {
+      console.warn("Failed recording cashier shift logout:", e);
+    }
     clearUserSession();
     logout();
     router.replace("/login");
@@ -403,60 +397,8 @@ export default function PosSidebar({
           </button>
         </nav>
 
-        {/* 3. BOTTOM SECTION: USER PROFILE & LOGOUT */}
+        {/* 3. BOTTOM SECTION: LOGOUT */}
         <div className="p-2 border-t border-[var(--border)] space-y-1.5 bg-[var(--bg-deep)]/95">
-          {/* User Profile Card - Clickable to open dedicated Staff Profile page */}
-          <div
-            onClick={() => {
-              if (currentView !== "profile") {
-                router.push("/terminal/profile");
-              }
-            }}
-            className={`flex items-center h-12 rounded-xl bg-[var(--surface)] hover:bg-[var(--surface-hi)] border border-[var(--border)] hover:border-[var(--gold)]/40 cursor-pointer select-none relative group transition-all ${
-              isCollapsed ? "overflow-visible" : "overflow-hidden"
-            } ${currentView === "profile" ? "border-[var(--gold)]/60 bg-[var(--gold-dim)]/20 shadow-xs" : ""}`}
-            title="View Staff Profile & Shift Schedule"
-          >
-            <div className="w-[52px] shrink-0 flex items-center justify-center">
-              <div className="relative">
-                <div className="w-8 h-8 rounded-lg bg-[var(--gold-dim)] border border-[var(--gold)]/30 flex items-center justify-center font-mono font-bold text-xs text-[var(--gold)] shrink-0">
-                  {userInitials}
-                </div>
-                <span className="w-2 h-2 rounded-full bg-[#25d366] absolute -top-0.5 -right-0.5 ring-2 ring-[var(--bg-deep)]" />
-              </div>
-            </div>
-            <div
-              className={`flex-1 min-w-0 pr-2.5 overflow-hidden transition-all duration-300 ease-in-out ${
-                isCollapsed
-                  ? "w-0 opacity-0 -translate-x-3 pointer-events-none"
-                  : "w-auto opacity-100 translate-x-0"
-              }`}
-            >
-              <p className="text-xs font-bold text-[var(--text-hi)] truncate leading-tight">
-                {displayName}
-              </p>
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-[var(--surface-hi)] text-[var(--text-lo)] border border-[var(--border)] shrink-0">
-                  {roleBadge}
-                </span>
-                <span className="text-[10px] text-[var(--text-faint)] font-mono truncate">
-                  {displayEmail}
-                </span>
-              </div>
-            </div>
-
-            {/* Tooltip for user avatar when collapsed */}
-            {isCollapsed && (
-              <div className="absolute left-[calc(100%+12px)] top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:opacity-100 group-hover:translate-x-0 -translate-x-1.5 transition-all duration-200 z-[100] whitespace-nowrap">
-                <div className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-[var(--bg-deep)] text-[var(--text-hi)] border border-[var(--border-hi)] shadow-2xl shadow-black/80 backdrop-blur-xl">
-                  <div className="font-bold text-[var(--text-hi)]">{displayName}</div>
-                  <div className="text-[10px] text-[var(--text-faint)] font-mono">{roleBadge}</div>
-                </div>
-                <div className="absolute -left-1 top-1/2 -translate-y-1/2 w-2 h-2 rotate-45 bg-[var(--bg-deep)] border-l border-b border-[var(--border-hi)]" />
-              </div>
-            )}
-          </div>
-
           {/* Logout Button (styled matching admin sidebar) */}
           <button
             type="button"
@@ -805,11 +747,11 @@ export default function PosSidebar({
         isOpen={isLogoutConfirmOpen}
         onClose={() => setIsLogoutConfirmOpen(false)}
         onConfirm={handleConfirmLogout}
-        title="Log Out & Lock Terminal"
-        description="Are you sure you want to end your current cashier session? Any held or running orders remain safely stored in the database."
-        confirmLabel="Log Out"
+        title="Close Shift & End POS Session?"
+        description="Are you sure you want to log out? Logging out will automatically close your active shift in the database (status = 'CLOSED', closed_at = NOW) and return to the sign-in screen."
+        confirmLabel="Yes, Close Shift & Exit"
         cancelLabel="Stay in Terminal"
-        variant="danger"
+        variant="warning"
         icon="warning"
       />
 
@@ -820,20 +762,20 @@ export default function PosSidebar({
           aria-modal="true"
           className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200 select-none"
         >
-          <div className="w-full max-w-md bg-[var(--bg-deep)] border border-red-500/50 rounded-3xl p-6 shadow-2xl text-center space-y-4">
-            <div className="w-14 h-14 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-500 flex items-center justify-center mx-auto shadow-inner">
-              <AlertTriangle className="w-7 h-7 text-red-400" />
+          <div className="w-full max-w-md bg-[var(--bg-deep)] border border-amber-500/50 rounded-3xl p-6 shadow-2xl text-center space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-500 flex items-center justify-center mx-auto shadow-inner">
+              <AlertTriangle className="w-7 h-7 text-amber-400" />
             </div>
 
             <div className="space-y-1.5">
-              <span className="px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200/80 shadow-xs dark:bg-red-950/60 dark:border-red-800/60 dark:text-red-400 text-[10px] font-mono font-bold uppercase tracking-wider">
-                Anti-Fraud Settlement Lock
+              <span className="px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/80 shadow-xs dark:bg-amber-950/60 dark:border-amber-800/60 dark:text-amber-400 text-[10px] font-mono font-bold uppercase tracking-wider">
+                Shift Status Options
               </span>
               <h3 className="text-xl font-display font-black text-[var(--text-hi)]">
-                Action Blocked: Shift Not Settled
+                Close Shift &amp; Exit POS
               </h3>
               <p className="text-xs text-[var(--text-lo)] leading-relaxed">
-                You cannot log out or exit the terminal without completing your shift reconciliation and generating a Z-Report. Please complete your cash drawer count first.
+                You can proceed to the Z-Report to declare physical cash count or auto-close your shift directly to return to the sign-in screen.
               </p>
             </div>
 
@@ -847,7 +789,18 @@ export default function PosSidebar({
                 className="w-full py-3.5 px-4 rounded-xl btn-gold active:scale-95 text-[#342c14] font-bold font-mono text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 cursor-pointer"
               >
                 <Lock className="w-4 h-4" />
-                <span>Proceed to Z-Report &amp; Settle Shift</span>
+                <span>Reconcile &amp; Generate Z-Report</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsBlockedLogoutModalOpen(false);
+                  handleConfirmLogout();
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-400 text-xs font-bold font-mono transition-colors cursor-pointer"
+              >
+                Auto-Close Shift &amp; Exit Now
               </button>
 
               <button

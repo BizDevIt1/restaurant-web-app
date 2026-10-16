@@ -29,10 +29,15 @@ import { useAdminCache, mapRowToRestaurantTable, mapRowToTableStatus } from "../
 import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
 import { saveStoredTables } from "../../../../lib/tenantStore";
+import {
+  fetchActiveUnpaidTableRecords,
+  reconcileRestaurantTables,
+  subscribeToTableReleased,
+} from "../../../../lib/tableOccupancy";
 
 interface TableViewProps {
   showToast: (msg: string) => void;
-  routeAction?: { action: "new" | "edit"; id?: string } | null;
+  routeAction?: { action: "new" | "edit" | "reconciliation"; id?: string } | null;
 }
 
 const PRESET_SECTIONS = [
@@ -126,11 +131,17 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
       const supabase = createClient();
       const { restId } = await getValidTenantContext(user);
 
-      const { data, error } = await supabase
-        .from("restaurant_tables")
-        .select("*")
-        .eq("restaurant_id", restId)
-        .order("table_number", { ascending: true });
+      const [tableRes, activeRecords] = await Promise.all([
+        supabase
+          .from("restaurant_tables")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .order("table_number", { ascending: true }),
+        fetchActiveUnpaidTableRecords(restId, supabase),
+      ]);
+
+      const data = tableRes.data;
+      const error = tableRes.error;
 
       if (error) {
         console.warn("[TableView] Supabase load error:", error.message);
@@ -152,9 +163,11 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
           created_at: row.created_at,
           updated_at: row.updated_at,
         }));
-        setTables(mapped);
+
+        const reconciled = reconcileRestaurantTables(mapped, activeRecords);
+        setTables(reconciled);
         try {
-          localStorage.setItem(`tables_list_${restId}`, JSON.stringify(mapped));
+          localStorage.setItem(`tables_list_${restId}`, JSON.stringify(reconciled));
         } catch {}
         if (isManualRefresh) {
           showToast("Floor tables synchronized.");
@@ -172,7 +185,18 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
     fetchTables();
 
     let channel: any = null;
+    let unsubTableReleased: (() => void) | null = null;
     let isSubscribed = true;
+
+    const handleCustomEvent = () => {
+      fetchTables();
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("restaurant_tables_changed", handleCustomEvent);
+      window.addEventListener("pos_tables_updated", handleCustomEvent);
+      window.addEventListener("table_released", handleCustomEvent);
+    }
 
     (async () => {
       try {
@@ -180,8 +204,14 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
         const { restId } = await getValidTenantContext(user);
         if (!isSubscribed) return;
 
+        if (restId) {
+          unsubTableReleased = subscribeToTableReleased(restId, () => {
+            fetchTables();
+          });
+        }
+
         channel = supabase
-          .channel(`realtime:restaurant_tables_${restId}`)
+          .channel(`realtime:restaurant_tables_sync_${restId}`)
           .on(
             "postgres_changes",
             {
@@ -190,22 +220,32 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
               table: "restaurant_tables",
               filter: `restaurant_id=eq.${restId}`,
             },
-            (payload: any) => {
-              if (payload.eventType === "UPDATE") {
-                const updatedRow = payload.new;
-                const mapped = mapRowToRestaurantTable(updatedRow);
-                setTables((prev) => prev.map((t) => (String(t.id) === String(updatedRow.id) ? mapped : t)));
-                updateTableRow(updatedRow);
-              } else if (payload.eventType === "INSERT") {
-                const newRow = payload.new;
-                const mapped = mapRowToRestaurantTable(newRow);
-                setTables((prev) => [...prev.filter((t) => String(t.id) !== String(newRow.id)), mapped]);
-                insertTableRow(newRow);
-              } else if (payload.eventType === "DELETE") {
-                const oldId = payload.old?.id;
-                setTables((prev) => prev.filter((t) => String(t.id) !== String(oldId)));
-                deleteTableRow(oldId);
-              }
+            () => {
+              fetchTables();
+            }
+          )
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "kitchen_tickets",
+              filter: `restaurant_id=eq.${restId}`,
+            },
+            () => {
+              fetchTables();
+            }
+          )
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "orders",
+              filter: `restaurant_id=eq.${restId}`,
+            },
+            () => {
+              fetchTables();
             }
           )
           .subscribe();
@@ -216,6 +256,14 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
 
     return () => {
       isSubscribed = false;
+      if (typeof window !== "undefined") {
+        window.removeEventListener("restaurant_tables_changed", handleCustomEvent);
+        window.removeEventListener("pos_tables_updated", handleCustomEvent);
+        window.removeEventListener("table_released", handleCustomEvent);
+      }
+      if (unsubTableReleased) {
+        unsubTableReleased();
+      }
       if (channel) {
         try {
           const supabase = createClient();

@@ -22,6 +22,7 @@ import {
   getShiftWindowLabel,
   ShiftTypeOption,
 } from "../../../lib/shiftSchedule";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import PosSidebar from "../pos/components/PosSidebar";
 
@@ -39,8 +40,25 @@ function getShiftStartLabel(shift: ShiftTypeOption | null): string {
 }
 
 export default function StaffProfileClient() {
+  const router = useRouter();
   const { user, shiftValidation } = useAuth();
   const [activeShiftData, setActiveShiftData] = useState<any>(null);
+
+  // If user has a chef role, redirect directly to the dedicated Kitchen Terminal profile
+  useEffect(() => {
+    if (!user) return;
+    const rawRole = (user.staffRole || "").toLowerCase().trim();
+    const isChef =
+      rawRole === "chef" ||
+      rawRole === "kitchen" ||
+      rawRole === "cook" ||
+      rawRole === "kds" ||
+      user.terminalAccess === "KDS_ONLY" ||
+      (user.terminalAccess as string) === "KITCHEN_ONLY";
+    if (isChef) {
+      router.replace("/terminal/kitchen?tab=profile");
+    }
+  }, [user, router]);
 
   // Fetch active shift details if available
   useEffect(() => {

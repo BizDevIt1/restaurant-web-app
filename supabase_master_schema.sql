@@ -62,12 +62,14 @@ CREATE TABLE IF NOT EXISTS public.staff_members (
     terminal_access TEXT NOT NULL CHECK (terminal_access IN ('FULL_ADMIN', 'POS_ONLY', 'KDS_ONLY', 'RIDER_ONLY')),
     shift TEXT DEFAULT 'Evening' CHECK (shift IN ('Morning', 'Evening Rush', 'Night Owl', 'Evening', 'Night')),
     assigned_zones TEXT[] DEFAULT '{}',
+    assigned_station TEXT DEFAULT NULL,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
 ALTER TABLE public.staff_members 
 DROP COLUMN IF EXISTS max_delivery_radius_km,
-ADD COLUMN IF NOT EXISTS assigned_zones TEXT[] DEFAULT '{}';
+ADD COLUMN IF NOT EXISTS assigned_zones TEXT[] DEFAULT '{}',
+ADD COLUMN IF NOT EXISTS assigned_station TEXT DEFAULT NULL;
 
 ALTER TABLE public.orders 
 ADD COLUMN IF NOT EXISTS delivery_zone TEXT;
@@ -161,6 +163,7 @@ CREATE TABLE IF NOT EXISTS public.orders (
     payment_status TEXT NOT NULL DEFAULT 'paid' CHECK (payment_status IN ('pending', 'paid', 'refunded')),
     order_status TEXT NOT NULL DEFAULT 'completed' CHECK (order_status IN ('active', 'completed', 'cancelled')),
     items JSONB NOT NULL DEFAULT '[]'::jsonb,
+    is_deducted BOOLEAN NOT NULL DEFAULT false,
     cashier_name TEXT DEFAULT 'Terminal Cashier',
     created_at TIMESTAMPTZ DEFAULT now()
 );
@@ -201,8 +204,31 @@ CREATE TABLE IF NOT EXISTS public.kitchen_tickets (
     server_name TEXT DEFAULT 'Front Desk',
     priority TEXT DEFAULT 'normal' CHECK (priority IN ('normal', 'urgent')),
     elapsed_minutes INTEGER DEFAULT 0,
+    station_assigned TEXT DEFAULT NULL,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE public.kitchen_tickets
+ADD COLUMN IF NOT EXISTS station_assigned TEXT DEFAULT NULL;
+
+-- ==============================================================================
+-- 8B. TABLE: kitchen_stations
+-- Dedicated production stations (grill, fry, pastry, beverages, assembly)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.kitchen_stations (
+    id SERIAL PRIMARY KEY,
+    restaurant_id BIGINT REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    station_name VARCHAR(50) NOT NULL CHECK (station_name IN ('grill', 'fry', 'pastry', 'beverages', 'assembly')),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_kitchen_stations_restaurant ON public.kitchen_stations(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_kitchen_stations_active ON public.kitchen_stations(restaurant_id, is_active);
+ALTER TABLE public.kitchen_stations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Allow all kitchen_stations operations" ON public.kitchen_stations;
+CREATE POLICY "Allow all kitchen_stations operations" ON public.kitchen_stations FOR ALL USING (true) WITH CHECK (true);
 
 -- ==============================================================================
 -- 9. TABLE: deliveries
@@ -441,4 +467,27 @@ BEGIN
   END IF;
 END $$;
 
+-- ==========================================
+-- KITCHEN DISPLAY SYSTEM (KDS) & STATIONS
+-- ==========================================
 
+CREATE TABLE IF NOT EXISTS public.kitchen_stations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    restaurant_id BIGINT REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    station_name VARCHAR(50) NOT NULL CHECK (station_name IN ('grill', 'fry', 'pastry', 'beverages', 'assembly')),
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(restaurant_id, station_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kitchen_stations_restaurant ON public.kitchen_stations(restaurant_id);
+
+ALTER TABLE IF EXISTS public.staff_members
+ADD COLUMN IF NOT EXISTS assigned_station VARCHAR(50);
+
+ALTER TABLE IF EXISTS public.kitchen_tickets
+ADD COLUMN IF NOT EXISTS station_assigned VARCHAR(50),
+ADD COLUMN IF NOT EXISTS items_status JSONB DEFAULT '[]'::jsonb;
+
+CREATE INDEX IF NOT EXISTS idx_kitchen_tickets_items_status ON public.kitchen_tickets USING gin (items_status);

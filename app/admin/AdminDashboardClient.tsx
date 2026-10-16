@@ -46,11 +46,18 @@ import {
   normalizeModules,
 } from "../../lib/tenantStore";
 import { createClient } from "../../lib/supabase";
+import { safeUpdateKitchenTicket, applyOrderFilter } from "../../lib/kitchenTicketSync";
 import { getValidTenantContext } from "../../lib/tenantResolver";
 import { getActiveAuthSession } from "../../lib/auth";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AdminCacheProvider, useAdminCache, mapRowToTableStatus } from "./context/AdminCacheContext";
 import { getPermittedNavigation } from "./navigationConfig";
+import {
+  fetchActiveUnpaidTableRecords,
+  reconcileTableStatuses,
+  subscribeToTableReleased,
+  isTableMatchingIdentifier,
+} from "@/lib/tableOccupancy";
 import {
   getStoredNotifications,
   markAllNotificationsRead,
@@ -90,7 +97,13 @@ import SubscriptionView from "./components/views/SubscriptionView";
 import ProfileView from "./components/views/ProfileView";
 import ModuleLockedView from "./components/ModuleLockedView";
 import { deductInventoryStockForOrder } from "@/lib/inventoryDeduction";
+import { isTicketExpired, syncOrderExpiredState } from "@/lib/orderExpiry";
 import { applyRecipeCalculationsToMenu } from "@/lib/recipePortions";
+import {
+  computeUnifiedMenuCatalog,
+  broadcastStockRefresh,
+  subscribeToStockRefresh,
+} from "@/lib/unifiedStock";
 import {
   saveSharedPosCart,
   clearSharedPosCart,
@@ -298,7 +311,7 @@ export function parseAdminRoute(
   slug?: string[]
 ): {
   tab: AdminTab;
-  routeAction: { action: "new" | "edit"; id?: string } | null;
+  routeAction: { action: "new" | "edit" | "reconciliation"; id?: string } | null;
 } {
   let segments: string[] = [];
   if (slug && slug.length > 0) {
@@ -319,6 +332,8 @@ export function parseAdminRoute(
     const secondSeg = segments[1];
     if (secondSeg === "new") {
       return { tab, routeAction: { action: "new" } };
+    } else if (secondSeg === "reconciliation") {
+      return { tab, routeAction: { action: "reconciliation" } };
     } else if (secondSeg === "edit" && segments.length >= 3) {
       return { tab, routeAction: { action: "edit", id: decodeURIComponent(segments[2]) } };
     } else {
@@ -404,7 +419,7 @@ function AdminDashboardContent({
 
   // Navigation & Multi-Tenant State driven by clean nested App Router paths
   const [activeTab, setActiveTab] = useState<AdminTab>(initialTab);
-  const [routeAction, setRouteAction] = useState<{ action: "new" | "edit"; id?: string } | null>(
+  const [routeAction, setRouteAction] = useState<{ action: "new" | "edit" | "reconciliation"; id?: string } | null>(
     initialParsed.routeAction
   );
 
@@ -606,9 +621,7 @@ function AdminDashboardContent({
       ? cachedTableStatuses
       : getStoredTables(currentOrgId, []);
   });
-  const [kdsTickets, setKdsTickets] = useState<KdsTicket[]>(() => {
-    return getStoredKdsTickets(currentOrgId, []);
-  });
+  const [kdsTickets, setKdsTickets] = useState<KdsTicket[]>([]);
   const [orders, setOrders] = useState<OrderRecord[]>(() => {
     return getStoredOrders(currentOrgId);
   });
@@ -663,6 +676,8 @@ function AdminDashboardContent({
       return updated;
     });
     showToast(`Added ${newDish.name} to menu`);
+    const restId = parseNumericId(currentOrgId);
+    if (restId) broadcastStockRefresh(restId, { source: "admin_add_dish" });
   };
 
   const handleUpdateDish = (updatedDish: MenuItem) => {
@@ -672,6 +687,8 @@ function AdminDashboardContent({
       return updated;
     });
     showToast(`Updated ${updatedDish.name}`);
+    const restId = parseNumericId(currentOrgId);
+    if (restId) broadcastStockRefresh(restId, { source: "admin_update_dish" });
   };
 
   const handleDeleteDish = (dishId: string) => {
@@ -681,6 +698,8 @@ function AdminDashboardContent({
       return updated;
     });
     showToast("Dish removed from menu");
+    const restId = parseNumericId(currentOrgId);
+    if (restId) broadcastStockRefresh(restId, { source: "admin_delete_dish" });
   };
 
   const handleToggleStock = (itemId: string) => {
@@ -718,6 +737,8 @@ function AdminDashboardContent({
       return updated;
     });
     showToast("Stock status updated in real-time");
+    const restId = parseNumericId(currentOrgId);
+    if (restId) broadcastStockRefresh(restId, { source: "admin_toggle_stock" });
   };
 
   // Live Branch Operational Settings from Supabase / SWR Cache
@@ -773,90 +794,45 @@ function AdminDashboardContent({
         const supabase = createClient();
         const { restId: resolvedRestId } = await getValidTenantContext(user);
 
-        // 1. Fetch live Menu Items
-        const { data: menuData, error: menuErr } = await supabase
-          .from("menu_items")
-          .select("*")
-          .eq("restaurant_id", resolvedRestId)
-          .order("created_at", { ascending: false });
+        // 1. Fetch live Menu Items, Recipes, Raw Materials, and Unfulfilled Orders
+        const [menuRes, recipeRes, materialsRes, ordersRes] = await Promise.all([
+          supabase
+            .from("menu_items")
+            .select("*")
+            .eq("restaurant_id", resolvedRestId)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("recipe_items")
+            .select(
+              "menu_item_id, variant_id, variant_name, raw_material_id, quantity_required, unit, raw_materials(id, name, current_stock, min_safety_stock, cost_per_unit, unit)"
+            )
+            .eq("restaurant_id", resolvedRestId),
+          supabase
+            .from("raw_materials")
+            .select("id, name, current_stock, min_safety_stock, cost_per_unit, unit")
+            .eq("restaurant_id", resolvedRestId),
+          supabase
+            .from("orders")
+            .select("id, order_number, order_status, items")
+            .eq("restaurant_id", resolvedRestId)
+            .eq("order_status", "active"),
+        ]);
 
-        if (!menuErr && menuData && isMounted) {
-          let mappedMenu: MenuItem[] = menuData.map((d: any) => ({
-            id: d.id,
-            name: d.name,
-            category: d.category || "karahi",
-            price: Number(d.price),
-            prepTime: d.prep_time || "15 mins",
-            stockStatus: d.stock_status || "in_stock",
-            stockCount: d.stock_count ?? 20,
-            imageIcon: d.image_icon || "🍲",
-            isPopular: Boolean(d.is_popular),
-            variants: (() => {
-              if (Array.isArray(d.variants) && d.variants.length > 0) return d.variants;
-              if (d.description) {
-                try {
-                  const parsed = JSON.parse(d.description);
-                  if (Array.isArray(parsed.variants) && parsed.variants.length > 0) return parsed.variants;
-                } catch {}
-              }
-              if (Array.isArray(d.metadata?.variants) && d.metadata.variants.length > 0) return d.metadata.variants;
-              return undefined;
-            })(),
-            is_available: (d.stock_status || "in_stock") !== "out_of_stock",
-            in_stock: (d.stock_status || "in_stock") !== "out_of_stock",
-            image_url: d.image_url || undefined,
-            imageUrl: d.image_url || undefined,
-          }));
+        const menuRows = menuRes.data || [];
+        const recipeRows = recipeRes.data || [];
+        const materialRows = materialsRes.data || [];
+        const activeOrdersRows = ordersRes.data || [];
 
-          try {
-            const { data: recipeRows } = await supabase
-              .from("recipe_items")
-              .select(
-                "menu_item_id, variant_id, variant_name, raw_material_id, quantity_required, unit, raw_materials(id, name, current_stock, min_safety_stock, cost_per_unit, unit)"
-              )
-              .eq("restaurant_id", resolvedRestId);
+        if (menuRows.length > 0 && isMounted) {
+          const unifiedMenu = computeUnifiedMenuCatalog({
+            menuRows,
+            recipeRows,
+            materialRows,
+            activeOrders: activeOrdersRows,
+          });
 
-            if (recipeRows && recipeRows.length > 0) {
-              mappedMenu = mappedMenu.map((item) => {
-                if (item.variants && Array.isArray(item.variants)) {
-                  const enrichedVars = item.variants.map((v) => {
-                    if (v.recipe && Array.isArray(v.recipe) && v.recipe.length > 0) return v;
-                    const matched = recipeRows.filter(
-                      (r: any) =>
-                        String(r.menu_item_id) === String(item.id) &&
-                        ((r.variant_id && String(r.variant_id) === String(v.id)) ||
-                          (r.variant_name && v.name && r.variant_name.trim().toLowerCase() === v.name.trim().toLowerCase()))
-                    );
-                    if (matched.length > 0) {
-                      return {
-                        ...v,
-                        recipe: matched.map((r: any) => {
-                          const raw = Array.isArray(r.raw_materials) ? r.raw_materials[0] : r.raw_materials;
-                          return {
-                            raw_material_id: r.raw_material_id,
-                            raw_material_name: raw?.name || "Ingredient",
-                            quantity_required: Number(r.quantity_required) || 0,
-                            unit: r.unit || raw?.unit || "",
-                            cost_per_unit: Number(raw?.cost_per_unit) || 0,
-                          };
-                        }),
-                      };
-                    }
-                    return v;
-                  });
-                  return { ...item, variants: enrichedVars };
-                }
-                return item;
-              });
-
-              mappedMenu = applyRecipeCalculationsToMenu(mappedMenu, recipeRows);
-            }
-          } catch (rErr) {
-            console.warn("[AdminDashboardClient] Recipe fetch warning:", rErr);
-          }
-
-          setMenuItems(mappedMenu);
-          saveStoredMenu(orgId, mappedMenu);
+          setMenuItems(unifiedMenu);
+          saveStoredMenu(orgId, unifiedMenu);
         }
 
         // 2. Fetch live Staff Members
@@ -970,35 +946,26 @@ function AdminDashboardContent({
           saveStoredKdsTickets(orgId, mappedTickets);
         }
 
-        // 5. Fetch live Tables from public.restaurant_tables
-        const { data: tablesData, error: tablesErr } = await supabase
-          .from("restaurant_tables")
-          .select("*")
-          .eq("restaurant_id", resolvedRestId)
-          .order("table_number", { ascending: true });
+        // 5. Fetch live Tables from public.restaurant_tables and active unpaid records
+        const [tablesRes, activeRecords] = await Promise.all([
+          supabase
+            .from("restaurant_tables")
+            .select("*")
+            .eq("restaurant_id", resolvedRestId)
+            .order("table_number", { ascending: true }),
+          fetchActiveUnpaidTableRecords(resolvedRestId, supabase),
+        ]);
+
+        const tablesData = tablesRes.data;
+        const tablesErr = tablesRes.error;
 
         if (!tablesErr && tablesData && isMounted) {
-          const mappedTables: TableStatus[] = tablesData.map((t: any, idx: number) => {
-            const statusUpper = String(t.status || "AVAILABLE").toUpperCase();
-            return {
-              id: Number(t.id) || idx + 1,
-              label: t.table_number || `Table ${t.id}`,
-              capacity: Number(t.seating_capacity ?? t.capacity ?? 4),
-              status:
-                statusUpper === "OCCUPIED"
-                  ? "seated"
-                  : statusUpper === "BILLED"
-                    ? "billing"
-                    : statusUpper === "RESERVED"
-                      ? "reserved"
-                      : "available",
-              section: t.section_name || t.floor_name || "Main Dining",
-              activeOrderId: (t.active_order_id || t.current_order_id) ? String(t.active_order_id || t.current_order_id) : undefined,
-              dbId: t.id,
-            };
-          });
-          setTables(mappedTables);
-          saveStoredTables(orgId, mappedTables);
+          const mappedTables: TableStatus[] = tablesData.map((t: any, idx: number) =>
+            mapRowToTableStatus(t, idx)
+          );
+          const reconciled = reconcileTableStatuses(mappedTables, activeRecords);
+          setTables(reconciled);
+          saveStoredTables(orgId, reconciled);
         }
 
         // 6. Fetch live Branch Operational Settings from public.branch_settings
@@ -1252,8 +1219,87 @@ function AdminDashboardContent({
       console.warn("[AdminDashboardClient] Realtime subscription error:", chanErr);
     }
 
+    const handleSyncEvent = () => {
+      if (isMounted) {
+        loadSupabaseData();
+      }
+    };
+
+    const handleTableReleasedEvent = (data?: any) => {
+      if (!isMounted) return;
+      if (data) {
+        const { tableId, tableNumber, orderId } = data;
+        setTables((prev) =>
+          prev.map((t) => {
+            const matches =
+              (tableId && (String(t.dbId) === String(tableId) || String(t.id) === String(tableId))) ||
+              (tableNumber && isTableMatchingIdentifier(t, tableNumber)) ||
+              (orderId && t.activeOrderId === orderId);
+            if (matches) {
+              return {
+                ...t,
+                status: "available",
+                activeOrderId: undefined,
+                activeAmount: undefined,
+              };
+            }
+            return t;
+          })
+        );
+      }
+      loadSupabaseData();
+    };
+
+    const handleTableReleasedWindow = (e: Event) => {
+      handleTableReleasedEvent((e as CustomEvent).detail);
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("pos_tables_updated", handleSyncEvent);
+      window.addEventListener("restaurant_tables_changed", handleSyncEvent);
+      window.addEventListener("table_released", handleTableReleasedWindow);
+      window.addEventListener("orders_updated", handleSyncEvent);
+      window.addEventListener("inventory_stock_deducted", handleSyncEvent);
+      window.addEventListener("pos_menu_updated", handleSyncEvent);
+    }
+
+    let ledgerBc: BroadcastChannel | null = null;
+    if (typeof window !== "undefined" && "BroadcastChannel" in window) {
+      try {
+        ledgerBc = new BroadcastChannel("pos_ledger_sync_channel");
+        ledgerBc.onmessage = (event) => {
+          if (event.data?.type === "TABLE_RELEASED") {
+            handleTableReleasedEvent(event.data?.payload);
+          } else if (isMounted) {
+            loadSupabaseData();
+          }
+        };
+      } catch { }
+    }
+
+    const unsubStock = subscribeToStockRefresh(restId, () => {
+      if (isMounted) {
+        loadSupabaseData();
+      }
+    });
+
+    const unsubRelease = subscribeToTableReleased(restId, handleTableReleasedEvent);
+
     return () => {
       isMounted = false;
+      if (unsubStock) unsubStock();
+      if (unsubRelease) unsubRelease();
+      if (typeof window !== "undefined") {
+        window.removeEventListener("pos_tables_updated", handleSyncEvent);
+        window.removeEventListener("restaurant_tables_changed", handleSyncEvent);
+        window.removeEventListener("table_released", handleTableReleasedWindow);
+        window.removeEventListener("orders_updated", handleSyncEvent);
+        window.removeEventListener("inventory_stock_deducted", handleSyncEvent);
+        window.removeEventListener("pos_menu_updated", handleSyncEvent);
+      }
+      if (ledgerBc) {
+        try { ledgerBc.close(); } catch { }
+      }
       try {
         const supabase = createClient();
         if (kdsChannel) supabase.removeChannel(kdsChannel);
@@ -1534,7 +1580,7 @@ function AdminDashboardContent({
           const supabase = createClient();
           const { restId, branchId } = await getValidTenantContext(user);
 
-          await supabase
+          let orderUpdateQuery: any = supabase
             .from("orders")
             .update({
               items: fullOrderItems,
@@ -1545,8 +1591,9 @@ function AdminDashboardContent({
               order_status: "active",
               updated_at: new Date().toISOString(),
             })
-            .eq("restaurant_id", restId)
-            .or(`id.eq.${existingActiveOrder.id},order_number.eq.${existingActiveOrder.id}`);
+            .eq("restaurant_id", restId);
+          orderUpdateQuery = applyOrderFilter(orderUpdateQuery, existingActiveOrder.id);
+          await orderUpdateQuery;
 
           const ticketPayload: any = {
             restaurant_id: restId,
@@ -1639,6 +1686,7 @@ function AdminDashboardContent({
             restaurant_id: restId,
             branch_id: branchId || user?.branchId || null,
             order_number: freshOrderRecord.id,
+            kot_id: newKotId,
             order_channel: orderChannel,
             delivery_zone: orderChannel === "delivery" ? (deliveryMeta?.deliveryZone?.trim() || null) : null,
             customer_name:
@@ -1700,12 +1748,11 @@ function AdminDashboardContent({
           if (orderChannel === "dine_in") {
             const tableUpdatePayload: Record<string, any> = {
               status: "occupied",
-              updated_at: new Date().toISOString(),
             };
-            if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(createdDbOrderId)) {
+            if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(createdDbOrderId))) {
               tableUpdatePayload.active_order_id = createdDbOrderId;
             }
-            if (/^\d+$/.test(createdDbOrderId)) {
+            if (/^\d+$/.test(String(createdDbOrderId))) {
               tableUpdatePayload.current_order_id = Number(createdDbOrderId);
             }
 
@@ -1719,11 +1766,19 @@ function AdminDashboardContent({
             console.log(`[AdminDashboardClient] Table ${tableIdentifier} atomically locked to occupied.`);
           }
 
-          // Real-time Raw Material Inventory Stock Deduction
-          await deductInventoryStockForOrder(restId, freshOrderRecord.items, {
-            orderId: freshOrderRecord.id,
-            source: "admin_pos_send_to_kitchen",
-          });
+          // Broadcast table lock and order sync across all screens
+          if (typeof window !== "undefined") {
+            try {
+              window.dispatchEvent(new CustomEvent("restaurant_tables_changed"));
+              window.dispatchEvent(new CustomEvent("pos_tables_updated"));
+              window.dispatchEvent(new CustomEvent("orders_updated", {
+                detail: { restaurantId: restId, orderId: createdDbOrderId, kotId: newKotId, timestamp: Date.now() },
+              }));
+              localStorage.setItem(`omni_tables_trigger_${currentOrgId}`, String(Date.now()));
+              localStorage.setItem(`pos_orders_${currentOrgId}`, String(Date.now()));
+              window.dispatchEvent(new Event("storage"));
+            } catch { }
+          }
         } catch (tblErr) {
           console.warn("[AdminDashboardClient] Fresh order & table lock exception:", tblErr);
         }
@@ -1787,6 +1842,14 @@ function AdminDashboardContent({
       }
     }
 
+    if (currentTicket && isTicketExpired(currentTicket)) {
+      showToast(`🛑 Order Expired (4-hour cutoff): Ticket #${ticketId} has expired and cannot be processed.`);
+      syncOrderExpiredState(currentOrgId, ticketId, {
+        tableIdentifier: currentTicket.tableName || (currentTicket.tableId ? String(currentTicket.tableId) : currentTicket.tableOrChannel) || undefined,
+      });
+      return;
+    }
+
     if (nextStatus === "ready") {
       playKitchenBuzzer();
     }
@@ -1809,8 +1872,8 @@ function AdminDashboardContent({
             prepStartedAt: isTransitionToCooking ? (t.prepStartedAt || prepStartTimestamp) : t.prepStartedAt,
             prep_timer_started_at: isTransitionToCooking ? (t.prep_timer_started_at || prepStartTimestamp) : t.prep_timer_started_at,
             elapsedMinutes: nextStatus === "preparing" && !t.elapsedMinutes ? 1 : t.elapsedMinutes,
-            isDeducted: isTransitionToCooking ? true : t.isDeducted,
-            deductedAt: isTransitionToCooking
+            isDeducted: nextStatus === "completed" ? true : t.isDeducted,
+            deductedAt: nextStatus === "completed"
               ? t.deductedAt || prepStartTimestamp
               : t.deductedAt,
           };
@@ -1825,6 +1888,7 @@ function AdminDashboardContent({
     (async () => {
       try {
         const supabase = createClient();
+        const { restId } = await getValidTenantContext(user);
         const updatePayload: any = {
           status: nextStatus,
         };
@@ -1834,19 +1898,16 @@ function AdminDashboardContent({
         if (isTransitionToCooking) {
           updatePayload.prep_timer_started_at = prepStartTimestamp;
         }
-        await supabase
-          .from("kitchen_tickets")
-          .update(updatePayload)
-          .or(`ticket_number.eq.${ticketId},id.eq.${ticketId}`);
+        await safeUpdateKitchenTicket(
+          supabase,
+          ticketId,
+          updatePayload,
+          currentTicket,
+          restId || currentOrgId
+        );
 
-        // If transitioning to cooking and not yet deducted, execute raw materials deduction
-        if (isTransitionToCooking && !isAlreadyDeducted && currentTicket?.items) {
-          const { restId } = await getValidTenantContext(user);
-          await deductInventoryStockForOrder(restId, currentTicket.items, {
-            orderId: ticketId,
-            source: "admin_kds_transition",
-          });
-        }
+        // KDS status completion: Inventory stock was already exact-once deducted upon order placement / KOT dispatch.
+        // Changing KDS status must never trigger duplicate inventory deduction.
       } catch (err) {
         console.warn("Could not sync KDS status to kitchen_tickets DB table:", err);
       }

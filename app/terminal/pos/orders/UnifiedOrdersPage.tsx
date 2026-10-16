@@ -6,11 +6,15 @@ import { useAuth } from "@/app/admin/context/AuthContext";
 import { createClient } from "@/lib/supabase";
 import { getValidTenantContext } from "@/lib/tenantResolver";
 import { OrderRecord } from "@/app/admin/types";
-import { deductInventoryStockForOrder } from "@/lib/inventoryDeduction";
+import { deductInventoryStockForOrder, isOrderAlreadyDeducted } from "@/lib/inventoryDeduction";
+import { broadcastStockRefresh } from "@/lib/unifiedStock";
 import { dispatchOrderCancelledAlert } from "@/lib/shiftAuditNotifications";
+import { normalizeTableNumber, isUuid, isOrderOccupyingTable, broadcastTableReleased } from "@/lib/tableOccupancy";
 import {
   getStoredOrders,
   saveStoredOrders,
+  getStoredTables,
+  saveStoredTables,
   getStoredBranchSettings,
   getActiveUserSession,
 } from "@/lib/tenantStore";
@@ -172,7 +176,7 @@ export default function UnifiedOrdersPage() {
           const items = Array.isArray(o.items) ? o.items : [];
           const orderNum = o.order_number || o.id;
           const isHeld = String(orderNum).startsWith("#HOLD-") || o.customer_name === "Held Order";
-          const isPaid = o.payment_status === "paid" || o.order_status === "completed";
+          const isPaid = o.payment_status === "paid";
 
           if (isPaid) {
             completedList.push({
@@ -241,8 +245,8 @@ export default function UnifiedOrdersPage() {
               paymentMethod: (o.payment_method || "cash").toLowerCase(),
               cashierName: o.cashier_name || user?.name || "Cashier",
               timestamp: o.created_at || new Date().toISOString(),
-              status: "active",
-              payment_status: "pending",
+              status: o.order_status || "active",
+              payment_status: o.payment_status || "pending",
               shift_id: o.shift_id ?? null,
             });
           }
@@ -257,6 +261,24 @@ export default function UnifiedOrdersPage() {
               parsed.forEach((localP) => {
                 if (!heldList.some((h) => h.id === localP.id)) {
                   heldList.push(localP);
+                }
+              });
+            }
+          }
+        } catch { }
+
+        // Merge with locally stored running KOT orders
+        try {
+          const rawLocalRunning = localStorage.getItem(`pos_running_kot_orders_${restId}`);
+          if (rawLocalRunning) {
+            const parsed = JSON.parse(rawLocalRunning);
+            if (Array.isArray(parsed)) {
+              parsed.forEach((localR) => {
+                if (!runningKotList.some((r) => r.id === localR.id)) {
+                  const alreadyPaidOrCompleted = completedList.some((c) => c.id === localR.id);
+                  if (!alreadyPaidOrCompleted && isOrderOccupyingTable(localR)) {
+                    runningKotList.unshift(localR);
+                  }
                 }
               });
             }
@@ -415,10 +437,34 @@ export default function UnifiedOrdersPage() {
 
     init();
 
+    const handleStorageUpdate = (e: StorageEvent) => {
+      if (
+        e.key?.startsWith("pos_orders_") ||
+        e.key?.startsWith("orders_") ||
+        e.key?.startsWith("pos_running_kot_")
+      ) {
+        if (isMounted) triggerDebouncedFetch();
+      }
+    };
+    const handleOrdersCustom = () => {
+      if (isMounted) triggerDebouncedFetch();
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener("storage", handleStorageUpdate);
+      window.addEventListener("orders_updated", handleOrdersCustom);
+      window.addEventListener("pos_orders_updated", handleOrdersCustom);
+    }
+
     return () => {
       isMounted = false;
       if (fetchOrdersTimeoutRef.current) {
         clearTimeout(fetchOrdersTimeoutRef.current);
+      }
+      if (typeof window !== "undefined") {
+        window.removeEventListener("storage", handleStorageUpdate);
+        window.removeEventListener("orders_updated", handleOrdersCustom);
+        window.removeEventListener("pos_orders_updated", handleOrdersCustom);
       }
       if (ordersChannel) {
         try {
@@ -444,8 +490,9 @@ export default function UnifiedOrdersPage() {
     if (isSettlingOrderRef.current) return;
     if (!targetOrderForSettlement) return;
 
-    isSettlingOrderRef.current = true;
     const ord = targetOrderForSettlement;
+
+    isSettlingOrderRef.current = true;
     const finalOrderId = ord.id;
 
     try {
@@ -473,6 +520,7 @@ export default function UnifiedOrdersPage() {
         payment_method: normalizedPaymentMethod,
         payment_status: "paid",
         order_status: "completed",
+        is_deducted: true,
         items: ord.items.map((it: any) => ({
           id: it.id,
           name: it.name,
@@ -483,6 +531,7 @@ export default function UnifiedOrdersPage() {
           variant: it.variant || it.selectedVariant,
           variant_id: it.variant_id || it.selectedVariant?.id || null,
           variant_name: it.variant_name || it.selectedVariant?.name || null,
+          is_deducted: true,
         })),
         created_at: new Date().toISOString(),
       };
@@ -493,30 +542,148 @@ export default function UnifiedOrdersPage() {
 
       const { data: existing } = await supabase
         .from("orders")
-        .select("id")
+        .select("id, is_deducted, items")
         .eq("restaurant_id", restId)
         .eq("order_number", finalOrderId)
         .maybeSingle();
 
       if (existing) {
         const { error: updErr } = await supabase.from("orders").update(orderPayload).eq("id", existing.id);
-        if (updErr && (updErr.code === "PGRST204" || updErr.code === "42703" || updErr.message?.includes("shift_id") || String(updErr.details || "").includes("shift_id"))) {
+        if (updErr && (updErr.code === "PGRST204" || updErr.code === "42703" || updErr.message?.includes("shift_id") || updErr.message?.includes("is_deducted") || String(updErr.details || "").includes("shift_id") || String(updErr.details || "").includes("is_deducted"))) {
           delete orderPayload.shift_id;
+          delete orderPayload.is_deducted;
           await supabase.from("orders").update(orderPayload).eq("id", existing.id);
         }
       } else {
         const { error: insErr } = await supabase.from("orders").insert([orderPayload]);
-        if (insErr && (insErr.code === "PGRST204" || insErr.code === "42703" || insErr.message?.includes("shift_id") || String(insErr.details || "").includes("shift_id"))) {
+        if (insErr && (insErr.code === "PGRST204" || insErr.code === "42703" || insErr.message?.includes("shift_id") || insErr.message?.includes("is_deducted") || String(insErr.details || "").includes("shift_id") || String(insErr.details || "").includes("is_deducted"))) {
           delete orderPayload.shift_id;
+          delete orderPayload.is_deducted;
           await supabase.from("orders").insert([orderPayload]);
         }
       }
 
-      // Real-time raw material inventory deduction
-      await deductInventoryStockForOrder(restId, ord.items, {
-        orderId: finalOrderId,
-        source: "terminal_settle",
-      });
+      // Real-time raw material inventory deduction strictly if NOT already deducted via KOT
+      const orderAlreadyDeducted =
+        isOrderAlreadyDeducted(restId, finalOrderId, ord.kotId) ||
+        Boolean(existing && (existing as any).is_deducted === true) ||
+        (Array.isArray(existing?.items) &&
+          existing.items.some((it: any) => it.is_deducted === true || it.isDeducted === true)) ||
+        (Array.isArray(ord.items) &&
+          ord.items.some((it: any) => it.is_deducted === true || it.isDeducted === true));
+
+      if (!orderAlreadyDeducted) {
+        await deductInventoryStockForOrder(restId, ord.items, {
+          orderId: finalOrderId,
+          kotId: ord.kotId,
+          source: "terminal_settle",
+        });
+        broadcastStockRefresh(restId, { orderId: finalOrderId, source: "terminal_settle" });
+      } else {
+        console.log(`[UnifiedOrdersPage] Order ${finalOrderId} (${ord.kotId}) was already deducted. Skipping settlement duplicate deduction.`);
+      }
+
+      // Release table if Dine-In: Automatic freeing on settlement
+      if (ord.orderChannel === "dine_in" || ord.tableId || ord.tableName) {
+        const tableIdentifier = ord.tableName || (ord.tableId ? `Table ${ord.tableId}` : "");
+        const normNum = normalizeTableNumber(tableIdentifier);
+        try {
+          if (ord.tableId && isUuid(String(ord.tableId))) {
+            await supabase
+              .from("restaurant_tables")
+              .update({
+                status: "available",
+                current_order_id: null,
+                active_order_id: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("restaurant_id", restId)
+              .eq("id", ord.tableId);
+          } else {
+            const tableOrConds = [
+              ord.tableId ? `id.eq.${ord.tableId}` : "",
+              tableIdentifier ? `table_number.eq.${tableIdentifier}` : "",
+              normNum ? `table_number.eq.${normNum}` : "",
+              normNum ? `table_number.eq.Table ${normNum}` : "",
+            ].filter(Boolean).join(",");
+
+            if (tableOrConds) {
+              await supabase
+                .from("restaurant_tables")
+                .update({
+                  status: "available",
+                  current_order_id: null,
+                  active_order_id: null,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("restaurant_id", restId)
+                .or(tableOrConds);
+            }
+          }
+
+          // Complete any active kitchen tickets for this settled table so it frees cleanly across terminals
+          try {
+            let kotCloseQuery: any = supabase
+              .from("kitchen_tickets")
+              .update({
+                status: "completed",
+                completed_at: new Date().toISOString(),
+              })
+              .eq("restaurant_id", restId)
+              .not("status", "in", '("completed","cancelled","archived","voided")');
+
+            if (ord.kotId) {
+              kotCloseQuery = kotCloseQuery.or(`ticket_number.eq.${ord.kotId},id.eq.${ord.kotId}`);
+            } else if (normNum) {
+              kotCloseQuery = kotCloseQuery.or(`table_number.eq.${normNum},table_number.eq.Table ${normNum},customer_name.eq.${tableIdentifier}`);
+            }
+            await kotCloseQuery;
+          } catch (kotCloseErr) {
+            console.warn("[UnifiedOrdersPage] Error closing KOT tickets on settlement:", kotCloseErr);
+          }
+
+          // Broadcast table status update across all terminals
+          const currentTables = getStoredTables(currentOrgId, []);
+          const updatedTables = currentTables.map((t) =>
+            (ord.tableId && String(t.id) === String(ord.tableId)) ||
+            (ord.tableId && t.dbId === ord.tableId) ||
+            (tableIdentifier && (t.label === tableIdentifier || (t as any).table_number === tableIdentifier)) ||
+            (normNum && normalizeTableNumber(t.label || t.id) === normNum)
+              ? { ...t, status: "available" as const, activeOrderId: undefined, activeAmount: undefined }
+              : t
+          );
+          saveStoredTables(currentOrgId, updatedTables);
+          if (restId && String(restId) !== currentOrgId) {
+            saveStoredTables(String(restId), updatedTables);
+          }
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("restaurant_tables_changed"));
+            window.dispatchEvent(new CustomEvent("pos_tables_updated"));
+            localStorage.setItem(`omni_tables_trigger_${currentOrgId}`, String(Date.now()));
+            window.dispatchEvent(new Event("storage"));
+          }
+
+          // Broadcast clean TABLE_RELEASED event across terminals
+          broadcastTableReleased(
+            restId,
+            {
+              tableId: ord.tableId ? String(ord.tableId) : undefined,
+              tableNumber: normNum || tableIdentifier,
+              orderId: finalOrderId,
+            },
+            supabase
+          );
+        } catch (tRelErr) {
+          console.warn("[UnifiedOrdersPage] Table release error on settlement:", tRelErr);
+        }
+      }
+
+      // Broadcast order update to POS and all terminals
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("orders_updated", { detail: { restaurantId: restId, orderId: finalOrderId, timestamp: Date.now() } }));
+        localStorage.setItem(`pos_orders_${currentOrgId}`, String(Date.now()));
+        window.dispatchEvent(new Event("storage"));
+      }
     } catch (err) {
       console.warn("[UnifiedOrdersPage] Supabase insert warning:", err);
     } finally {
@@ -540,7 +707,9 @@ export default function UnifiedOrdersPage() {
         price: it.price,
         quantity: it.quantity,
         notes: it.notes,
+        is_deducted: true,
       })),
+      is_deducted: true,
       subtotal: ord.subtotal,
       taxAmount: ord.taxAmount,
       discountPercent: ord.discountPercent || 0,
@@ -557,15 +726,18 @@ export default function UnifiedOrdersPage() {
     // Update state & storage
     setOrders((prev) => [settledOrder, ...prev.filter((o) => o.id !== settledOrder.id)]);
 
-    if (ord.source === "kot") {
-      setRunningTableOrders((prev) => {
-        const updated = prev.filter((o) => o.id !== ord.id);
-        try {
-          localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(updated));
-        } catch { }
-        return updated;
-      });
-    }
+    // Always cleanse settled order from running table orders and local storage
+    setRunningTableOrders((prev) => {
+      const updated = prev.filter((o) => o.id !== ord.id && o.id !== finalOrderId && (!ord.kotId || o.kotId !== ord.kotId));
+      try {
+        localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(updated));
+        const activeRestId = user?.restaurantId ? String(user.restaurantId) : "";
+        if (activeRestId && activeRestId !== currentOrgId) {
+          localStorage.setItem(`pos_running_kot_orders_${activeRestId}`, JSON.stringify(updated));
+        }
+      } catch { }
+      return updated;
+    });
 
     if (ord.source === "held") {
       setParkedOrders((prev) => {
@@ -605,6 +777,9 @@ export default function UnifiedOrdersPage() {
           .update({ order_status: "cancelled" })
           .eq("restaurant_id", restId)
           .eq("order_number", orderId);
+        if (restId) {
+          broadcastStockRefresh(restId, { source: "order_cancelled", orderId });
+        }
       } catch { }
     })();
 

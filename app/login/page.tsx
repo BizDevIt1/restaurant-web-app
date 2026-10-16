@@ -14,11 +14,15 @@ import { AuthenticatedUser, UserRole } from "../admin/types";
 import StartShiftModal, { ShiftTypeOption } from "../terminal/pos/components/StartShiftModal";
 import {
   validateCashierShiftWindow,
+  validateStaffShiftWindow,
   isShiftFromPreviousDate,
   isShiftForCurrentDayAndValid,
   clearStaleShiftStorage,
+  parseShiftOption,
 } from "../../lib/shiftSchedule";
 import { dispatchShiftOpenedAlert } from "../../lib/shiftAuditNotifications";
+import { AlertTriangle, ShieldAlert, LogOut, Clock, User as UserIcon } from "lucide-react";
+import { recordStaffShiftLogin, checkActiveStaffSession, forceCloseStaffSession, UniversalShiftRecord } from "../../lib/universalShiftLogging";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -37,6 +41,10 @@ export default function LoginPage() {
   const [forgotSuccess, setForgotSuccess] = useState<string | null>(null);
   const [forgotError, setForgotError] = useState<string | null>(null);
 
+  // Single-Session / Concurrent Login Prevention State
+  const [activeSessionDetected, setActiveSessionDetected] = useState<UniversalShiftRecord | null>(null);
+  const [pendingConcurrentAuthUser, setPendingConcurrentAuthUser] = useState<AuthenticatedUser | null>(null);
+
   // Shift initialization & float declaration strictly at login sequence
   const [pendingShiftStaffUser, setPendingShiftStaffUser] = useState<AuthenticatedUser | null>(null);
   const [isShiftModalOpen, setIsShiftModalOpen] = useState(false);
@@ -48,13 +56,92 @@ export default function LoginPage() {
 
   // Handle staff login with strict login-time shift initialization
   const proceedWithStaffLogin = async (authUser: AuthenticatedUser) => {
-    const rawRole = (authUser.staffRole || "cashier").toLowerCase().trim();
-    const isCashier = rawRole === "cashier" || authUser.terminalAccess === "POS_ONLY";
+    const rawRole = (
+      authUser.staffRole ||
+      (authUser.role !== "STAFF_MEMBER" ? authUser.role : "") ||
+      ""
+    ).toLowerCase().trim();
+
+    const isWaiter =
+      rawRole === "waiter" ||
+      rawRole === "server" ||
+      (authUser.terminalAccess as string) === "WAITER_ONLY" ||
+      (authUser.terminalAccess as string) === "WAITER";
+
+    // Dedicated Independent Waiter Terminal Redirect for Waiters / Servers
+    if (isWaiter) {
+      authUser.staffRole = "waiter";
+      authUser.terminalAccess = "WAITER_ONLY";
+
+      // Strict Shift Window Validation for Waiters
+      if (authUser.assignedShift) {
+        const shiftValidation = validateStaffShiftWindow(authUser.assignedShift, new Date(), null);
+        if (!shiftValidation.isValid) {
+          hideSplash();
+          setErrorMessage(
+            shiftValidation.errorMessage ||
+            `Access Denied: Your assigned shift is ${shiftValidation.shiftShortName} (${shiftValidation.windowLabel}). You cannot log in during this shift window.`
+          );
+          setTimeout(() => setErrorMessage(null), 5000);
+          return;
+        }
+      }
+
+      setActiveUserSession(authUser);
+      try {
+        await recordStaffShiftLogin(authUser, { station: "waiter" });
+      } catch (shiftErr) {
+        console.warn("[LoginPage] Waiter shift telemetry warning:", shiftErr);
+      }
+      router.push("/terminal/waiter");
+      router.refresh();
+      return;
+    }
+
+    const isChef =
+      rawRole === "chef" ||
+      rawRole === "kitchen" ||
+      rawRole === "cook" ||
+      rawRole === "kds" ||
+      authUser.terminalAccess === "KDS_ONLY" ||
+      (authUser.terminalAccess as string) === "KITCHEN_ONLY";
+
+    // Dedicated Independent Kitchen Terminal Redirect for Chefs / Kitchen Staff
+    if (isChef) {
+      authUser.staffRole = "chef";
+      authUser.terminalAccess = "KDS_ONLY";
+
+      // Strict Shift Window Validation for Chefs
+      if (authUser.assignedShift) {
+        const shiftValidation = validateStaffShiftWindow(authUser.assignedShift, new Date(), null);
+        if (!shiftValidation.isValid) {
+          hideSplash();
+          setErrorMessage(
+            shiftValidation.errorMessage ||
+            `Access Denied: Your assigned shift is ${shiftValidation.shiftShortName} (${shiftValidation.windowLabel}). You cannot log in during this shift window.`
+          );
+          setTimeout(() => setErrorMessage(null), 5000);
+          return;
+        }
+      }
+
+      setActiveUserSession(authUser);
+      try {
+        await recordStaffShiftLogin(authUser, { station: "kitchen" });
+      } catch (shiftErr) {
+        console.warn("[LoginPage] Chef shift telemetry warning:", shiftErr);
+      }
+      router.push("/terminal/kitchen");
+      router.refresh();
+      return;
+    }
+
+    const isCashier = !isWaiter && !isChef && (rawRole === "cashier" || authUser.terminalAccess === "POS_ONLY");
 
     if (isCashier) {
       try {
         const supabase = createClient();
-        const restId = authUser.restaurantId || authUser.organizationId || "27";
+        const restId = authUser.restaurantId || authUser.organizationId || "40";
         const staffKey = String(authUser.id || authUser.email || authUser.name || "cashier")
           .toLowerCase()
           .replace(/[^a-z0-9]/g, "_");
@@ -141,7 +228,7 @@ export default function LoginPage() {
 
         // Strict Time Window Enforcement: Block staff members attempting to log in outside their assigned shift window
         if (!isStaffActiveOnOpenShift && authUser.assignedShift) {
-          const shiftValidation = validateCashierShiftWindow(authUser.assignedShift);
+          const shiftValidation = validateCashierShiftWindow(authUser.assignedShift, new Date(), null);
           if (!shiftValidation.isValid) {
             hideSplash();
             setErrorMessage(
@@ -184,7 +271,7 @@ export default function LoginPage() {
       } catch (err) {
         console.warn("[LoginPage] Shift check warning:", err);
         if (authUser.assignedShift) {
-          const shiftValidation = validateCashierShiftWindow(authUser.assignedShift);
+          const shiftValidation = validateCashierShiftWindow(authUser.assignedShift, new Date(), null);
           if (!shiftValidation.isValid) {
             hideSplash();
             setErrorMessage(
@@ -201,10 +288,20 @@ export default function LoginPage() {
       }
     }
 
-    // Non-cashier roles (KDS, Rider, Manager, etc.)
+    // Non-cashier roles (KDS, Waiter, Rider, Manager, etc.)
     setActiveUserSession(authUser);
+
+    // Universal Shift Logging telemetry for all non-cashier staff sessions
+    try {
+      await recordStaffShiftLogin(authUser, { station: rawRole });
+    } catch (shiftErr) {
+      console.warn("[LoginPage] Universal shift telemetry warning:", shiftErr);
+    }
+
     if (rawRole === "chef" || rawRole === "kitchen") {
       router.push("/terminal/kitchen");
+    } else if (rawRole === "waiter" || rawRole === "server" || isWaiter) {
+      router.push("/terminal/waiter");
     } else if (rawRole === "rider") {
       router.push("/terminal/rider");
     } else {
@@ -221,7 +318,7 @@ export default function LoginPage() {
     if (!pendingShiftStaffUser) return;
     const authUser = pendingShiftStaffUser;
     const supabase = createClient();
-    const restId = authUser.restaurantId || authUser.organizationId || "27";
+    const restId = authUser.restaurantId || authUser.organizationId || "40";
     const numericRestId = !isNaN(Number(restId)) ? Number(restId) : null;
     const branchId = authUser.branchId;
     const numericBranchId =
@@ -240,7 +337,7 @@ export default function LoginPage() {
       opening_float: payload.openingFloat,
       actual_cash_counted: 0,
       status: "OPEN",
-      closing_notes: `Shift: ${payload.shiftType}${payload.notes ? " | " + payload.notes : ""}`,
+      closing_notes: `[ROLE: CASHIER] Shift: ${payload.shiftType}${payload.notes ? " | " + payload.notes : ""}`,
       created_at: new Date().toISOString(),
     };
 
@@ -313,10 +410,26 @@ export default function LoginPage() {
     router.refresh();
   };
 
-  const handleCancelShiftModalOnLogin = () => {
-    setIsShiftModalOpen(false);
-    setPendingShiftStaffUser(null);
-    clearUserSession();
+  const handleTerminatePriorSessionAndLogin = async () => {
+    if (!pendingConcurrentAuthUser) return;
+    const authUser = pendingConcurrentAuthUser;
+    const restId = authUser.restaurantId || authUser.organizationId || "40";
+    try {
+      await forceCloseStaffSession(restId, authUser);
+    } catch (e) {
+      console.warn("[LoginPage] Failed to force close prior session:", e);
+    }
+    setActiveSessionDetected(null);
+    setPendingConcurrentAuthUser(null);
+    await proceedWithStaffLogin(authUser);
+  };
+
+  const handleCancelConcurrentLogin = () => {
+    setActiveSessionDetected(null);
+    setPendingConcurrentAuthUser(null);
+    setPassword("");
+    setErrorMessage("Login blocked: An active session is currently running for this staff account. Please log out first.");
+    setTimeout(() => setErrorMessage(null), 6000);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -369,14 +482,16 @@ export default function LoginPage() {
             userType: "STAFF",
             staffRole: rawRole as any,
             terminalAccess:
-              staffData.terminal_access ||
-              (rawRole === "cashier"
-                ? "POS_ONLY"
-                : rawRole === "chef"
-                ? "KDS_ONLY"
-                : rawRole === "rider"
-                ? "RIDER_ONLY"
-                : "FULL_ADMIN"),
+              rawRole === "waiter" || rawRole === "server" || staffData.terminal_access === "WAITER_ONLY"
+                ? "WAITER_ONLY"
+                : staffData.terminal_access ||
+                  (rawRole === "cashier"
+                    ? "POS_ONLY"
+                    : rawRole === "chef"
+                    ? "KDS_ONLY"
+                    : rawRole === "rider"
+                    ? "RIDER_ONLY"
+                    : "FULL_ADMIN"),
             restaurantName: rest.brand_name || staffData.branch_name || "Restaurant",
             branchId: staffData.branch_id ? String(staffData.branch_id) : undefined,
             branchName: staffData.branch_name || undefined,
@@ -384,14 +499,26 @@ export default function LoginPage() {
             address: rest.hq_address || "",
             phone: staffData.phone || rest.phone || "",
             assignedFeatures: normalizeModules(rest.enabled_modules || ["pos_terminal", "kds_system", "rider_app"]),
-            organizationId: String(staffData.restaurant_id || rest.id || "27"),
-            restaurantId: String(staffData.restaurant_id || rest.id || "27"),
-            assignedShift: staffData.shift || undefined,
+            organizationId: String(staffData.restaurant_id || rest.id || "40"),
+            restaurantId: String(staffData.restaurant_id || rest.id || "40"),
+            assignedShift: parseShiftOption(staffData.shift) || staffData.shift || undefined,
+            assigned_station: staffData.assigned_station || staffData.station || undefined,
+            assignedStation: staffData.assigned_station || staffData.station || undefined,
             enableKitchenKds: rest.enable_kitchen_kds !== undefined ? Boolean(rest.enable_kitchen_kds) : (Array.isArray(rest.enabled_modules) ? rest.enabled_modules.includes("kds_system") : true),
             enableTableService: rest.enable_table_service !== undefined ? Boolean(rest.enable_table_service) : true,
             enableDirectThermalPrint: rest.enable_direct_thermal_print !== undefined ? Boolean(rest.enable_direct_thermal_print) : true,
             enableOfflineSync: rest.enable_offline_sync !== undefined ? Boolean(rest.enable_offline_sync) : true,
           };
+
+          // Single-Session / Concurrent Login Prevention Check
+          const restId = authUser.restaurantId || authUser.organizationId || "40";
+          const activeSession = await checkActiveStaffSession(restId, authUser);
+          if (activeSession) {
+            hideSplash();
+            setActiveSessionDetected(activeSession);
+            setPendingConcurrentAuthUser(authUser);
+            return;
+          }
 
           await proceedWithStaffLogin(authUser);
           return;
@@ -409,7 +536,7 @@ export default function LoginPage() {
     // 1b. Check local staff storage in case of offline/locally added staff
     try {
       const { getStoredStaff } = await import("../../lib/tenantStore");
-      const localStaffList = getStoredStaff("27", []);
+      const localStaffList = getStoredStaff("40", []);
       const matchedLocalStaff = localStaffList.find(
         (s: any) => s.email && s.email.toLowerCase().trim() === trimmedEmail
       );
@@ -425,17 +552,30 @@ export default function LoginPage() {
             userType: "STAFF",
             staffRole: rawRole as any,
             terminalAccess:
-              matchedLocalStaff.terminalAccess ||
-              (rawRole === "cashier" ? "POS_ONLY" : rawRole === "chef" ? "KDS_ONLY" : "FULL_ADMIN"),
+              rawRole === "waiter" || rawRole === "server"
+                ? "WAITER_ONLY"
+                : matchedLocalStaff.terminalAccess ||
+                  (rawRole === "cashier" ? "POS_ONLY" : rawRole === "chef" ? "KDS_ONLY" : "FULL_ADMIN"),
             restaurantName: matchedLocalStaff.branchName || "Restaurant",
             branchId: matchedLocalStaff.branchId ? String(matchedLocalStaff.branchId) : undefined,
             branchName: matchedLocalStaff.branchName,
             phone: matchedLocalStaff.phone || "",
             assignedFeatures: ["POS", "KITCHEN", "INVENTORY"],
-            organizationId: "27",
-            restaurantId: "27",
-            assignedShift: (matchedLocalStaff as any).shift || undefined,
+            organizationId: "40",
+            restaurantId: "40",
+            assignedShift: parseShiftOption((matchedLocalStaff as any).shift) || (matchedLocalStaff as any).shift || undefined,
+            assigned_station: (matchedLocalStaff as any).assigned_station || (matchedLocalStaff as any).assignedStation || undefined,
+            assignedStation: (matchedLocalStaff as any).assigned_station || (matchedLocalStaff as any).assignedStation || undefined,
           };
+
+          // Single-Session / Concurrent Login Prevention Check
+          const activeSession = await checkActiveStaffSession("40", authUser);
+          if (activeSession) {
+            hideSplash();
+            setActiveSessionDetected(activeSession);
+            setPendingConcurrentAuthUser(authUser);
+            return;
+          }
 
           await proceedWithStaffLogin(authUser);
           return;
@@ -546,7 +686,7 @@ export default function LoginPage() {
         // -------------------------------------------------------------------------
         if (rawUserMetaRole === "branch_admin") {
           const branchName = data.user?.user_metadata?.branch_name || "Branch Outlet";
-          const orgId = data.user?.user_metadata?.organization_id || "27";
+          const orgId = data.user?.user_metadata?.organization_id || "40";
           const fullName = data.user?.user_metadata?.full_name || "Branch Manager";
 
           const authUser: AuthenticatedUser = {
@@ -1143,8 +1283,79 @@ export default function LoginPage() {
             previousCashierName={previousHandover?.cashierName}
             previousShiftType={previousHandover?.shiftType}
             onConfirmStartShift={handleConfirmStartShiftOnLogin}
-            onLogOut={handleCancelShiftModalOnLogin}
+            onLogOut={() => {
+              setIsShiftModalOpen(false);
+              setPendingShiftStaffUser(null);
+              clearUserSession();
+            }}
           />
+        )}
+
+        {/* Active Session Lock & Concurrent Login Prevention Modal */}
+        {activeSessionDetected && pendingConcurrentAuthUser && (
+          <div className="fixed inset-0 z-50 bg-black/60 dark:bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="w-full max-w-md rounded-3xl bg-white dark:bg-[#1a140a]/98 border border-zinc-200 dark:border-[var(--border-hi)] shadow-2xl dark:shadow-[0_24px_60px_rgba(0,0,0,0.85),0_0_24px_rgba(227,177,59,0.08)] p-6 space-y-5 animate-in fade-in zoom-in-95 text-left font-sans">
+              <div className="flex items-start gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/25 dark:border-amber-500/30 flex items-center justify-center text-amber-600 dark:text-amber-400 shrink-0 shadow-xs dark:shadow-[0_0_15px_rgba(245,158,11,0.25)]">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="inline-block px-2 py-0.5 rounded-full bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/25 dark:border-amber-500/30 text-amber-600 dark:text-amber-400 font-mono text-[9px] font-bold uppercase tracking-wider mb-1">
+                    Concurrency Guard Active
+                  </span>
+                  <h3 className="text-base font-bold text-[var(--text-hi)]">
+                    Active Session Detected
+                  </h3>
+                  <p className="text-xs text-[var(--text-lo)] mt-0.5 leading-relaxed">
+                    This staff account is already logged in with an active shift open. Concurrent duplicate logins under the same staff credentials are not permitted.
+                  </p>
+                </div>
+              </div>
+
+              {/* Active Session Ledger Summary */}
+              <div className="p-4 rounded-2xl bg-zinc-50 dark:bg-[var(--surface-hi)]/60 border border-zinc-200 dark:border-[var(--border)] space-y-2 text-xs font-mono">
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-lo)]">Staff Member:</span>
+                  <span className="font-bold text-[var(--text-hi)]">{activeSessionDetected.cashier_name}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-lo)]">Active Shift:</span>
+                  <span className="font-bold text-[var(--gold)]">{activeSessionDetected.shift_type || "Day Shift"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-lo)]">Session Started:</span>
+                  <span className="text-[var(--text-hi)]">
+                    {activeSessionDetected.shift_start
+                      ? new Date(activeSessionDetected.shift_start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                      : "Earlier today"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-lo)]">Terminal Role:</span>
+                  <span className="uppercase text-amber-500 font-bold">{activeSessionDetected.staff_role}</span>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-col sm:flex-row items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={handleTerminatePriorSessionAndLogin}
+                  className="w-full sm:flex-1 py-3 px-4 rounded-xl btn-gold text-xs font-bold text-[#342c14] flex items-center justify-center gap-2 cursor-pointer shadow-md hover:scale-[1.02] active:scale-[0.98] transition-all font-mono"
+                >
+                  <LogOut className="w-4 h-4 text-[#342c14]" />
+                  <span>Terminate Prior &amp; Continue</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelConcurrentLogin}
+                  className="w-full sm:w-auto py-3 px-4 rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-[var(--surface-hi)] dark:hover:bg-[var(--surface)] text-zinc-700 dark:text-[var(--text-lo)] border border-zinc-200 dark:border-[var(--border)] text-xs font-bold font-mono cursor-pointer transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </main>
 
