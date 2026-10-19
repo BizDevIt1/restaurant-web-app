@@ -489,6 +489,7 @@ export async function PUT(request: Request) {
     const {
       id,
       initial_status,
+      status,
       brand_name,
       city,
       cuisine,
@@ -513,7 +514,17 @@ export async function PUT(request: Request) {
     }
 
     const payload: Record<string, any> = {};
-    if (initial_status !== undefined) payload.initial_status = initial_status;
+    if (initial_status !== undefined) {
+      payload.initial_status = initial_status;
+      if (initial_status === "Deactivated" || initial_status === "Suspended") {
+        payload.status = "inactive";
+      } else if (initial_status === "Active") {
+        payload.status = "active";
+      }
+    }
+    if (status !== undefined) {
+      payload.status = status;
+    }
     if (brand_name !== undefined) payload.brand_name = brand_name;
     if (city !== undefined) payload.city = city;
     if (cuisine !== undefined) payload.cuisine = cuisine;
@@ -537,11 +548,16 @@ export async function PUT(request: Request) {
       .select()
       .maybeSingle();
 
-    if (error && (error.message?.includes("enable_") || error.code === "PGRST204")) {
-      delete payload.enable_kitchen_kds;
-      delete payload.enable_table_service;
-      delete payload.enable_direct_thermal_print;
-      delete payload.enable_offline_sync;
+    if (error && (error.message?.includes("enable_") || error.code === "PGRST204" || error.message?.includes("status"))) {
+      if (error.message?.includes("enable_")) {
+        delete payload.enable_kitchen_kds;
+        delete payload.enable_table_service;
+        delete payload.enable_direct_thermal_print;
+        delete payload.enable_offline_sync;
+      }
+      if (error.message?.includes("status") && !error.message?.includes("initial_status")) {
+        delete payload.status;
+      }
       const retry = await supabase.from("restaurants").update(payload).eq("id", numericId).select().maybeSingle();
       data = retry.data;
       error = retry.error;
@@ -563,6 +579,18 @@ export async function PUT(request: Request) {
     if (error) {
       console.warn("[SuperAdmin PUT Database Error]:", error);
       return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    // Broadcast deactivation if applicable
+    if (payload.status === "inactive" || payload.initial_status === "Deactivated") {
+      try {
+        const channel = supabase.channel(`restaurant-status-${numericId}`);
+        channel.send({
+          type: "broadcast",
+          event: "restaurant_eviction",
+          payload: { type: "RESTAURANT_DEACTIVATED", restaurantId: String(numericId), timestamp: Date.now() },
+        });
+      } catch {}
     }
 
     return NextResponse.json({ success: true, restaurant: data });
@@ -591,11 +619,40 @@ export async function DELETE(request: Request) {
     }
 
     const numericId = parseInt(String(id).replace(/[^0-9]/g, ""), 10);
+    const targetRestId = numericId || id;
 
+    // Real-Time Eviction Signal: Broadcast deletion before completing purge
+    try {
+      const channel = supabase.channel(`restaurant-status-${targetRestId}`);
+      channel.send({
+        type: "broadcast",
+        event: "restaurant_eviction",
+        payload: { type: "RESTAURANT_DELETED", restaurantId: String(targetRestId), timestamp: Date.now() },
+      });
+    } catch {}
+
+    // Complete cascading purge of related entities across all operational tables
+    await Promise.allSettled([
+      supabase.from("deliveries").delete().eq("restaurant_id", targetRestId),
+      supabase.from("kitchen_tickets").delete().eq("restaurant_id", targetRestId),
+      supabase.from("orders").delete().eq("restaurant_id", targetRestId),
+      supabase.from("restaurant_tables").delete().eq("restaurant_id", targetRestId),
+      supabase.from("raw_materials").delete().eq("restaurant_id", targetRestId),
+      supabase.from("recipe_items").delete().eq("restaurant_id", targetRestId),
+      supabase.from("menu_modifiers").delete().eq("restaurant_id", targetRestId),
+      supabase.from("menu_items").delete().eq("restaurant_id", targetRestId),
+      supabase.from("menu_categories").delete().eq("restaurant_id", targetRestId),
+      supabase.from("staff_members").delete().eq("restaurant_id", targetRestId),
+      supabase.from("restaurant_shifts").delete().eq("restaurant_id", targetRestId),
+      supabase.from("shift_settlements").delete().eq("restaurant_id", targetRestId),
+      supabase.from("branch_settings").delete().eq("restaurant_id", targetRestId),
+    ]);
+
+    // Finally delete from public.restaurants
     const { error } = await supabase
       .from("restaurants")
       .delete()
-      .eq("id", numericId || id);
+      .eq("id", targetRestId);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 });

@@ -19,11 +19,17 @@ import { playPosSound } from "@/utils/posAudio";
 import { useAuth } from "@/app/admin/context/AuthContext";
 import { createClient } from "@/lib/supabase";
 import { getValidTenantContext } from "@/lib/tenantResolver";
+import {
+  getShiftWindowLabel,
+  getShiftDisplayName,
+  getRestaurantShiftConfig,
+} from "@/lib/shiftSchedule";
 
 export type ShiftTypeOption =
   | "First Shift (Morning)"
   | "Second Shift (Evening)"
-  | "Third Shift (Night / Closing)";
+  | "Third Shift (Night / Closing)"
+  | string;
 
 interface StartShiftModalProps {
   isOpen: boolean;
@@ -202,13 +208,13 @@ export default function StartShiftModal({
 
   const numericFloat = parseFloat(openingFloat) || 0;
 
-  // Resolve shift metadata based on assigned locked shift
-  const shiftHours =
-    detectedShift === "First Shift (Morning)"
-      ? "08:00 AM – 04:00 PM"
-      : detectedShift === "Second Shift (Evening)"
-      ? "04:00 PM – 12:00 AM"
-      : "12:00 AM – 08:00 AM";
+  // Resolve shift metadata based on assigned locked shift and admin-configured shift timings
+  const shiftConfig = React.useMemo(() => {
+    return getRestaurantShiftConfig(user?.restaurantId || user?.restId, user);
+  }, [user]);
+
+  const shiftHours = getShiftWindowLabel(detectedShift, shiftConfig);
+  const shiftDisplayName = getShiftDisplayName(detectedShift, shiftConfig);
 
   const ShiftIcon =
     detectedShift === "First Shift (Morning)"
@@ -337,7 +343,7 @@ export default function StartShiftModal({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-xs font-bold text-[var(--text-hi)] block truncate">
-                    {detectedShift} • {shiftHours}
+                    {shiftDisplayName} • {shiftHours}
                   </span>
                   <span className="text-[10px] font-mono text-[var(--gold)] font-semibold px-2 py-0.5 rounded bg-[var(--gold-dim)] border border-[var(--gold)]/20 shrink-0">
                     Assigned

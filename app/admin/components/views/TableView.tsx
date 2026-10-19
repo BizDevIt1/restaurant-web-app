@@ -21,6 +21,7 @@ import {
   ArrowRight,
   ShieldCheck,
   UserCheck,
+  List,
 } from "lucide-react";
 import { RestaurantTable } from "../../types";
 import ResponsiveSelect from "../ResponsiveSelect";
@@ -34,6 +35,7 @@ import {
   reconcileRestaurantTables,
   subscribeToTableReleased,
 } from "../../../../lib/tableOccupancy";
+import { subscribeTerminalEventBus } from "../../../../lib/terminalRealtimeSync";
 
 interface TableViewProps {
   showToast: (msg: string) => void;
@@ -109,6 +111,7 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
   // Filter & Search State
   const [selectedSection, setSelectedSection] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -198,20 +201,65 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
       window.addEventListener("table_released", handleCustomEvent);
     }
 
+    let unsubBus: (() => void) | null = null;
+
     (async () => {
       try {
         const supabase = createClient();
         const { restId } = await getValidTenantContext(user);
-        if (!isSubscribed) return;
+        if (!isSubscribed || !restId) return;
 
-        if (restId) {
-          unsubTableReleased = subscribeToTableReleased(restId, () => {
+        unsubTableReleased = subscribeToTableReleased(restId, () => {
+          fetchTables();
+        });
+
+        // Instant cross-terminal zero-latency event bus
+        unsubBus = subscribeTerminalEventBus(restId, (payload) => {
+          if (!isSubscribed) return;
+          console.log("[TableView] Event bus mutation received:", payload);
+          if (payload.type === "TABLE_RELEASED" || payload.type === "ORDER_VOIDED") {
+            const tableId = payload.tableId;
+            const tableNum = payload.tableNumber;
+            if (tableId || tableNum) {
+              setTables((prev) =>
+                prev.map((t) => {
+                  const matches =
+                    (tableId && String(t.id) === String(tableId)) ||
+                    (tableNum && (t.table_number === tableNum || t.table_number === `Table ${tableNum}`));
+                  if (matches) {
+                    return { ...t, status: "AVAILABLE" as any };
+                  }
+                  return t;
+                })
+              );
+            }
             fetchTables();
-          });
-        }
+          } else if (payload.type === "TABLE_MUTATION") {
+            const isRelease = payload.status === "available" || payload.status === "AVAILABLE";
+            const tableId = payload.tableId;
+            const tableNum = payload.tableNumber;
+            if (tableId || tableNum) {
+              setTables((prev) =>
+                prev.map((t) => {
+                  const matches =
+                    (tableId && String(t.id) === String(tableId)) ||
+                    (tableNum && (t.table_number === tableNum || t.table_number === `Table ${tableNum}`));
+                  if (matches) {
+                    return { ...t, status: isRelease ? ("AVAILABLE" as any) : ("OCCUPIED" as any) };
+                  }
+                  return t;
+                })
+              );
+            }
+            fetchTables();
+          } else if (payload.type === "ORDER_MUTATION") {
+            fetchTables();
+          }
+        });
 
+        const subId = Math.random().toString(36).substring(2, 7);
         channel = supabase
-          .channel(`realtime:restaurant_tables_sync_${restId}`)
+          .channel(`realtime_rt_tables_${restId}_${subId}`)
           .on(
             "postgres_changes",
             {
@@ -248,7 +296,17 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
               fetchTables();
             }
           )
-          .subscribe();
+          .subscribe((status: string, err?: any) => {
+            console.log(`[TableView Realtime ${restId}] Channel status: ${status}`, err || "");
+            if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+              if (isSubscribed) {
+                console.warn(`[TableView Realtime ${restId}] Disconnected (${status}). Auto-refreshing...`);
+                setTimeout(() => {
+                  if (isSubscribed) fetchTables();
+                }, 1500);
+              }
+            }
+          });
       } catch (err) {
         console.warn("[TableView] Supabase Realtime subscription error:", err);
       }
@@ -263,6 +321,9 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
       }
       if (unsubTableReleased) {
         unsubTableReleased();
+      }
+      if (unsubBus) {
+        unsubBus();
       }
       if (channel) {
         try {
@@ -770,6 +831,36 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
             </button>
           )}
         </div>
+
+        {/* View Mode Toggle: List Tiles vs Grid Cards */}
+        <div className="flex items-center bg-[var(--surface-hi)] border border-[var(--border)] rounded-xl p-1 h-10 shrink-0">
+          <button
+            type="button"
+            onClick={() => setViewMode("list")}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+              viewMode === "list"
+                ? "bg-[var(--gold)] text-black shadow-sm"
+                : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
+            }`}
+            title="List Tiles View"
+          >
+            <List className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">List</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("grid")}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
+              viewMode === "grid"
+                ? "bg-[var(--gold)] text-black shadow-sm"
+                : "text-[var(--text-lo)] hover:text-[var(--text-hi)]"
+            }`}
+            title="Grid Cards View"
+          >
+            <LayoutGrid className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Cards</span>
+          </button>
+        </div>
       </div>
 
       {/* ========================================================================= */}
@@ -819,7 +910,208 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
             Clear Filters
           </button>
         </div>
+      ) : viewMode === "list" ? (
+        /* ========================================================================= */
+        /* LIST TILES VIEW (HIGH DENSITY & CLEAN ROW LAYOUT)                         */
+        /* ========================================================================= */
+        <div className="flex flex-col gap-2.5 font-mono">
+          {filteredTables.map((table) => {
+            const statusKey = (table.status || "AVAILABLE").toUpperCase();
+            const statusCfg = STATUS_CONFIG[statusKey] || STATUS_CONFIG.AVAILABLE;
+
+            return (
+              <div
+                key={table.id}
+                className="glass-panel p-3 sm:p-4 rounded-xl border border-[var(--border)] hover:border-[var(--gold)]/40 hover:bg-[var(--surface-hi)]/30 transition-all duration-200 flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4 relative group overflow-hidden"
+              >
+                {/* Left accent color bar based on table status */}
+                <div
+                  className={`absolute left-0 top-0 bottom-0 w-1 ${
+                    statusKey === "OCCUPIED"
+                      ? "bg-red-500"
+                      : statusKey === "BILLED"
+                      ? "bg-amber-500"
+                      : statusKey === "RESERVED"
+                      ? "bg-blue-500"
+                      : "bg-[#25d366]"
+                  }`}
+                />
+
+                {/* Left: Table Icon, Table Number, Section, Capacity */}
+                <div className="flex items-center gap-3 sm:gap-4 min-w-0 pl-1.5 sm:pl-2">
+                  <div
+                    className={`w-11 h-11 rounded-xl flex flex-col items-center justify-center shrink-0 border shadow-inner ${
+                      statusKey === "OCCUPIED"
+                        ? "bg-red-500/10 border-red-500/30 text-red-400"
+                        : statusKey === "BILLED"
+                        ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                        : statusKey === "RESERVED"
+                        ? "bg-blue-500/10 border-blue-500/30 text-blue-400"
+                        : "bg-[var(--gold-dim)] border-[var(--gold)]/30 text-[var(--gold)]"
+                    }`}
+                  >
+                    <span className="text-[9px] uppercase font-bold tracking-wider opacity-70">
+                      TBL
+                    </span>
+                    <span className="font-mono font-black text-xs leading-none">
+                      {table.table_number.replace(/^table\s*/i, "") || "01"}
+                    </span>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="text-sm sm:text-base font-bold text-[var(--text-hi)] tracking-tight truncate">
+                        {table.table_number}
+                      </h3>
+                      <span className="inline-block text-[10px] text-[var(--text-faint)] bg-[var(--surface-hi)] border border-[var(--border)] px-2 py-0.5 rounded font-mono truncate">
+                        {table.section_name || "Main Dining"}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-xs text-[var(--text-lo)] mt-0.5 font-mono">
+                      <div className="flex items-center gap-1">
+                        <Users className="w-3.5 h-3.5 text-[var(--gold)] shrink-0" />
+                        <span className="font-medium">{table.seating_capacity} Seats</span>
+                      </div>
+                      <span className="text-[var(--text-faint)] hidden sm:inline">•</span>
+                      <div className="hidden sm:flex items-center gap-1">
+                        {Array.from({ length: Math.min(table.seating_capacity, 8) }).map((_, i) => (
+                          <span
+                            key={i}
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              statusKey === "OCCUPIED"
+                                ? "bg-red-400/70"
+                                : statusKey === "RESERVED"
+                                ? "bg-blue-400/70"
+                                : statusKey === "BILLED"
+                                ? "bg-amber-400/70"
+                                : "bg-white/20"
+                            }`}
+                          />
+                        ))}
+                        {table.seating_capacity > 8 && (
+                          <span className="text-[9px] text-[var(--text-faint)]">
+                            +{table.seating_capacity - 8}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right: Status Pill, Quick Actions, Status Dropdown, Edit, Delete */}
+                <div className="flex items-center justify-between md:justify-end gap-2 sm:gap-2.5 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[var(--border)]/40 pl-1.5 sm:pl-0">
+                  {/* Status Pill */}
+                  <div className={`shrink-0 ${statusCfg.pillClass}`}>
+                    <span className={statusCfg.dotClass} />
+                    <span>{statusCfg.label}</span>
+                  </div>
+
+                  {/* Quick Action Button */}
+                  <div className="min-w-[85px] sm:min-w-[95px]">
+                    {statusKey === "AVAILABLE" && (
+                      <button
+                        type="button"
+                        onClick={() => handleQuickStatusChange(table, "RESERVED")}
+                        className="w-full flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/25 text-[11px] font-bold transition-colors cursor-pointer"
+                        title="Mark as Reserved"
+                      >
+                        <span>Reserve</span>
+                      </button>
+                    )}
+
+                    {statusKey === "RESERVED" && (
+                      <button
+                        type="button"
+                        onClick={() => handleQuickStatusChange(table, "AVAILABLE")}
+                        className="w-full flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-lg bg-[#25d366]/10 hover:bg-[#25d366]/20 text-[#25d366] border border-[#25d366]/25 text-[11px] font-bold transition-colors cursor-pointer"
+                        title="Release reservation"
+                      >
+                        <span>Ready</span>
+                      </button>
+                    )}
+
+                    {statusKey === "OCCUPIED" && (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleQuickStatusChange(table, "BILLED")}
+                          className="flex items-center justify-center py-1.5 px-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-900 dark:text-amber-300 border border-amber-500/30 text-[11px] font-bold transition-colors cursor-pointer"
+                          title="Mark as Billed"
+                        >
+                          <span>Bill Out</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleQuickStatusChange(table, "AVAILABLE")}
+                          className="flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-900 dark:text-[#25d366] border border-emerald-500/30 text-[11px] font-bold transition-colors cursor-pointer"
+                          title="Clear & Release Table"
+                        >
+                          <CheckCircle2 className="w-3 h-3 shrink-0" />
+                          <span>Release</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {statusKey === "BILLED" && (
+                      <button
+                        type="button"
+                        onClick={() => handleQuickStatusChange(table, "AVAILABLE")}
+                        className="w-full flex items-center justify-center gap-1 py-1.5 px-2.5 rounded-lg bg-[#25d366]/10 hover:bg-[#25d366]/20 text-[#25d366] border border-[#25d366]/25 text-[11px] font-bold transition-colors cursor-pointer"
+                        title="Reset to Available"
+                      >
+                        <span>Clear</span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Status Dropdown Menu */}
+                  <div className="relative shrink-0">
+                    <select
+                      value={statusKey}
+                      onChange={(e) =>
+                        handleQuickStatusChange(table, e.target.value as any)
+                      }
+                      className="appearance-none bg-[var(--surface-hi)] hover:bg-white/5 text-[var(--text-lo)] hover:text-[var(--text-hi)] border border-[var(--border)] rounded-lg pl-2 pr-5 py-1.5 text-[11px] font-bold focus:outline-none cursor-pointer transition-colors"
+                      title="Change status"
+                    >
+                      <option value="AVAILABLE">Available</option>
+                      <option value="OCCUPIED">Occupied</option>
+                      <option value="BILLED">Billed</option>
+                      <option value="RESERVED">Reserved</option>
+                    </select>
+                    <ChevronDown className="w-2.5 h-2.5 text-[var(--text-faint)] pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2" />
+                  </div>
+
+                  {/* Edit & Delete Buttons */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => openModal(table)}
+                      className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-[var(--gold)] hover:bg-[var(--gold-dim)] border border-[var(--border)]/40 transition-colors cursor-pointer"
+                      title="Edit table"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setTableToDelete(table)}
+                      className="p-1.5 rounded-lg text-[var(--text-faint)] hover:text-red-400 hover:bg-red-500/10 border border-[var(--border)]/40 transition-colors cursor-pointer"
+                      title="Delete table"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       ) : (
+        /* ========================================================================= */
+        /* GRID CARDS VIEW                                                           */
+        /* ========================================================================= */
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5 font-mono">
           {filteredTables.map((table) => {
             const statusKey = (table.status || "AVAILABLE").toUpperCase();
@@ -843,9 +1135,7 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
                     </div>
 
                     {/* Status Pill */}
-                    <div
-                      className={`shrink-0 ${statusCfg.pillClass}`}
-                    >
+                    <div className={`shrink-0 ${statusCfg.pillClass}`}>
                       <span className={statusCfg.dotClass} />
                       <span>{statusCfg.label}</span>
                     </div>
@@ -984,7 +1274,8 @@ export default function TableView({ showToast, routeAction }: TableViewProps) {
             );
           })}
         </div>
-      )}
+      )
+}
 
       {/* ========================================================================= */}
       {/* E. ADD / EDIT TABLE MODAL */}

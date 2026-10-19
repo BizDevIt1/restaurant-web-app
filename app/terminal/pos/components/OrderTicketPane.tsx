@@ -245,9 +245,10 @@ export default function OrderTicketPane({
                         </option>
                       ) : (
                         displayTables.map((t) => {
-                          const isOccupied = t.status === "seated" || t.status === "occupied";
-                          const isBilled = t.status === "billing";
-                          const isReserved = t.status === "reserved";
+                          const stLower = String(t.status || "").toLowerCase();
+                          const isOccupied = stLower === "seated" || stLower === "occupied" || stLower === "dining";
+                          const isBilled = stLower === "billing";
+                          const isReserved = stLower === "reserved";
                           const runningAmount = t.activeAmount;
                           const amountStr = runningAmount ? ` • Rs ${runningAmount.toLocaleString()}` : "";
 

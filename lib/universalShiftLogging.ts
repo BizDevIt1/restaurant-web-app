@@ -4,6 +4,7 @@ import {
   parseShiftOption,
   getShiftShortName,
   getShiftWindowLabel,
+  getCurrentOperatingShift,
   isShiftFromPreviousDate,
   clearStaleShiftStorage,
 } from "./shiftSchedule";
@@ -106,14 +107,7 @@ export async function recordStaffShiftLogin(
     // Determine shift window designation
     let resolvedShift = options?.shiftType || user.assignedShift;
     if (!resolvedShift) {
-      const curHour = new Date().getHours();
-      if (curHour >= 8 && curHour < 16) {
-        resolvedShift = "First Shift (Morning)";
-      } else if (curHour >= 16 && curHour < 24) {
-        resolvedShift = "Second Shift (Evening)";
-      } else {
-        resolvedShift = "Third Shift (Night / Closing)";
-      }
+      resolvedShift = getCurrentOperatingShift(new Date());
     }
 
     const isFinancialRole = staffRole === "cashier";

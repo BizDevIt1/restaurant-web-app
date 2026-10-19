@@ -83,8 +83,12 @@ import {
 import { formatSmartDuration } from "@/utils/timeFormatters";
 import {
   parseShiftOption,
+  getShiftStartLabel,
   getShiftEndLabel,
   getShiftWindowLabel,
+  getRestaurantShiftConfig,
+  getEffectiveShiftsList,
+  format24HourTo12Hour,
   ShiftTypeOption,
 } from "@/lib/shiftSchedule";
 import KitchenSidebar from "./KitchenSidebar";
@@ -93,6 +97,7 @@ import ChefPerformanceStatsView from "./ChefPerformanceStatsView";
 import { printerService } from "@/utils/printing/printerService";
 import StaffShiftRolloverModal from "../components/StaffShiftRolloverModal";
 import { recordStaffShiftLogout } from "@/lib/universalShiftLogging";
+import { subscribeTerminalEventBus } from "@/lib/terminalRealtimeSync";
 
 import {
   KitchenStationType,
@@ -746,18 +751,6 @@ export function getItemTiming(item: KdsItemStatusRecord, ticket: KdsTicket, nowM
   };
 }
 
-function getShiftStartLabel(shift: ShiftTypeOption | null): string {
-  switch (shift) {
-    case "First Shift (Morning)":
-      return "08:00 AM";
-    case "Second Shift (Evening)":
-      return "04:00 PM";
-    case "Third Shift (Night / Closing)":
-      return "12:00 AM";
-    default:
-      return "08:00 AM";
-  }
-}
 
 // Order modification diff detector for KDS live tickets
 export function detectTicketModifications(
@@ -892,11 +885,26 @@ export default function KitchenTerminalClient() {
     router.replace("/login");
   };
 
-  // Remind Me Later — dismiss modal and snooze for 15 minutes
-  const handleRemindLater = () => {
+  // 10-Minute Warning: Evaluated dynamically (activeShift.end_time - 10 minutes)
+  const lastWarningToastRef = useRef<number>(0);
+  useEffect(() => {
+    if (shiftValidation?.isValid && shiftValidation?.isWarningWindow) {
+      const now = Date.now();
+      if (now - lastWarningToastRef.current >= 3 * 60 * 1000) {
+        lastWarningToastRef.current = now;
+        showToast(
+          `⚠️ Shift Warning: Your scheduled kitchen shift ends in ${shiftValidation.minutesRemaining}m (${shiftValidation.shiftEndLabel}). Please prepare for handover.`
+        );
+      }
+    }
+  }, [shiftValidation?.isValid, shiftValidation?.isWarningWindow, shiftValidation?.minutesRemaining, shiftValidation?.shiftEndLabel]);
+
+  // Remind Me Later — dismiss modal and snooze (bounded by 30-min grace deadline)
+  const handleRemindLater = (snoozeUntilMs?: number) => {
     setIsRolloverModalOpen(false);
-    setShiftSnoozedUntil(Date.now() + 15 * 60 * 1000);
-    showToast("Shift alert snoozed. Reminding again in 15 minutes.");
+    const target = snoozeUntilMs || (Date.now() + 10 * 60 * 1000);
+    setShiftSnoozedUntil(target);
+    showToast("Shift alert snoozed for 10 minutes.");
   };
 
   // Manager Role Authorization Check (for Priority Override Dropdowns)
@@ -1985,11 +1993,37 @@ export default function KitchenTerminalClient() {
               }
             }
           )
-          .subscribe((status: string) => {
-            if (status === "SUBSCRIBED") {
-              // Realtime channel successfully joined
+          .subscribe((status: string, err?: any) => {
+            console.log(`[Kitchen Realtime ${restId}] Channel status: ${status}`, err || "");
+            if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+              if (isMounted) {
+                console.warn(`[Kitchen Realtime ${restId}] Disconnected (${status}). Auto-reconnecting...`);
+                setTimeout(() => {
+                  if (isMounted) fetchTickets();
+                }, 1500);
+              }
             }
           });
+
+        unsubBus = subscribeTerminalEventBus(restId, (payload) => {
+          if (!isMounted) return;
+          console.log("[KitchenTerminal] Terminal bus mutation:", payload);
+          if (payload.type === "ORDER_VOIDED") {
+            const vId = payload.ticketId || payload.orderId;
+            if (vId) {
+              setKdsTickets((prev) =>
+                prev.map((t) =>
+                  t.id === vId || t.ticket_number === vId || (t.ticket_number && String(t.ticket_number).includes(String(vId)))
+                    ? { ...t, status: "voided", void_reason: payload.reason || "Cancelled by Admin" }
+                    : t
+                )
+              );
+            }
+            fetchTickets();
+          } else if (payload.type === "TICKET_MUTATION" || payload.type === "ORDER_MUTATION") {
+            fetchTickets();
+          }
+        });
 
         channelRef.current = channel;
       } catch (err) {
@@ -1997,6 +2031,7 @@ export default function KitchenTerminalClient() {
       }
     };
 
+    let unsubBus: (() => void) | null = null;
     fetchTickets();
 
     // Cross-tab Local Storage Listener (Instant sync with POS checkouts on same device)
@@ -2019,6 +2054,9 @@ export default function KitchenTerminalClient() {
 
     return () => {
       isMounted = false;
+      if (unsubBus) {
+        try { unsubBus(); } catch {}
+      }
       if (channel) {
         try {
           channel.unsubscribe();
@@ -2040,6 +2078,12 @@ export default function KitchenTerminalClient() {
     if (advancingTicketsRef.current.has(ticketId)) return;
     const currentTicket = kdsTickets.find((t) => t.id === ticketId);
     if (!currentTicket) return;
+
+    // Voided orders are permanently cancelled and can NEVER be reopened or advanced by chef
+    if (isVoidedStatus(currentTicket.status)) {
+      showToast(`❌ Ticket #${ticketId} is VOIDED - Reopening or advancing voided orders is prohibited.`);
+      return;
+    }
 
     const createdMs = getOrderCreationEpochMs(currentTicket);
     const isExceededCutoff = createdMs ? (nowTime - createdMs >= ORDER_EXPIRY_CUTOFF_MS) : false;
@@ -2574,7 +2618,7 @@ export default function KitchenTerminalClient() {
   const isCompletedStatus = (status?: string | null): boolean => {
     if (!status) return false;
     const s = status.trim().toLowerCase();
-    return s === "completed" || s === "archived" || s === "fulfilled" || s === "cancelled" || s === "done" || s === "closed" || s === "voided" || s === "void";
+    return s === "completed" || s === "archived" || s === "fulfilled" || s === "cancelled" || s === "done" || s === "closed";
   };
 
   const isQueuedStatus = (status?: string | null): boolean => {
@@ -2991,15 +3035,18 @@ export default function KitchenTerminalClient() {
     user?.staffRole?.toUpperCase() ||
     (user?.role === "STAFF_MEMBER" ? "STAFF" : user?.role || "CHEF");
 
-  const parsedShift = parseShiftOption(user?.assignedShift || shiftValidation?.assignedShift);
-  const shiftTitle = user?.assignedShift || shiftValidation?.assignedShift || "Kitchen Duty Roster";
+  const restId = user?.restaurantId || (user as any)?.restId || user?.organizationId;
+  const shiftConfig = useMemo(() => getRestaurantShiftConfig(restId, user), [restId, user]);
+  const effectiveShifts = useMemo(() => getEffectiveShiftsList(shiftConfig), [shiftConfig]);
+  const parsedShift = parseShiftOption(user?.assignedShift || shiftValidation?.assignedShift, shiftConfig);
+  const shiftTitle = user?.assignedShift || shiftValidation?.assignedShift || effectiveShifts[0]?.name || "Kitchen Duty Roster";
   const shiftWindowLabel = parsedShift
-    ? getShiftWindowLabel(parsedShift)
-    : shiftValidation?.windowLabel || "08:00 AM - 04:00 PM";
-  const shiftStartFormatted = getShiftStartLabel(parsedShift);
+    ? getShiftWindowLabel(parsedShift, shiftConfig)
+    : shiftValidation?.windowLabel || (effectiveShifts[0] ? `${format24HourTo12Hour(effectiveShifts[0].start)} - ${format24HourTo12Hour(effectiveShifts[0].end)}` : "Operating Hours");
+  const shiftStartFormatted = getShiftStartLabel(parsedShift, shiftConfig);
   const shiftEndFormatted = parsedShift
-    ? getShiftEndLabel(parsedShift)
-    : shiftValidation?.shiftEndLabel || "04:00 PM";
+    ? getShiftEndLabel(parsedShift, shiftConfig)
+    : shiftValidation?.shiftEndLabel || (effectiveShifts[0] ? format24HourTo12Hour(effectiveShifts[0].end) : "12:00 AM");
 
   return (
     <div className="flex-1 w-full flex h-full min-h-0 relative overflow-hidden bg-[var(--bg)] text-[var(--text-hi)] font-sans select-none transition-colors duration-150">
@@ -3665,7 +3712,7 @@ export default function KitchenTerminalClient() {
                       const completedMs = completedTime ? new Date(completedTime).getTime() : null;
                       const completedAgeMs = completedMs && !isNaN(completedMs) ? Math.max(0, nowTime - completedMs) : (createdMs ? Math.max(0, nowTime - createdMs) : 0);
                       const isPast2HourCompletedWindow = isCompleted && completedAgeMs > 2 * 60 * 60 * 1000;
-                      const canReopenCompleted = isCompleted && !wasExpired && !isPast4HourCutoff && !isPast2HourCompletedWindow;
+                      const canReopenCompleted = isCompleted && !isVoided && !wasExpired && !isPast4HourCutoff && !isPast2HourCompletedWindow;
 
                       // Completed, expired, or voided orders lock all internal item toggles and modifications
                       const isTicketLocked = isCompleted || isExpired || isOrderCutoffExpired || isVoided;
@@ -4105,7 +4152,14 @@ export default function KitchenTerminalClient() {
 
                             {/* Zone 3: Workflow Action Buttons (End Content) */}
                             <div className="shrink-0 flex items-center justify-between lg:justify-end gap-2 flex-wrap lg:flex-nowrap min-w-0 lg:w-56 xl:w-64 pt-2 lg:pt-0 border-t lg:border-t-0 border-[var(--border)]/50 relative z-1">
-                              {isExpired ? (
+                              {isVoided ? (
+                                <div className="flex items-center gap-2 w-full lg:w-auto">
+                                  <span className="px-3.5 py-1.5 rounded-xl text-xs font-mono font-bold uppercase tracking-wider bg-red-500/15 text-red-400 border border-red-500/40 flex items-center gap-1.5 shadow-2xs">
+                                    <Ban className="w-3.5 h-3.5 text-red-400" />
+                                    <span>Voided Order</span>
+                                  </span>
+                                </div>
+                              ) : isExpired ? (
                                 <div className="flex items-center gap-2 w-full lg:w-auto">
                                   <span className="px-3 py-1.5 rounded-xl text-xs font-mono font-black uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/50 flex items-center gap-1.5 animate-pulse">
                                     <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />

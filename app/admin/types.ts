@@ -16,6 +16,12 @@ export interface BranchData {
   rating?: number;
   isHq?: boolean;
   organizationId?: string;
+  shift_timings?: {
+    first_shift?: { start: string; end: string };
+    second_shift?: { start: string; end: string };
+    third_shift?: { start: string; end: string };
+    [key: string]: any;
+  };
 }
 
 export interface AuthenticatedUser {
@@ -473,7 +479,7 @@ export interface OrderRecord {
   discountPercent: number;
   discountAmount: number;
   total: number;
-  paymentMethod: "cash" | "card" | "raast" | "split";
+  paymentMethod: "cash" | "card" | "raast" | "split" | "voided" | string;
   cashierName: string;
   timestamp: string;
   created_at?: string;
@@ -492,6 +498,9 @@ export interface OrderRecord {
   shift_id?: number | string | null;
   isExpired?: boolean;
   is_expired?: boolean;
+  void_reason?: string;
+  voided_at?: string;
+  kitchenStatus?: string;
 }
 
 export interface BillingInvoice {

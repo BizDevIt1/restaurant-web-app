@@ -26,7 +26,17 @@ import { createClient } from "../../../../lib/supabase";
 import { getValidTenantContext } from "../../../../lib/tenantResolver";
 import { normalizeStationName } from "@/lib/kitchenStationRouting";
 import { getActiveAuthSession, setAuthSession } from "@/lib/auth";
-import { parseShiftOption } from "@/lib/shiftSchedule";
+import {
+  parseShiftOption,
+  getShiftWindowLabel,
+  getShiftDisplayName,
+  getRestaurantShiftConfig,
+  saveRestaurantShiftConfig,
+  parseRestaurantShiftConfig,
+  getEffectiveShiftsList,
+  format24HourTo12Hour,
+  RestaurantShiftConfig,
+} from "@/lib/shiftSchedule";
 
 interface StaffProvisioningViewProps {
   initialData?: StaffMember | null;
@@ -52,6 +62,46 @@ export default function StaffProvisioningView({
     const digits = String(id).replace(/[^0-9]/g, "");
     return digits ? parseInt(digits, 10) : 27;
   };
+
+  const restId = user?.restaurantId || (user as any)?.restaurant_id || user?.id;
+  const [shiftConfig, setShiftConfig] = useState<RestaurantShiftConfig>(() =>
+    getRestaurantShiftConfig(restId, user)
+  );
+
+  // Sync latest shift configuration from restaurants table
+  useEffect(() => {
+    if (!restId) return;
+    const numericRestId = parseNumericId(restId);
+    const supabase = createClient();
+
+    supabase
+      .from("restaurants")
+      .select("branches")
+      .eq("id", numericRestId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!error && data?.branches?.[0]?.shift_timings) {
+          const parsed = parseRestaurantShiftConfig(data.branches[0].shift_timings);
+          if (parsed) {
+            setShiftConfig(parsed);
+            saveRestaurantShiftConfig(restId, parsed);
+          }
+        }
+      });
+
+    const handleShiftConfigUpdated = (e: any) => {
+      if (e.detail?.config) {
+        setShiftConfig(e.detail.config);
+      } else {
+        setShiftConfig(getRestaurantShiftConfig(restId, user));
+      }
+    };
+
+    window.addEventListener("restaurant_shift_config_updated", handleShiftConfigUpdated);
+    return () => {
+      window.removeEventListener("restaurant_shift_config_updated", handleShiftConfigUpdated);
+    };
+  }, [restId, user]);
 
   const availableBranches = useMemo(() => {
     if (user?.branches && Array.isArray(user.branches) && user.branches.length > 0) {
@@ -161,14 +211,21 @@ export default function StaffProvisioningView({
     initialData?.branchName || availableBranches[0]?.name || "Main Outlet"
   );
 
+  const availableShifts = useMemo(() => getEffectiveShiftsList(shiftConfig), [shiftConfig]);
+
   // Section 2: Shift and Role-Specific Metadata
   const [shift, setShift] = useState<string>(() => {
     const raw = initialData?.shift || "";
-    if (raw.includes("Morning") || raw.includes("First")) return "First Shift (Morning)";
-    if (raw.includes("Evening") || raw.includes("Second")) return "Second Shift (Evening)";
-    if (raw.includes("Night") || raw.includes("Third") || raw.includes("Owl")) return "Third Shift (Night / Closing)";
-    return "First Shift (Morning)";
+    if (raw) return raw;
+    const list = getEffectiveShiftsList(shiftConfig);
+    return list[0]?.name || "First Shift (Morning)";
   });
+
+  useEffect(() => {
+    if (!shift && availableShifts.length > 0) {
+      setShift(availableShifts[0].name);
+    }
+  }, [availableShifts, shift]);
   const [cashDrawer, setCashDrawer] = useState("Counter 01");
   const [kitchenStation, setKitchenStation] = useState<string>(() => {
     const raw = (initialData?.assigned_station || initialData?.assignedStation || "").toLowerCase();
@@ -745,9 +802,11 @@ export default function StaffProvisioningView({
                     onChange={(e) => setShift(e.target.value)}
                     className="w-full bg-[var(--surface-hi)] border border-[var(--border)] focus:border-[var(--gold)] rounded-xl pl-9 pr-4 py-2.5 text-xs text-[var(--text-hi)] focus:outline-none transition-all cursor-pointer font-sans"
                   >
-                    <option value="First Shift (Morning)">First Shift / Morning (08:00 AM – 04:00 PM)</option>
-                    <option value="Second Shift (Evening)">Second Shift / Evening (04:00 PM – 12:00 AM)</option>
-                    <option value="Third Shift (Night / Closing)">Third Shift / Night (12:00 AM – 08:00 AM)</option>
+                    {availableShifts.map((s, idx) => (
+                      <option key={`${s.name}-${idx}`} value={s.name}>
+                        {s.name} ({format24HourTo12Hour(s.start)} – {format24HourTo12Hour(s.end)})
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>

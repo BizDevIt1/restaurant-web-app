@@ -154,11 +154,21 @@ export function setAuthSession(session: AuthSession | null): void {
       localStorage.removeItem(ADMIN_SESSION_KEY);
       localStorage.removeItem(LEGACY_SESSION_KEY);
       document.cookie = "omni_admin_session=; path=/; max-age=0; SameSite=Lax";
+      document.cookie = "omni_staff_session=1; path=/; max-age=604800; SameSite=Lax";
+      const staffRole = (session.staffRole || session.role || "cashier").toLowerCase();
+      document.cookie = `omni_session_role=${encodeURIComponent(staffRole)}; path=/; max-age=604800; SameSite=Lax`;
+      document.cookie = `omni_staff_terminal=${encodeURIComponent(session.terminalAccess || "")}; path=/; max-age=604800; SameSite=Lax`;
+      document.cookie = `omni_restaurant_id=${encodeURIComponent(String(session.organizationId || ""))}; path=/; max-age=604800; SameSite=Lax`;
     } else {
       localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session));
       localStorage.removeItem(STAFF_SESSION_KEY);
       localStorage.removeItem(LEGACY_SESSION_KEY);
+      document.cookie = "omni_staff_session=; path=/; max-age=0; SameSite=Lax";
       document.cookie = "omni_admin_session=1; path=/; max-age=604800; SameSite=Lax";
+      const adminRole = session.role === "SUPER_ADMIN" ? "super_admin" : "admin";
+      document.cookie = `omni_session_role=${encodeURIComponent(adminRole)}; path=/; max-age=604800; SameSite=Lax`;
+      document.cookie = `omni_staff_terminal=FULL_ADMIN; path=/; max-age=604800; SameSite=Lax`;
+      document.cookie = `omni_restaurant_id=${encodeURIComponent(String(session.organizationId || ""))}; path=/; max-age=604800; SameSite=Lax`;
     }
   } catch (err) {
     console.error("[auth.ts] Error saving AuthSession:", err);
@@ -182,6 +192,10 @@ export function clearAllAuthSessions(): void {
     localStorage.removeItem("omni_admin_session");
     sessionStorage.clear();
     document.cookie = "omni_admin_session=; path=/; max-age=0; SameSite=Lax";
+    document.cookie = "omni_staff_session=; path=/; max-age=0; SameSite=Lax";
+    document.cookie = "omni_session_role=; path=/; max-age=0; SameSite=Lax";
+    document.cookie = "omni_staff_terminal=; path=/; max-age=0; SameSite=Lax";
+    document.cookie = "omni_restaurant_id=; path=/; max-age=0; SameSite=Lax";
     // Clear cookies across paths
     document.cookie.split(";").forEach((c) => {
       const eqPos = c.indexOf("=");

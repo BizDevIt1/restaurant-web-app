@@ -11,6 +11,10 @@ import { broadcastStockRefresh } from "@/lib/unifiedStock";
 import { dispatchOrderCancelledAlert } from "@/lib/shiftAuditNotifications";
 import { normalizeTableNumber, isUuid, isOrderOccupyingTable, broadcastTableReleased } from "@/lib/tableOccupancy";
 import {
+  broadcastTerminalMutation,
+  subscribeTerminalEventBus,
+} from "@/lib/terminalRealtimeSync";
+import {
   getStoredOrders,
   saveStoredOrders,
   getStoredTables,
@@ -153,149 +157,357 @@ export default function UnifiedOrdersPage() {
       } catch { }
 
       // Fetch latest orders for this restaurant without fragile PostgREST .or() date-locking
-      // This ensures all active KOT orders, held orders, and settled orders are retrieved smoothly
-      const { data: dbOrders, error } = await supabase
-        .from("orders")
-        .select("*")
-        .eq("restaurant_id", restId)
-        .neq("order_status", "cancelled")
-        .order("created_at", { ascending: false })
-        .limit(250);
+      // Concurrently fetch latest orders and kitchen tickets in parallel
+      const [ordersRes, ticketsRes] = await Promise.all([
+        supabase
+          .from("orders")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .order("created_at", { ascending: false })
+          .limit(250),
+        supabase
+          .from("kitchen_tickets")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .order("created_at", { ascending: false })
+          .limit(250),
+      ]);
 
-      if (error) {
-        console.warn("[UnifiedOrdersPage] fetchOrders query error:", error);
-        return;
+      if (ordersRes.error) {
+        console.warn("[UnifiedOrdersPage] fetchOrders orders query error:", ordersRes.error);
+      }
+      if (ticketsRes.error) {
+        console.warn("[UnifiedOrdersPage] fetchOrders kitchen_tickets query error:", ticketsRes.error);
       }
 
-      if (dbOrders) {
-        const completedList: OrderRecord[] = [];
-        const runningKotList: OrderRecord[] = [];
-        const heldList: ParkedOrder[] = [];
+      const dbOrders = ordersRes.data || [];
+      const dbTickets = ticketsRes.data || [];
 
-        dbOrders.forEach((o: any) => {
-          const items = Array.isArray(o.items) ? o.items : [];
-          const orderNum = o.order_number || o.id;
-          const isHeld = String(orderNum).startsWith("#HOLD-") || o.customer_name === "Held Order";
-          const isPaid = o.payment_status === "paid";
+      // 1. Build comprehensive set of all voided/cancelled ticket and order identifiers
+      const voidedKeys = new Set<string>();
+      dbOrders.forEach((o: any) => {
+        const isVoided =
+          o.order_status === "cancelled" ||
+          o.order_status === "voided" ||
+          o.payment_status === "refunded" ||
+          o.payment_status === "voided" ||
+          o.status === "cancelled" ||
+          o.status === "voided";
+        if (isVoided) {
+          if (o.id) voidedKeys.add(String(o.id));
+          if (o.order_number) {
+            voidedKeys.add(String(o.order_number));
+            voidedKeys.add(String(o.order_number).replace(/^#+/, ""));
+          }
+        }
+      });
 
-          if (isPaid) {
+      dbTickets.forEach((t: any) => {
+        const isVoided = t.status === "voided" || t.status === "cancelled";
+        if (isVoided) {
+          if (t.id) voidedKeys.add(String(t.id));
+          if (t.ticket_number) {
+            voidedKeys.add(String(t.ticket_number));
+            voidedKeys.add(String(t.ticket_number).replace(/^KOT-/i, ""));
+          }
+          if (t.order_id) {
+            voidedKeys.add(String(t.order_id));
+          }
+        }
+      });
+
+      const completedList: OrderRecord[] = [];
+      const runningKotList: OrderRecord[] = [];
+      const heldList: ParkedOrder[] = [];
+
+      // 2. Process records from orders table
+      dbOrders.forEach((o: any) => {
+        const items = Array.isArray(o.items) ? o.items : [];
+        const orderNum = o.order_number || o.id;
+        const cleanOrderNum = String(orderNum).replace(/^#+/, "");
+        const isHeld = String(orderNum).startsWith("#HOLD-") || o.customer_name === "Held Order";
+        const isVoided =
+          voidedKeys.has(String(o.id)) ||
+          voidedKeys.has(String(orderNum)) ||
+          voidedKeys.has(cleanOrderNum) ||
+          o.order_status === "cancelled" ||
+          o.order_status === "voided" ||
+          o.payment_status === "refunded" ||
+          o.payment_status === "voided" ||
+          o.status === "cancelled" ||
+          o.status === "voided";
+        const isPaid = o.payment_status === "paid" && !isVoided;
+
+        if (isVoided) {
+          completedList.push({
+            id: orderNum,
+            orderChannel: o.order_channel || "dine_in",
+            tableId: o.table_id ? (isNaN(Number(o.table_id)) ? undefined : Number(o.table_id)) : undefined,
+            tableName: o.customer_name || (o.table_id ? `Table ${o.table_id}` : `Order #${orderNum}`),
+            customerName: o.customer_name,
+            customerPhone: o.customer_phone,
+            delivery_zone: o.delivery_zone,
+            items,
+            subtotal: Number(o.subtotal || o.total_amount || 0),
+            taxAmount: Number(o.tax_amount || 0),
+            discountPercent: 0,
+            discountAmount: Number(o.discount_amount || 0),
+            total: Number(o.total_amount || o.subtotal || 0),
+            paymentMethod: (o.payment_method || "voided").toLowerCase(),
+            cashierName: o.cashier_name || user?.name || "Cashier",
+            timestamp: o.created_at || new Date().toISOString(),
+            status: "cancelled",
+            payment_status: "voided",
+            kotId: o.kot_id || undefined,
+            shift_id: o.shift_id ?? null,
+            void_reason: o.void_reason || undefined,
+            voided_at: o.voided_at || undefined,
+          });
+        } else if (isPaid) {
+          completedList.push({
+            id: orderNum,
+            orderChannel: o.order_channel || "dine_in",
+            tableId: o.table_id ? (isNaN(Number(o.table_id)) ? undefined : Number(o.table_id)) : undefined,
+            tableName: o.customer_name || (o.table_id ? `Table ${o.table_id}` : `Order #${orderNum}`),
+            customerName: o.customer_name,
+            customerPhone: o.customer_phone,
+            delivery_zone: o.delivery_zone,
+            items,
+            subtotal: Number(o.subtotal || o.total_amount || 0),
+            taxAmount: Number(o.tax_amount || 0),
+            discountPercent: 0,
+            discountAmount: Number(o.discount_amount || 0),
+            total: Number(o.total_amount || o.subtotal || 0),
+            paymentMethod: (o.payment_method || "cash").toLowerCase(),
+            cashierName: o.cashier_name || user?.name || "Cashier",
+            timestamp: o.created_at || new Date().toISOString(),
+            status: o.order_status || "completed",
+            payment_status: "paid",
+            kotId: o.kot_id || undefined,
+            shift_id: o.shift_id ?? null,
+          });
+        } else if (isHeld) {
+          heldList.push({
+            id: orderNum,
+            cart: items.map((it: any) => ({
+              item: {
+                id: it.id || "",
+                name: it.name,
+                price: Number(it.price || 0),
+                category: "General",
+                imageIcon: "🍲",
+                prepTime: it.prepTime || "15 mins",
+                stockStatus: "in_stock",
+                stockCount: 50,
+              },
+              quantity: Number(it.quantity || 1),
+              notes: it.notes || "",
+            })),
+            orderChannel: o.order_channel || "dine_in",
+            selectedTable: o.table_id ? (isNaN(Number(o.table_id)) ? undefined : Number(o.table_id)) : undefined,
+            customerName: o.customer_name || "Held Order",
+            customerPhone: o.customer_phone || "",
+            deliveryZone: o.delivery_zone || "",
+            total: Number(o.total_amount || 0),
+            timestamp: new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          });
+        } else {
+          runningKotList.push({
+            id: orderNum,
+            kotId: o.kot_id || `KOT-${String(orderNum).replace(/[^0-9]/g, "").slice(-4) || "1001"}`,
+            orderChannel: o.order_channel || "dine_in",
+            tableId: o.table_id || undefined,
+            tableName: o.customer_name || (o.table_id ? `Table ${o.table_id}` : `Order #${orderNum}`),
+            customerName: o.customer_name,
+            customerPhone: o.customer_phone,
+            delivery_zone: o.delivery_zone,
+            items,
+            subtotal: Number(o.subtotal || o.total_amount || 0),
+            taxAmount: Number(o.tax_amount || 0),
+            discountPercent: 0,
+            discountAmount: Number(o.discount_amount || 0),
+            total: Number(o.total_amount || 0),
+            paymentMethod: (o.payment_method || "cash").toLowerCase(),
+            cashierName: o.cashier_name || user?.name || "Cashier",
+            timestamp: o.created_at || new Date().toISOString(),
+            status: o.order_status || "active",
+            payment_status: o.payment_status || "pending",
+            shift_id: o.shift_id ?? null,
+          });
+        }
+      });
+
+      // 3. Process kitchen_tickets to ensure all KOT tickets & admin voided tickets appear in Hub
+      dbTickets.forEach((t: any) => {
+        const ticketItems = Array.isArray(t.items) ? t.items : [];
+        const ticketNum = t.ticket_number || t.id;
+        const cleanTicketNum = String(ticketNum).replace(/^KOT-/i, "");
+        const isTicketVoided =
+          t.status === "voided" ||
+          t.status === "cancelled" ||
+          voidedKeys.has(String(t.id)) ||
+          voidedKeys.has(String(ticketNum)) ||
+          voidedKeys.has(cleanTicketNum) ||
+          (t.order_id && voidedKeys.has(String(t.order_id)));
+
+        const mappedItems = ticketItems.map((it: any) => ({
+          id: it.id || "",
+          name: it.name || "Item",
+          price: Number(it.price || it.price_amount || 0),
+          quantity: Number(it.qty || it.quantity || 1),
+          notes: it.notes || "",
+          prepTime: it.prepTime || "15m",
+          preparation_time: it.preparation_time || 15,
+          variant: it.variant || it.selectedVariant,
+          variant_name: it.variant_name || it.variant?.name,
+        }));
+
+        const subtotal = mappedItems.reduce(
+          (acc: number, it: any) => acc + (it.price * it.quantity),
+          0
+        );
+        const total = subtotal;
+
+        const alreadyInCompleted = completedList.some(
+          (c) =>
+            String(c.id) === String(t.id) ||
+            String(c.id) === String(ticketNum) ||
+            (t.order_id && String(c.id) === String(t.order_id)) ||
+            (c.kotId && c.kotId === ticketNum)
+        );
+
+        if (isTicketVoided) {
+          if (!alreadyInCompleted) {
             completedList.push({
-              id: orderNum,
-              orderChannel: o.order_channel || "dine_in",
-              tableId: o.table_id ? (isNaN(Number(o.table_id)) ? undefined : Number(o.table_id)) : undefined,
-              tableName: o.customer_name || (o.table_id ? `Table ${o.table_id}` : `Order #${orderNum}`),
-              customerName: o.customer_name,
-              customerPhone: o.customer_phone,
-              delivery_zone: o.delivery_zone,
-              items,
-              subtotal: Number(o.subtotal || o.total_amount || 0),
-              taxAmount: Number(o.tax_amount || 0),
+              id: ticketNum,
+              orderChannel: t.channel || t.order_type || "dine_in",
+              tableId: t.table_number ? (parseInt(t.table_number.replace(/\D/g, "")) || undefined) : undefined,
+              tableName: t.table_number || ticketNum,
+              customerName: t.customer_name || t.table_number,
+              customerPhone: t.customer_phone,
+              delivery_zone: t.delivery_area || t.delivery_address,
+              items: mappedItems,
+              subtotal,
+              taxAmount: 0,
               discountPercent: 0,
-              discountAmount: Number(o.discount_amount || 0),
-              total: Number(o.total_amount || o.subtotal || 0),
-              paymentMethod: (o.payment_method || "cash").toLowerCase(),
-              cashierName: o.cashier_name || user?.name || "Cashier",
-              timestamp: o.created_at || new Date().toISOString(),
-              status: o.order_status || "completed",
-              payment_status: "paid",
-              kotId: o.kot_id || undefined,
-              shift_id: o.shift_id ?? null,
+              discountAmount: 0,
+              total,
+              paymentMethod: "voided",
+              cashierName: t.server_name || user?.name || "Cashier",
+              timestamp: t.created_at || new Date().toISOString(),
+              status: "cancelled",
+              payment_status: "voided",
+              kotId: ticketNum,
+              shift_id: null,
+              void_reason: t.void_reason || undefined,
+              voided_at: t.voided_at || undefined,
             });
-          } else if (isHeld) {
-            heldList.push({
-              id: orderNum,
-              cart: items.map((it: any) => ({
-                item: {
-                  id: it.id || "",
-                  name: it.name,
-                  price: Number(it.price || 0),
-                  category: "General",
-                  imageIcon: "🍲",
-                  prepTime: it.prepTime || "15 mins",
-                  stockStatus: "in_stock",
-                  stockCount: 50,
-                },
-                quantity: Number(it.quantity || 1),
-                notes: it.notes || "",
-              })),
-              orderChannel: o.order_channel || "dine_in",
-              selectedTable: o.table_id ? (isNaN(Number(o.table_id)) ? undefined : Number(o.table_id)) : undefined,
-              customerName: o.customer_name || "Held Order",
-              customerPhone: o.customer_phone || "",
-              deliveryZone: o.delivery_zone || "",
-              total: Number(o.total_amount || 0),
-              timestamp: new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            });
-          } else {
+          }
+        } else if (t.status !== "completed" && t.status !== "fulfilled" && t.status !== "archived") {
+          const alreadyInRunning = runningKotList.some(
+            (r) =>
+              String(r.id) === String(t.id) ||
+              String(r.id) === String(ticketNum) ||
+              (t.order_id && String(r.id) === String(t.order_id)) ||
+              (r.kotId && r.kotId === ticketNum)
+          );
+
+          if (!alreadyInRunning && !alreadyInCompleted) {
             runningKotList.push({
-              id: orderNum,
-              kotId: o.kot_id || `KOT-${String(orderNum).replace(/[^0-9]/g, "").slice(-4) || "1001"}`,
-              orderChannel: o.order_channel || "dine_in",
-              tableId: o.table_id || undefined,
-              tableName: o.customer_name || (o.table_id ? `Table ${o.table_id}` : `Order #${orderNum}`),
-              customerName: o.customer_name,
-              customerPhone: o.customer_phone,
-              delivery_zone: o.delivery_zone,
-              items,
-              subtotal: Number(o.subtotal || o.total_amount || 0),
-              taxAmount: Number(o.tax_amount || 0),
+              id: t.order_id || ticketNum,
+              kotId: ticketNum,
+              orderChannel: t.channel || t.order_type || "dine_in",
+              tableId: t.table_number ? (parseInt(t.table_number.replace(/\D/g, "")) || undefined) : undefined,
+              tableName: t.table_number || ticketNum,
+              customerName: t.customer_name || t.table_number,
+              customerPhone: t.customer_phone,
+              delivery_zone: t.delivery_area || t.delivery_address,
+              items: mappedItems,
+              subtotal,
+              taxAmount: 0,
               discountPercent: 0,
-              discountAmount: Number(o.discount_amount || 0),
-              total: Number(o.total_amount || 0),
-              paymentMethod: (o.payment_method || "cash").toLowerCase(),
-              cashierName: o.cashier_name || user?.name || "Cashier",
-              timestamp: o.created_at || new Date().toISOString(),
-              status: o.order_status || "active",
-              payment_status: o.payment_status || "pending",
-              shift_id: o.shift_id ?? null,
+              discountAmount: 0,
+              total,
+              paymentMethod: "cash",
+              cashierName: t.server_name || user?.name || "Floor Server",
+              timestamp: t.created_at || new Date().toISOString(),
+              status: t.status || "active",
+              payment_status: "pending",
+              shift_id: null,
             });
           }
-        });
+        }
+      });
 
-        // Merge with any locally parked orders that haven't synced yet (strictly scoped to restId)
-        try {
-          const rawLocalParked = localStorage.getItem(`${PARKED_ORDERS_KEY}_${restId}`);
-          if (rawLocalParked) {
-            const parsed = JSON.parse(rawLocalParked);
-            if (Array.isArray(parsed)) {
-              parsed.forEach((localP) => {
-                if (!heldList.some((h) => h.id === localP.id)) {
-                  heldList.push(localP);
-                }
-              });
-            }
+      // 4. Merge with any locally parked orders that haven't synced yet (strictly scoped to restId)
+      try {
+        const rawLocalParked = localStorage.getItem(`${PARKED_ORDERS_KEY}_${restId}`);
+        if (rawLocalParked) {
+          const parsed = JSON.parse(rawLocalParked);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((localP) => {
+              if (!heldList.some((h) => h.id === localP.id)) {
+                heldList.push(localP);
+              }
+            });
           }
-        } catch { }
+        }
+      } catch { }
 
-        // Merge with locally stored running KOT orders
-        try {
-          const rawLocalRunning = localStorage.getItem(`pos_running_kot_orders_${restId}`);
-          if (rawLocalRunning) {
-            const parsed = JSON.parse(rawLocalRunning);
-            if (Array.isArray(parsed)) {
-              parsed.forEach((localR) => {
-                if (!runningKotList.some((r) => r.id === localR.id)) {
-                  const alreadyPaidOrCompleted = completedList.some((c) => c.id === localR.id);
-                  if (!alreadyPaidOrCompleted && isOrderOccupyingTable(localR)) {
-                    runningKotList.unshift(localR);
-                  }
+      // 5. Merge with locally stored running KOT orders, strictly filtering out voided records
+      try {
+        const rawLocalRunning = localStorage.getItem(`pos_running_kot_orders_${restId}`);
+        if (rawLocalRunning) {
+          const parsed = JSON.parse(rawLocalRunning);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((localR) => {
+              const rId = String(localR.id || "");
+              const rKot = String(localR.kotId || "");
+              const isVoidedLocal =
+                voidedKeys.has(rId) ||
+                voidedKeys.has(rId.replace(/^#+/, "")) ||
+                (rKot && (voidedKeys.has(rKot) || voidedKeys.has(rKot.replace(/^KOT-/i, "")))) ||
+                localR.status === "cancelled" ||
+                localR.status === "voided" ||
+                localR.payment_status === "voided" ||
+                localR.payment_status === "refunded";
+
+              if (!isVoidedLocal && !runningKotList.some((r) => String(r.id) === rId || (localR.kotId && r.kotId === localR.kotId))) {
+                const alreadyPaidOrCompleted = completedList.some((c) => String(c.id) === rId || (localR.kotId && c.kotId === localR.kotId));
+                if (!alreadyPaidOrCompleted && isOrderOccupyingTable(localR)) {
+                  runningKotList.unshift(localR);
                 }
-              });
-            }
+              }
+            });
           }
-        } catch { }
+        }
+      } catch { }
 
-        setOrders(completedList);
-        setRunningTableOrders(runningKotList);
-        setParkedOrders(heldList);
+      // 6. Strict sanitize to prevent voided orders from ever returning upon refresh
+      const sanitizedRunning = runningKotList.filter((r) => {
+        const rId = String(r.id || "");
+        const rKot = String(r.kotId || "");
+        return (
+          !voidedKeys.has(rId) &&
+          !voidedKeys.has(rId.replace(/^#+/, "")) &&
+          (!rKot || (!voidedKeys.has(rKot) && !voidedKeys.has(rKot.replace(/^KOT-/i, "")))) &&
+          r.status !== "cancelled" &&
+          r.status !== "voided" &&
+          r.payment_status !== "voided" &&
+          r.payment_status !== "refunded"
+        );
+      });
 
-        // Immediate background cache write strictly scoped to restId
-        try {
-          saveStoredOrders(String(restId), completedList);
-          localStorage.setItem(`pos_running_kot_orders_${restId}`, JSON.stringify(runningKotList));
-          localStorage.setItem(`${PARKED_ORDERS_KEY}_${restId}`, JSON.stringify(heldList));
-        } catch { }
-      }
+      setOrders(completedList);
+      setRunningTableOrders(sanitizedRunning);
+      setParkedOrders(heldList);
+
+      // Immediate background cache write strictly scoped to restId
+      try {
+        saveStoredOrders(String(restId), completedList);
+        localStorage.setItem(`pos_running_kot_orders_${restId}`, JSON.stringify(sanitizedRunning));
+        localStorage.setItem(`${PARKED_ORDERS_KEY}_${restId}`, JSON.stringify(heldList));
+      } catch { }
     } catch (err) {
       console.warn("[UnifiedOrdersPage] fetchOrders error:", err);
     } finally {
@@ -425,7 +637,24 @@ export default function UnifiedOrdersPage() {
                   }
                 }
               )
-              .subscribe();
+              .subscribe((status: string, err?: any) => {
+                console.log(`[UnifiedOrdersPage Realtime ${restId}] Channel status: ${status}`, err || "");
+                if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+                  if (isMounted) {
+                    console.warn(`[UnifiedOrdersPage Realtime ${restId}] Disconnected (${status}). Auto-reconnecting...`);
+                    setTimeout(() => {
+                      if (isMounted) triggerDebouncedFetch();
+                    }, 1500);
+                  }
+                }
+              });
+
+            unsubBus = subscribeTerminalEventBus(restId, (payload) => {
+              if (isMounted) {
+                console.log("[UnifiedOrdersPage] Terminal mutation received:", payload);
+                triggerDebouncedFetch();
+              }
+            });
           } catch (rtErr) {
             console.warn("[UnifiedOrdersPage] Realtime subscription error:", rtErr);
           }
@@ -435,6 +664,7 @@ export default function UnifiedOrdersPage() {
       }
     };
 
+    let unsubBus: (() => void) | null = null;
     init();
 
     const handleStorageUpdate = (e: StorageEvent) => {
@@ -460,6 +690,9 @@ export default function UnifiedOrdersPage() {
       isMounted = false;
       if (fetchOrdersTimeoutRef.current) {
         clearTimeout(fetchOrdersTimeoutRef.current);
+      }
+      if (unsubBus) {
+        unsubBus();
       }
       if (typeof window !== "undefined") {
         window.removeEventListener("storage", handleStorageUpdate);
@@ -694,6 +927,22 @@ export default function UnifiedOrdersPage() {
       // Broadcast order update to POS and all terminals
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("orders_updated", { detail: { restaurantId: restId, orderId: finalOrderId, timestamp: Date.now() } }));
+        broadcastTerminalMutation(restId, {
+          type: "ORDER_MUTATION",
+          orderId: finalOrderId,
+          status: "paid",
+        });
+        const tableIdentifier = ord.tableName || (ord.tableId ? `Table ${ord.tableId}` : "");
+        const normNum = normalizeTableNumber(tableIdentifier);
+        if (ord.orderChannel === "dine_in" || ord.tableId || ord.tableName) {
+          broadcastTerminalMutation(restId, {
+            type: "TABLE_RELEASED",
+            tableId: ord.tableId ? String(ord.tableId) : undefined,
+            tableNumber: normNum || tableIdentifier,
+            orderId: finalOrderId,
+            status: "available",
+          });
+        }
         localStorage.setItem(`pos_orders_${currentOrgId}`, String(Date.now()));
         window.dispatchEvent(new Event("storage"));
       }

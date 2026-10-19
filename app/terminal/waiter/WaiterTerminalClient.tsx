@@ -115,6 +115,10 @@ import WaiterReadyAlertToast, {
 } from "./components/WaiterReadyAlertToast";
 import StaffShiftRolloverModal from "../components/StaffShiftRolloverModal";
 import { recordStaffShiftLogout } from "@/lib/universalShiftLogging";
+import {
+  broadcastTerminalMutation,
+  subscribeTerminalEventBus,
+} from "@/lib/terminalRealtimeSync";
 
 const DEFAULT_TABLES: TableStatus[] = [
   { id: 1, label: "Table 01", capacity: 4, section: "Main Dining", status: "available" },
@@ -174,11 +178,26 @@ export default function WaiterTerminalClient() {
     router.replace("/login");
   };
 
-  // Remind Me Later — dismiss modal and snooze for 15 minutes
-  const handleRemindLater = () => {
+  // 10-Minute Warning: Evaluated dynamically (activeShift.end_time - 10 minutes)
+  const lastWarningToastRef = useRef<number>(0);
+  useEffect(() => {
+    if (shiftValidation?.isValid && shiftValidation?.isWarningWindow) {
+      const now = Date.now();
+      if (now - lastWarningToastRef.current >= 3 * 60 * 1000) {
+        lastWarningToastRef.current = now;
+        showToast(
+          `⚠️ Shift Warning: Your scheduled shift ends in ${shiftValidation.minutesRemaining}m (${shiftValidation.shiftEndLabel}). Please prepare for handover.`
+        );
+      }
+    }
+  }, [shiftValidation?.isValid, shiftValidation?.isWarningWindow, shiftValidation?.minutesRemaining, shiftValidation?.shiftEndLabel]);
+
+  // Remind Me Later — dismiss modal and snooze (bounded by 30-min grace deadline)
+  const handleRemindLater = (snoozeUntilMs?: number) => {
     setIsRolloverModalOpen(false);
-    setShiftSnoozedUntil(Date.now() + 15 * 60 * 1000);
-    showToast("Shift alert snoozed. Reminding again in 15 minutes.");
+    const target = snoozeUntilMs || (Date.now() + 10 * 60 * 1000);
+    setShiftSnoozedUntil(target);
+    showToast("Shift alert snoozed for 10 minutes.");
   };
 
   // Views: "ordering" | "ready_pass" | "floor_queue"
@@ -998,12 +1017,94 @@ export default function WaiterTerminalClient() {
       } catch { }
     }
 
+    let unsubTerminalBus: (() => void) | null = null;
+
     const initTerminalRealtime = async () => {
       try {
         const { restId } = await getValidTenantContext(user);
         if (!restId) return;
         const supabase = createClient();
         const subId = Math.random().toString(36).substring(2, 7);
+
+        // Zero-latency cross-tab event bus listener
+        unsubTerminalBus = subscribeTerminalEventBus(restId, (payload) => {
+          if (!isMounted) return;
+          console.log("[WaiterTerminal] Terminal bus mutation received:", payload);
+          if (payload.type === "TABLE_RELEASED") {
+            const tableId = payload.tableId;
+            const tableNum = payload.tableNumber;
+            setTables((prev) => {
+              const updated = prev.map((t) => {
+                const matches =
+                  (tableId && (String(t.dbId) === String(tableId) || String(t.id) === String(tableId))) ||
+                  (tableNum && (isTableMatchingIdentifier(t, tableNum) || normalizeTableNumber(t.label || t.id) === normalizeTableNumber(tableNum)));
+                if (matches) {
+                  return {
+                    ...t,
+                    status: "available" as const,
+                    activeOrderId: undefined,
+                    activeAmount: undefined,
+                  };
+                }
+                return t;
+              });
+              saveStoredTables(currentOrgId, updated);
+              saveStoredTables(String(restId), updated);
+              return updated;
+            });
+            debouncedFetchLiveTables();
+          } else if (payload.type === "TABLE_MUTATION") {
+            const isRelease = payload.status === "available" || payload.status === "AVAILABLE";
+            const tableId = payload.tableId;
+            const tableNum = payload.tableNumber;
+            setTables((prev) => {
+              const updated = prev.map((t) => {
+                const matches =
+                  (tableId && (String(t.dbId) === String(tableId) || String(t.id) === String(tableId))) ||
+                  (tableNum && (isTableMatchingIdentifier(t, tableNum) || normalizeTableNumber(t.label || t.id) === normalizeTableNumber(tableNum)));
+                if (matches) {
+                  return {
+                    ...t,
+                    status: isRelease ? ("available" as const) : ("seated" as const),
+                    activeOrderId: isRelease ? undefined : (payload.orderId ? String(payload.orderId) : t.activeOrderId),
+                  };
+                }
+                return t;
+              });
+              saveStoredTables(currentOrgId, updated);
+              saveStoredTables(String(restId), updated);
+              return updated;
+            });
+            debouncedFetchLiveTables();
+          } else if (payload.type === "ORDER_VOIDED") {
+            const vTableId = payload.tableId;
+            const vTableNum = payload.tableNumber;
+            if (vTableId || vTableNum) {
+              setTables((prev) => {
+                const updated = prev.map((t) => {
+                  const matches =
+                    (vTableId && (String(t.dbId) === String(vTableId) || String(t.id) === String(vTableId))) ||
+                    (vTableNum && (isTableMatchingIdentifier(t, vTableNum) || normalizeTableNumber(t.label || t.id) === normalizeTableNumber(vTableNum)));
+                  if (matches) {
+                    return {
+                      ...t,
+                      status: "available" as const,
+                      activeOrderId: undefined,
+                      activeAmount: undefined,
+                    };
+                  }
+                  return t;
+                });
+                saveStoredTables(currentOrgId, updated);
+                saveStoredTables(String(restId), updated);
+                return updated;
+              });
+            }
+            debouncedFetchLiveTables();
+          } else if (payload.type === "ORDER_MUTATION") {
+            debouncedFetchLiveTables();
+          }
+        });
 
         // Fetch recent kitchen tickets
         const { data, error } = await supabase
@@ -1222,7 +1323,34 @@ export default function WaiterTerminalClient() {
             },
             (payload: any) => {
               if (!isMounted) return;
-              if (payload?.eventType === "UPDATE") {
+              if (payload?.eventType === "INSERT") {
+                const n = payload.new;
+                const isDineIn = n?.order_channel === "dine_in" || (!n?.order_channel && (n?.table_id || n?.customer_name?.toLowerCase().includes("table")));
+                if (isDineIn && (n?.order_status === "active" || n?.order_status === "pending")) {
+                  const orderTableId = n?.table_id;
+                  const orderCustName = n?.customer_name;
+                  setTables((prev) => {
+                    const updated = prev.map((t) => {
+                      const matches =
+                        (orderTableId && (String(t.dbId) === String(orderTableId) || String(t.id) === String(orderTableId))) ||
+                        (orderCustName && isTableMatchingIdentifier(t, orderCustName));
+                      if (matches) {
+                        return {
+                          ...t,
+                          status: "seated" as const,
+                          activeOrderId: n?.order_number || n?.id ? String(n.order_number || n.id) : t.activeOrderId,
+                        };
+                      }
+                      return t;
+                    });
+                    saveStoredTables(currentOrgId, updated);
+                    saveStoredTables(String(restId), updated);
+                    return updated;
+                  });
+                }
+                debouncedFetchLiveTables();
+                debouncedFetchLiveMenu();
+              } else if (payload?.eventType === "UPDATE") {
                 const n = payload.new;
                 const payStatus = String(n?.payment_status || "").toLowerCase();
                 const ordStatus = String(n?.order_status || "").toLowerCase();
@@ -1470,7 +1598,20 @@ export default function WaiterTerminalClient() {
               showToast(`🔔 ORDER #${ticketId} READY at the kitchen pass!`);
             }
           })
-          .subscribe();
+          .subscribe((status: string, err?: any) => {
+            console.log(`[Waiter Realtime ${restId}] Channel status: ${status}`, err || "");
+            if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+              if (isMounted) {
+                console.warn(`[Waiter Realtime ${restId}] Disconnected (${status}). Auto-reconnecting...`);
+                setTimeout(() => {
+                  if (isMounted) {
+                    debouncedFetchLiveTables();
+                    debouncedFetchLiveMenu();
+                  }
+                }, 1500);
+              }
+            }
+          });
       } catch (err) {
         console.warn("[WaiterTerminal] Realtime subscription init error:", err);
       }
@@ -1482,6 +1623,11 @@ export default function WaiterTerminalClient() {
       isMounted = false;
       if (liveMenuTimer) clearTimeout(liveMenuTimer);
       if (liveTablesTimer) clearTimeout(liveTablesTimer);
+      if (unsubTerminalBus) {
+        try {
+          unsubTerminalBus();
+        } catch { }
+      }
       if (typeof window !== "undefined") {
         window.removeEventListener("storage", handleStorageUpdate);
         window.removeEventListener("pos_menu_updated", handleCustomMenuUpdated);
@@ -2033,6 +2179,20 @@ export default function WaiterTerminalClient() {
               window.dispatchEvent(new CustomEvent("pos_tables_updated"));
               window.dispatchEvent(new CustomEvent("restaurant_tables_changed"));
               window.dispatchEvent(new CustomEvent("orders_updated"));
+              broadcastTerminalMutation(restId, {
+                type: "TABLE_MUTATION",
+                tableId: targetTableId || matchedTable?.dbId || selectedTable,
+                tableNumber: tableIdentifier,
+                orderId: resolvedOrderId,
+                status: "occupied",
+              });
+              broadcastTerminalMutation(restId, {
+                type: "ORDER_MUTATION",
+                orderId: resolvedOrderId,
+                tableId: targetTableId || matchedTable?.dbId || selectedTable,
+                tableNumber: tableIdentifier,
+                status: "active",
+              });
               if ("BroadcastChannel" in window) {
                 try {
                   const bc = new BroadcastChannel("pos_ledger_sync_channel");

@@ -20,7 +20,14 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { AuthenticatedUser } from "../../admin/types";
-import { ShiftWindowValidation, getShiftWindowLabel, parseShiftOption } from "../../../lib/shiftSchedule";
+import {
+  ShiftWindowValidation,
+  getShiftWindowLabel,
+  parseShiftOption,
+  getRestaurantShiftConfig,
+  getEffectiveShiftsList,
+  format24HourTo12Hour,
+} from "../../../lib/shiftSchedule";
 import { createClient } from "@/lib/supabase";
 
 interface StaffProfileModalProps {
@@ -92,12 +99,15 @@ export default function StaffProfileModal({
     user.staffRole?.toUpperCase() ||
     (user.role === "STAFF_MEMBER" ? "STAFF" : user.role || "OPERATOR");
 
-  // Determine assigned shift schedule details
-  const parsedShift = parseShiftOption(user.assignedShift || shiftValidation?.assignedShift);
+  // Determine assigned shift schedule details dynamically from config
+  const restId = user.restaurantId || (user as any).restId || user.organizationId;
+  const shiftConfig = React.useMemo(() => getRestaurantShiftConfig(restId, user), [restId, user]);
+  const effectiveShifts = React.useMemo(() => getEffectiveShiftsList(shiftConfig), [shiftConfig]);
+  const parsedShift = parseShiftOption(user.assignedShift || shiftValidation?.assignedShift, shiftConfig);
+  const shiftTitle = user.assignedShift || shiftValidation?.assignedShift || effectiveShifts[0]?.name || "Assigned Shift";
   const shiftWindowLabel = parsedShift
-    ? getShiftWindowLabel(parsedShift)
-    : shiftValidation?.windowLabel || "08:00 AM - 04:00 PM";
-  const shiftTitle = user.assignedShift || shiftValidation?.assignedShift || "First Shift (Morning)";
+    ? getShiftWindowLabel(parsedShift, shiftConfig)
+    : shiftValidation?.windowLabel || (effectiveShifts[0] ? `${format24HourTo12Hour(effectiveShifts[0].start)} - ${format24HourTo12Hour(effectiveShifts[0].end)}` : "Operating Hours");
 
   // Shift session start time formatting
   const sessionStartTime = activeShiftData?.shift_start || activeShiftData?.created_at;

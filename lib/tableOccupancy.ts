@@ -125,8 +125,8 @@ export function isOrderOccupyingTable(order: {
   const payStatus = String(order.payment_status ?? order.paymentStatus ?? "").trim().toLowerCase();
   const ordStatus = String(order.order_status ?? order.orderStatus ?? order.status ?? "").trim().toLowerCase();
 
-  // If paid, it NEVER occupies a table
-  if (payStatus === "paid") return false;
+  // If paid, refunded, or voided, it NEVER occupies a table
+  if (payStatus === "paid" || payStatus === "refunded" || payStatus === "voided") return false;
 
   // If cancelled or voided, it NEVER occupies a table
   if (ordStatus === "cancelled" || ordStatus === "voided") {
@@ -154,13 +154,15 @@ export async function fetchActiveUnpaidTableRecords(
 
   try {
     // 1. Fetch active unpaid orders from orders table (PRIMARY SINGLE SOURCE OF TRUTH)
-    // As long as payment is not settled ('paid') and order is not cancelled/voided, it occupies the table.
+    // As long as payment is not settled ('paid'/'refunded') and order is not cancelled/voided, it occupies the table.
     let orderRows: any[] | null = null;
     const { data: oData, error: orderErr } = await supabase
       .from("orders")
       .select("id, order_number, table_id, customer_name, order_channel, order_status, payment_status, total_amount, subtotal, items, created_at")
       .eq("restaurant_id", restIdNum)
       .neq("payment_status", "paid")
+      .neq("payment_status", "refunded")
+      .neq("payment_status", "voided")
       .neq("order_status", "cancelled")
       .neq("order_status", "voided")
       .order("created_at", { ascending: false })
@@ -175,6 +177,8 @@ export async function fetchActiveUnpaidTableRecords(
         .select("*")
         .eq("restaurant_id", restIdNum)
         .neq("payment_status", "paid")
+        .neq("payment_status", "refunded")
+        .neq("payment_status", "voided")
         .neq("order_status", "cancelled")
         .neq("order_status", "voided")
         .order("created_at", { ascending: false })
@@ -241,19 +245,54 @@ export async function fetchActiveUnpaidTableRecords(
       });
     }
 
-    // 2. Supplement with active, in-flight kitchen tickets (< 15 mins fresh) if not already tracked
+    // 2. Query recent paid orders to know exactly when each table was last settled
+    const paidOrderIds = new Set<string>();
+    const paidTableTimes = new Map<string, number>();
+    const paidTableDbIds = new Map<string, number>();
+
+    try {
+      const { data: recentPaidOrders } = await supabase
+        .from("orders")
+        .select("id, order_number, table_id, customer_name, created_at")
+        .eq("restaurant_id", restIdNum)
+        .eq("payment_status", "paid")
+        .order("created_at", { ascending: false })
+        .limit(100);
+
+      if (recentPaidOrders && Array.isArray(recentPaidOrders)) {
+        recentPaidOrders.forEach((po: any) => {
+          if (po.id) paidOrderIds.add(String(po.id).toLowerCase());
+          if (po.order_number) paidOrderIds.add(String(po.order_number).toLowerCase());
+          const pTime = po.created_at ? new Date(po.created_at).getTime() : 0;
+          const custNorm = normalizeTableNumber(po.customer_name);
+          if (custNorm && (!paidTableTimes.has(custNorm) || pTime > paidTableTimes.get(custNorm)!)) {
+            paidTableTimes.set(custNorm, pTime);
+          }
+          if (po.table_id) {
+            const tid = String(po.table_id);
+            if (!paidTableDbIds.has(tid) || pTime > paidTableDbIds.get(tid)!) {
+              paidTableDbIds.set(tid, pTime);
+            }
+          }
+        });
+      }
+    } catch (paidErr) {
+      console.warn("[TableOccupancy] Error checking recent paid orders:", paidErr);
+    }
+
+    // 3. Supplement with active kitchen tickets that have NOT been cancelled, voided, or paid
     const { data: ticketRows, error: ticketErr } = await supabase
       .from("kitchen_tickets")
-      .select("id, ticket_number, table_number, channel, order_type, status, items, created_at, customer_name")
+      .select("id, ticket_number, table_number, channel, order_type, status, items, created_at, customer_name, order_id")
       .eq("restaurant_id", restIdNum)
-      .not("status", "in", '("completed","cancelled","archived","voided")')
+      .not("status", "in", '("cancelled","voided")')
       .order("created_at", { ascending: false })
-      .limit(50);
+      .limit(100);
 
     if (!ticketErr && ticketRows) {
       ticketRows.forEach((t: any) => {
         const ticketStatus = String(t.status || "").toLowerCase();
-        if (ticketStatus === "cancelled" || ticketStatus === "voided" || ticketStatus === "archived" || ticketStatus === "completed") return;
+        if (ticketStatus === "cancelled" || ticketStatus === "voided") return;
 
         const channel = (t.channel || t.order_type || "").toLowerCase();
         const tableStr = t.table_number || t.customer_name || "";
@@ -262,12 +301,21 @@ export async function fetchActiveUnpaidTableRecords(
           channel === "delivery" ||
           tableStr.toLowerCase().includes("takeaway") ||
           tableStr.toLowerCase().includes("pickup") ||
-          tableStr.toLowerCase().includes("delivery");
+          tableStr.toLowerCase().includes("delivery") ||
+          tableStr.toLowerCase().includes("counter");
 
         if (isTakeaway) return; // Strictly Dine-In tables
 
         const norm = normalizeTableNumber(tableStr);
         if (!norm) return;
+
+        const ticketTime = t.created_at ? new Date(t.created_at).getTime() : 0;
+        const lastPaidTime = paidTableTimes.get(norm) || 0;
+
+        // If the table was settled AFTER this ticket was placed, then this ticket was already paid for!
+        if (lastPaidTime > 0 && ticketTime > 0 && lastPaidTime >= ticketTime) {
+          return;
+        }
 
         // If table already has an active unpaid order record, link kotId and items amount
         const existing = activeRecords.find((r) =>
@@ -288,12 +336,6 @@ export async function fetchActiveUnpaidTableRecords(
           }
           return;
         }
-
-        // Never let stale kitchen tickets resurrect an order if there is no active unpaid order
-        // Only accept if ticket was created very recently (< 15 minutes) as an in-flight dispatch
-        const ticketTime = t.created_at ? new Date(t.created_at).getTime() : 0;
-        const isFresh = ticketTime > 0 && Date.now() - ticketTime < 15 * 60 * 1000;
-        if (!isFresh) return;
 
         let totalAmt = 0;
         if (Array.isArray(t.items)) {
@@ -320,33 +362,6 @@ export async function fetchActiveUnpaidTableRecords(
       });
     }
 
-    // 3. Query recent paid orders to ensure settled orders NEVER resurrect tables from local cache
-    const paidOrderIds = new Set<string>();
-    const paidKotIds = new Set<string>();
-    const paidTableNorms = new Set<string>();
-    const paidTableDbIds = new Set<string>();
-
-    try {
-      const { data: recentPaidOrders } = await supabase
-        .from("orders")
-        .select("id, order_number, kot_id, table_id, customer_name, created_at")
-        .eq("restaurant_id", restIdNum)
-        .eq("payment_status", "paid")
-        .order("created_at", { ascending: false })
-        .limit(60);
-
-      if (recentPaidOrders && Array.isArray(recentPaidOrders)) {
-        recentPaidOrders.forEach((po: any) => {
-          if (po.id) paidOrderIds.add(String(po.id).toLowerCase());
-          if (po.order_number) paidOrderIds.add(String(po.order_number).toLowerCase());
-          if (po.kot_id) paidKotIds.add(String(po.kot_id).toLowerCase());
-          if (po.table_id) paidTableDbIds.add(String(po.table_id));
-          const custNorm = normalizeTableNumber(po.customer_name);
-          if (custNorm) paidTableNorms.add(custNorm);
-        });
-      }
-    } catch {}
-
     // 4. Fallback: Merge shared running KOT orders from local cache for instantaneous cross-terminal reactivity
     // Stale orders with no active DB record are automatically purged from local storage!
     if (typeof window !== "undefined") {
@@ -367,11 +382,7 @@ export async function fetchActiveUnpaidTableRecords(
               }
 
               const roId = String(ro.id || "").toLowerCase();
-              const roKot = String(ro.kotId || "").toLowerCase();
-              if (
-                (roId && paidOrderIds.has(roId)) ||
-                (roKot && paidKotIds.has(roKot))
-              ) {
+              if (roId && paidOrderIds.has(roId)) {
                 // Order is confirmed paid in database! Purge from local cache!
                 hasChanged = true;
                 return;
@@ -382,7 +393,7 @@ export async function fetchActiveUnpaidTableRecords(
 
               // If table has NO active unpaid orders in DB and table was recently settled, purge!
               if (
-                (norm && !seenTableNorms.has(norm) && paidTableNorms.has(norm)) ||
+                (norm && !seenTableNorms.has(norm) && paidTableTimes.has(norm)) ||
                 (ro.tableId && !seenTableDbIds.has(String(ro.tableId)) && paidTableDbIds.has(String(ro.tableId)))
               ) {
                 hasChanged = true;
@@ -478,12 +489,21 @@ export function reconcileTableStatuses(
         activeAmount:
           matchedRecord.totalAmount !== undefined && matchedRecord.totalAmount > 0
             ? matchedRecord.totalAmount
-            : undefined,
+            : t.activeAmount,
+      };
+    }
+
+    // Preserve occupied status if the database table itself is already marked occupied/seated!
+    const currentStatusLower = String(t.status || "").toLowerCase();
+    if (currentStatusLower === "seated" || currentStatusLower === "occupied" || currentStatusLower === "dining") {
+      return {
+        ...t,
+        status: "seated",
       };
     }
 
     // If no active unpaid record exists, preserve manual reservations
-    const isManuallyReserved = t.status === "reserved";
+    const isManuallyReserved = currentStatusLower === "reserved";
     if (isManuallyReserved) {
       return {
         ...t,
@@ -493,7 +513,7 @@ export function reconcileTableStatuses(
       };
     }
 
-    // Single source of truth: If no active unpaid order exists for a table,
+    // Single source of truth: If no active unpaid order exists for a table and table is not marked occupied in DB,
     // force table status to 'available' and clear any stale running total amounts
     return {
       ...t,
@@ -536,7 +556,16 @@ export function reconcileRestaurantTables(
       };
     }
 
-    const isReserved = (t.status as string) === "RESERVED";
+    // Preserve occupied status if the database table itself is already marked OCCUPIED!
+    const currentStatusUpper = String(t.status || "").toUpperCase();
+    if (currentStatusUpper === "OCCUPIED") {
+      return {
+        ...t,
+        status: "OCCUPIED" as any,
+      };
+    }
+
+    const isReserved = currentStatusUpper === "RESERVED";
     if (isReserved) {
       return {
         ...t,
@@ -560,7 +589,7 @@ export function reconcileRestaurantTables(
 /**
  * Asynchronously heals and updates public.restaurant_tables rows in Supabase:
  * - Marks tables with active unpaid orders as 'occupied'.
- * - Releases tables with zero active orders back to 'available'.
+ * - NEVER unilaterally clears occupied tables in the background heal loop (tables only release upon explicit checkout or cancellation).
  */
 export async function autoHealDatabaseTableOccupancy(
   restId: string | number,
@@ -608,28 +637,8 @@ export async function autoHealDatabaseTableOccupancy(
           }
           await supabase.from("restaurant_tables").update(payload).eq("id", dbTable.id);
         }
-      } else {
-        // Should be available (or reserved). Only heal if currently marked occupied or has lingering active_order_id!
-        const isReserved = dbStatusLower === "reserved";
-        if (!isReserved) {
-          const needsRelease =
-            dbStatusLower !== "available" ||
-            dbTable.active_order_id !== null ||
-            dbTable.current_order_id !== null;
-
-          if (needsRelease) {
-            await supabase
-              .from("restaurant_tables")
-              .update({
-                status: "available",
-                active_order_id: null,
-                current_order_id: null,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", dbTable.id);
-          }
-        }
       }
+      // Note: Never unilaterally free occupied tables in the background auto-heal loop!
     }
   } catch (err) {
     console.warn("[TableOccupancy] autoHealDatabaseTableOccupancy exception:", err);
@@ -695,6 +704,19 @@ export function broadcastTableReleased(
 
     try {
       getSharedLegacyBc()?.postMessage({ type: "TABLE_RELEASED", payload: eventPayload });
+    } catch {}
+
+    try {
+      const busBc = new BroadcastChannel(`omnibites_terminal_event_bus_${restIdStr}`);
+      busBc.postMessage({
+        type: "TABLE_RELEASED",
+        tableId: data.tableId,
+        tableNumber: data.tableNumber,
+        orderId: data.orderId,
+        status: "available",
+        timestamp: Date.now(),
+      });
+      busBc.close();
     } catch {}
   }
 

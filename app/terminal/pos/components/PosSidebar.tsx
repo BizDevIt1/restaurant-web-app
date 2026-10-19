@@ -30,7 +30,7 @@ interface PosSidebarProps {
   activeShift?: any;
   onOpenHeldOrders?: () => void;
   onOpenRecentOrders?: () => void;
-  onOpenOrdersHub?: (initialTab?: "all" | "kot" | "held" | "pending" | "settled") => void;
+  onOpenOrdersHub?: (initialTab?: "all" | "kot" | "held" | "pending" | "settled" | "voided") => void;
   onOpenCashDrawer?: () => void;
   onSelectView?: (view: "register" | "orders") => void;
 }

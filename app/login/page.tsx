@@ -75,7 +75,7 @@ export default function LoginPage() {
 
       // Strict Shift Window Validation for Waiters
       if (authUser.assignedShift) {
-        const shiftValidation = validateStaffShiftWindow(authUser.assignedShift, new Date(), null);
+        const shiftValidation = validateStaffShiftWindow(authUser.assignedShift, new Date(), authUser);
         if (!shiftValidation.isValid) {
           hideSplash();
           setErrorMessage(
@@ -113,7 +113,7 @@ export default function LoginPage() {
 
       // Strict Shift Window Validation for Chefs
       if (authUser.assignedShift) {
-        const shiftValidation = validateStaffShiftWindow(authUser.assignedShift, new Date(), null);
+        const shiftValidation = validateStaffShiftWindow(authUser.assignedShift, new Date(), authUser);
         if (!shiftValidation.isValid) {
           hideSplash();
           setErrorMessage(
@@ -228,7 +228,7 @@ export default function LoginPage() {
 
         // Strict Time Window Enforcement: Block staff members attempting to log in outside their assigned shift window
         if (!isStaffActiveOnOpenShift && authUser.assignedShift) {
-          const shiftValidation = validateCashierShiftWindow(authUser.assignedShift, new Date(), null);
+          const shiftValidation = validateStaffShiftWindow(authUser.assignedShift, new Date(), authUser);
           if (!shiftValidation.isValid) {
             hideSplash();
             setErrorMessage(
@@ -271,7 +271,7 @@ export default function LoginPage() {
       } catch (err) {
         console.warn("[LoginPage] Shift check warning:", err);
         if (authUser.assignedShift) {
-          const shiftValidation = validateCashierShiftWindow(authUser.assignedShift, new Date(), null);
+          const shiftValidation = validateStaffShiftWindow(authUser.assignedShift, new Date(), authUser);
           if (!shiftValidation.isValid) {
             hideSplash();
             setErrorMessage(
@@ -471,8 +471,15 @@ export default function LoginPage() {
             return;
           }
 
-          // Authenticate staff member session
+          // Check if parent restaurant is deactivated
           const rest = staffData.restaurants || {};
+          const restStatus = String(rest.status || "").toLowerCase().trim();
+          const restInitStatus = String(rest.initial_status || "").toLowerCase().trim();
+          if (restStatus === "inactive" || restStatus === "deactivated" || restInitStatus === "deactivated") {
+            setErrorMessage("Your restaurant account has been deactivated by the Super Administrator. Please contact support.");
+            setTimeout(() => setErrorMessage(null), 5000);
+            return;
+          }
           const rawRole = (staffData.role || "cashier").toLowerCase().trim();
           const authUser: AuthenticatedUser = {
             id: String(staffData.id),
@@ -676,6 +683,19 @@ export default function LoginPage() {
 
         if (isSuperAdmin) {
           // Open Super Admin Dashboard
+          const superAdminUser: AuthenticatedUser = {
+            id: String(data.user.id),
+            email: trimmedEmail,
+            name: (data.user?.user_metadata?.full_name as string) || "Super Administrator",
+            role: "SUPER_ADMIN",
+            userType: "ADMIN",
+            terminalAccess: "FULL_ADMIN",
+            restaurantName: "Omnibites Platform",
+            organizationId: "platform",
+            restaurantId: "platform",
+            assignedFeatures: ["OVERVIEW", "RESTAURANTS", "SUBSCRIPTIONS", "PAYMENTS", "SETTINGS"],
+          };
+          setActiveUserSession(superAdminUser);
           router.push("/super-admin/dashboard");
           router.refresh();
           return;
@@ -862,6 +882,21 @@ export default function LoginPage() {
                 },
                 () => { }
               );
+          }
+
+          // Validate restaurant operational status
+          if (targetRest) {
+            const restStatus = String(targetRest.status || "").toLowerCase().trim();
+            const restInitStatus = String(targetRest.initial_status || "").toLowerCase().trim();
+            if (restStatus === "inactive" || restStatus === "deactivated" || restInitStatus === "deactivated") {
+              hideSplash();
+              try {
+                await supabase.auth.signOut();
+              } catch {}
+              setErrorMessage("Your restaurant account has been deactivated by the Super Administrator. Please contact support.");
+              setTimeout(() => setErrorMessage(null), 5000);
+              return;
+            }
           }
 
           // 4. Determine if franchise based on database record & metadata

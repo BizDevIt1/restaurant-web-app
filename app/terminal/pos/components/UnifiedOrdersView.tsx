@@ -21,13 +21,14 @@ import {
   Phone,
   AlertTriangle,
   Lock,
+  Ban,
 } from "lucide-react";
 import { OrderRecord } from "@/app/admin/types";
 import { ParkedOrder } from "./HoldOrdersDrawer";
 import ResponsiveSelect from "@/app/admin/components/ResponsiveSelect";
 
 export type { ParkedOrder };
-export type UnifiedOrderTab = "all" | "kot" | "held" | "pending" | "settled";
+export type UnifiedOrderTab = "all" | "kot" | "held" | "pending" | "settled" | "voided";
 
 export interface UnifiedOrder {
   id: string;
@@ -52,8 +53,8 @@ export interface UnifiedOrder {
   discountPercent?: number;
   total: number;
   paymentMethod?: string;
-  paymentStatus: "paid" | "pending" | "held";
-  kitchenStatus?: "queued" | "preparing" | "ready" | "completed" | "none";
+  paymentStatus: "paid" | "pending" | "held" | "voided";
+  kitchenStatus?: "queued" | "preparing" | "ready" | "completed" | "none" | "voided";
   timestamp: string;
   cashierName?: string;
   rawOrderRecord?: OrderRecord;
@@ -122,6 +123,14 @@ export default function UnifiedOrdersView({
       if (!idKey || seenIds.has(idKey)) return;
       seenIds.add(idKey);
 
+      const isVoided =
+        (o as any).order_status === "cancelled" ||
+        (o as any).order_status === "voided" ||
+        (o as any).payment_status === "voided" ||
+        (o as any).payment_status === "refunded" ||
+        o.status === "cancelled" ||
+        o.status === "voided";
+
       const isDineIn = o.orderChannel === "dine_in";
       const resolvedTableName = isDineIn
         ? (o.tableName && o.tableName.toLowerCase().startsWith("table")
@@ -147,9 +156,9 @@ export default function UnifiedOrdersView({
         discountAmount: o.discountAmount || 0,
         discountPercent: o.discountPercent || 0,
         total: o.total,
-        paymentMethod: o.paymentMethod || "pending",
-        paymentStatus: "pending",
-        kitchenStatus: (o.status as any) || "queued",
+        paymentMethod: o.paymentMethod || (isVoided ? "voided" : "pending"),
+        paymentStatus: isVoided ? "voided" : "pending",
+        kitchenStatus: isVoided ? "voided" : ((o.status as any) || "queued"),
         timestamp: o.timestamp || o.created_at || new Date().toISOString(),
         cashierName: o.cashierName,
         rawOrderRecord: o,
@@ -196,11 +205,23 @@ export default function UnifiedOrdersView({
       });
     });
 
-    // 3. Completed & Settled Shift Invoices
+    // 3. Completed, Settled & Voided Shift Invoices
     orders.forEach((o) => {
       const idKey = String(o.id || (o as any).order_number || "").trim();
       if (!idKey || seenIds.has(idKey)) return;
       seenIds.add(idKey);
+
+      const isVoided =
+        (o as any).order_status === "cancelled" ||
+        (o as any).order_status === "voided" ||
+        (o as any).payment_status === "voided" ||
+        (o as any).payment_status === "refunded" ||
+        (o as any).paymentStatus === "voided" ||
+        (o as any).paymentStatus === "refunded" ||
+        o.payment_status === "voided" ||
+        o.payment_status === "refunded" ||
+        o.status === "cancelled" ||
+        o.status === "voided";
 
       const isDineIn = o.orderChannel === "dine_in";
       const resolvedTableName = isDineIn
@@ -227,9 +248,9 @@ export default function UnifiedOrdersView({
         discountAmount: o.discountAmount || 0,
         discountPercent: o.discountPercent || 0,
         total: o.total,
-        paymentMethod: o.paymentMethod || "cash",
-        paymentStatus: "paid",
-        kitchenStatus: "completed",
+        paymentMethod: o.paymentMethod || (isVoided ? "voided" : "cash"),
+        paymentStatus: isVoided ? "voided" : "paid",
+        kitchenStatus: isVoided ? "voided" : "completed",
         timestamp: o.timestamp || o.created_at || new Date().toISOString(),
         cashierName: o.cashierName,
         rawOrderRecord: o,
@@ -244,28 +265,51 @@ export default function UnifiedOrdersView({
     return {
       all: allUnifiedOrders.length,
       kot: allUnifiedOrders.filter(
-        (o) => o.source === "kot" && o.paymentStatus !== "paid"
+        (o) => o.source === "kot" && o.paymentStatus !== "paid" && o.paymentStatus !== "voided"
       ).length,
-      held: allUnifiedOrders.filter((o) => o.source === "held").length,
+      held: allUnifiedOrders.filter((o) => o.source === "held" && o.paymentStatus !== "voided").length,
       pending: allUnifiedOrders.filter(
         (o) => o.paymentStatus === "pending" || o.paymentStatus === "held"
       ).length,
       settled: allUnifiedOrders.filter((o) => o.paymentStatus === "paid").length,
+      voided: allUnifiedOrders.filter(
+        (o) =>
+          o.paymentStatus === "voided" ||
+          (o.rawOrderRecord as any)?.order_status === "cancelled" ||
+          (o.rawOrderRecord as any)?.order_status === "voided" ||
+          (o.rawOrderRecord as any)?.payment_status === "refunded" ||
+          (o.rawOrderRecord as any)?.payment_status === "voided" ||
+          (o.rawOrderRecord as any)?.status === "cancelled" ||
+          (o.rawOrderRecord as any)?.status === "voided" ||
+          o.kitchenStatus === "voided"
+      ).length,
     };
   }, [allUnifiedOrders]);
 
   // Filter orders by active tab, search query, and channel
   const filteredOrders = useMemo(() => {
     return allUnifiedOrders.filter((order) => {
+      const isOrderVoided =
+        order.paymentStatus === "voided" ||
+        (order.rawOrderRecord as any)?.order_status === "cancelled" ||
+        (order.rawOrderRecord as any)?.order_status === "voided" ||
+        (order.rawOrderRecord as any)?.payment_status === "refunded" ||
+        (order.rawOrderRecord as any)?.payment_status === "voided" ||
+        (order.rawOrderRecord as any)?.status === "cancelled" ||
+        (order.rawOrderRecord as any)?.status === "voided" ||
+        order.kitchenStatus === "voided";
+
       // 1. Tab Filter
       if (activeTab === "kot") {
-        if (order.source !== "kot" || order.paymentStatus === "paid") return false;
+        if (order.source !== "kot" || order.paymentStatus === "paid" || isOrderVoided) return false;
       } else if (activeTab === "held") {
-        if (order.source !== "held") return false;
+        if (order.source !== "held" || isOrderVoided) return false;
       } else if (activeTab === "pending") {
-        if (order.paymentStatus === "paid") return false;
+        if (order.paymentStatus === "paid" || isOrderVoided) return false;
       } else if (activeTab === "settled") {
-        if (order.paymentStatus !== "paid") return false;
+        if (order.paymentStatus !== "paid" || isOrderVoided) return false;
+      } else if (activeTab === "voided") {
+        if (!isOrderVoided) return false;
       }
 
       // 2. Channel Filter
@@ -328,6 +372,7 @@ export default function UnifiedOrdersView({
             { id: "held", label: "Held Orders", count: tabCounts.held, icon: <PauseCircle className="w-3.5 h-3.5" /> },
             { id: "pending", label: "Pending Settlement", count: tabCounts.pending, icon: <AlertCircle className="w-3.5 h-3.5" /> },
             { id: "settled", label: "Completed & Settled", count: tabCounts.settled, icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
+            { id: "voided", label: "Voided Orders", count: tabCounts.voided, icon: <Ban className="w-3.5 h-3.5 text-rose-400" /> },
           ]}
           buttonClassName="h-10 text-xs font-mono font-bold text-[var(--text-hi)]"
           menuClassName="w-full"
@@ -456,6 +501,31 @@ export default function UnifiedOrdersView({
           >
             {tabCounts.settled}
           </span>
+        </button>
+
+        {/* Tab 6: Voided Orders */}
+        <button
+          type="button"
+          onClick={() => setActiveTab("voided")}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shrink-0 ${
+            activeTab === "voided"
+              ? "bg-rose-500 text-white font-bold shadow-md shadow-rose-500/20"
+              : "glass-panel hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/40 text-[var(--text-lo)] border border-[var(--border)]"
+          }`}
+        >
+          <Ban className="w-3.5 h-3.5" />
+          <span>Voided</span>
+          {tabCounts.voided > 0 && (
+            <span
+              className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                activeTab === "voided"
+                  ? "bg-white/20 text-white"
+                  : "bg-rose-950/60 text-rose-400 border border-rose-800/40"
+              }`}
+            >
+              {tabCounts.voided}
+            </span>
+          )}
         </button>
       </div>
 
@@ -645,19 +715,33 @@ export default function UnifiedOrdersView({
                     ? "Delivery"
                     : String(order.orderChannel);
 
-            const isPaid = order.paymentStatus === "paid";
-            const isHeld = order.paymentStatus === "held";
-            const isPending = order.paymentStatus === "pending";
+            const isVoided =
+              order.paymentStatus === "voided" ||
+              (order.rawOrderRecord as any)?.order_status === "cancelled" ||
+              (order.rawOrderRecord as any)?.order_status === "voided" ||
+              (order.rawOrderRecord as any)?.payment_status === "refunded" ||
+              (order.rawOrderRecord as any)?.payment_status === "voided" ||
+              order.kitchenStatus === "voided" ||
+              (order.rawOrderRecord as any)?.status === "voided";
+            const isPaid = order.paymentStatus === "paid" && !isVoided;
+            const isHeld = order.paymentStatus === "held" && !isVoided;
+            const isPending = order.paymentStatus === "pending" && !isVoided;
 
             return (
               <div
                 key={`${order.source}-${order.id}`}
-                className="p-4 sm:p-5 rounded-2xl glass-panel border border-[var(--border)] hover:border-[var(--gold)]/40 transition-all shadow-md flex flex-col lg:flex-row lg:items-center justify-between gap-4 group relative overflow-hidden"
+                className={`p-4 sm:p-5 rounded-2xl glass-panel border ${
+                  isVoided
+                    ? "border-red-500/40 bg-red-950/10 opacity-80"
+                    : "border-[var(--border)] hover:border-[var(--gold)]/40"
+                } transition-all shadow-md flex flex-col lg:flex-row lg:items-center justify-between gap-4 group relative overflow-hidden`}
               >
                 {/* Status Accent Top Indicator Line */}
                 <div
                   className={`absolute top-0 left-0 right-0 h-1 ${
-                    isPaid
+                    isVoided
+                      ? "bg-red-500"
+                      : isPaid
                       ? "bg-emerald-500/80"
                       : isHeld
                         ? "bg-indigo-500/80"
@@ -694,7 +778,12 @@ export default function UnifiedOrdersView({
                     )}
 
                     {/* Status Badge */}
-                    {isPaid ? (
+                    {isVoided ? (
+                      <span className="badge-pill bg-rose-950/60 text-rose-400 border border-rose-800/60 font-bold">
+                        <Ban className="w-3 h-3 text-rose-400" />
+                        <span>VOIDED</span>
+                      </span>
+                    ) : isPaid ? (
                       <span className="badge-pill badge-success">
                         <CheckCircle2 className="w-3 h-3" />
                         <span>PAID • {order.paymentMethod?.toUpperCase() || "CASH"}</span>
@@ -796,7 +885,19 @@ export default function UnifiedOrdersView({
 
                   {/* Action Buttons */}
                   <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
-                    {(isPending || isHeld) && (
+                    {isVoided ? (
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-500/15 border border-red-500/30 text-red-400 font-mono text-xs font-bold shrink-0">
+                          <Ban className="w-3.5 h-3.5 text-red-400" />
+                          <span>VOIDED BY ADMIN</span>
+                        </div>
+                        {Boolean((order.rawOrderRecord as any)?.void_reason || (order as any).void_reason) && (
+                          <div className="text-[11px] text-red-400/90 font-mono italic max-w-[220px] text-right">
+                            {(order.rawOrderRecord as any)?.void_reason || (order as any).void_reason}
+                          </div>
+                        )}
+                      </div>
+                    ) : (isPending || isHeld) ? (
                       <button
                         type="button"
                         onClick={() => onSettleOrder(order)}
@@ -806,7 +907,7 @@ export default function UnifiedOrdersView({
                         <CreditCard className="w-3.5 h-3.5" />
                         <span>Settle &amp; Charge</span>
                       </button>
-                    )}
+                    ) : null}
 
                     {/* Recall Held Order */}
                     {isHeld && order.rawParkedOrder && onRecallHeldOrder && (

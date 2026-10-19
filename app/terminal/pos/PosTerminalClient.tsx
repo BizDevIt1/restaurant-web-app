@@ -57,6 +57,10 @@ import {
   playRemoteAudioChime,
   getKitchenBroadcastTopic,
 } from "@/lib/kitchenWaiterBridge";
+import {
+  broadcastTerminalMutation,
+  subscribeTerminalEventBus,
+} from "@/lib/terminalRealtimeSync";
 import MenuCategoriesAndSearch from "./components/MenuCategoriesAndSearch";
 import ItemGridAndModifiers from "./components/ItemGridAndModifiers";
 import OrderTicketPane from "./components/OrderTicketPane";
@@ -72,7 +76,7 @@ import UnifiedOrdersView, {
 import KitchenThermalSlipDialog from "./components/KitchenThermalSlipDialog";
 import { getTicketStation } from "../kitchen/KitchenTerminalClient";
 import { splitOrderIntoStationTickets, getMenuItemStation } from "@/lib/kitchenStationRouting";
-import StartShiftModal, { ShiftTypeOption } from "./components/StartShiftModal";
+import StartShiftModal from "./components/StartShiftModal";
 import ConfirmModal from "./components/ConfirmModal";
 import ShiftExpiryWarningModal from "./components/ShiftExpiryWarningModal";
 import ShiftContinuationModal from "./components/ShiftContinuationModal";
@@ -86,6 +90,12 @@ import {
   clearStaleShiftStorage,
   isShiftWindowConcluded,
   hasActiveConsecutiveShift,
+  getCurrentOperatingShift,
+  getRestaurantShiftConfig,
+  saveRestaurantShiftConfig,
+  parseRestaurantShiftConfig,
+  parseShiftOption,
+  ShiftTypeOption,
 } from "@/lib/shiftSchedule";
 import {
   recordMultiShiftRolloverEvent,
@@ -278,7 +288,9 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       ? activeShift.shift_type
       : user.assignedShift;
     if (!shiftToValidate) return null;
-    return validateCashierShiftWindow(shiftToValidate, new Date(), activeShift);
+    const restId = user?.restaurantId || (user as any)?.restaurant_id || user?.id;
+    const cfg = getRestaurantShiftConfig(restId, user);
+    return validateCashierShiftWindow(shiftToValidate, new Date(), activeShift, cfg);
   });
 
   // Seamless Shift Continuation Engine (Strict Active Guard: suppresses false prompts for active consecutive shifts)
@@ -311,9 +323,9 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
 
   const handleDismissContinuationPrompt = useCallback(() => {
     setIsShiftContinuationModalOpen(false);
-    // Snooze modal for 15 minutes persistently until resolved
+    // Snooze modal persistently until resolved
     setShiftPromptSnoozedUntil(Date.now() + 15 * 60 * 1000);
-    showToast("Shift alert snoozed. Reminding again in 15 minutes.");
+    showToast("Shift alert snoozed. Reminding again later.");
   }, []);
 
   // Seamless New Shift Rollover directly from POS terminal
@@ -454,7 +466,9 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         setShiftValidation(null);
         return;
       }
-      const result = validateCashierShiftWindow(shiftToValidate, new Date(), activeShift);
+      const restId = user?.restaurantId || (user as any)?.restaurant_id || user?.id;
+      const cfg = getRestaurantShiftConfig(restId, user);
+      const result = validateCashierShiftWindow(shiftToValidate, new Date(), activeShift, cfg);
       setShiftValidation(result);
 
       if (result.isValid && result.isWarningWindow && !hasActiveConsecutiveShift(activeShift, consecutiveShiftCount)) {
@@ -468,7 +482,12 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
     };
     verify();
     const timer = setInterval(verify, 5000);
-    return () => clearInterval(timer);
+    const handleShiftConfigUpdated = () => verify();
+    window.addEventListener("restaurant_shift_config_updated", handleShiftConfigUpdated);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("restaurant_shift_config_updated", handleShiftConfigUpdated);
+    };
   }, [user, isCashier, activeShift, hasOpenActiveShift, consecutiveShiftCount, lastWarningDismissedAt]);
 
   const handleDismissWarning = useCallback(() => {
@@ -790,16 +809,14 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
 
   // Auto-detect cashier's assigned shift from admin profile or current time window
   const resolveAssignedShift = useCallback((): ShiftTypeOption => {
-    const raw = (user?.assignedShift || (user as any)?.shift || "").toLowerCase();
-    if (raw.includes("morning") || raw.includes("first")) return "First Shift (Morning)";
-    if (raw.includes("evening") || raw.includes("second") || raw.includes("rush")) return "Second Shift (Evening)";
-    if (raw.includes("night") || raw.includes("third") || raw.includes("owl") || raw.includes("closing")) return "Third Shift (Night / Closing)";
-
-    // Fallback based on live wall clock
-    const hour = new Date().getHours();
-    if (hour >= 8 && hour < 16) return "First Shift (Morning)";
-    if (hour >= 16 && hour < 24) return "Second Shift (Evening)";
-    return "Third Shift (Night / Closing)";
+    const raw = user?.assignedShift || (user as any)?.shift;
+    const config = getRestaurantShiftConfig(user?.restaurantId || (user as any)?.restId, user);
+    if (raw) {
+      const parsed = parseShiftOption(raw, config);
+      if (parsed) return parsed;
+    }
+    // Fallback based on dynamic restaurant operating shift config
+    return getCurrentOperatingShift(new Date(), config);
   }, [user]);
 
   const assignedShiftType = useMemo(() => resolveAssignedShift(), [resolveAssignedShift]);
@@ -841,11 +858,17 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         if (restId) {
           const { data } = await supabase
             .from("restaurants")
-            .select("enable_kitchen_kds, enable_table_service, enable_direct_thermal_print, enable_offline_sync, enabled_modules")
+            .select("enable_kitchen_kds, enable_table_service, enable_direct_thermal_print, enable_offline_sync, enabled_modules, branches")
             .eq("id", restId)
             .maybeSingle();
 
           if (data && isMounted) {
+            if (data.branches?.[0]?.shift_timings) {
+              const parsed = parseRestaurantShiftConfig(data.branches[0].shift_timings);
+              if (parsed) {
+                saveRestaurantShiftConfig(restId, parsed);
+              }
+            }
             const mods = Array.isArray(data.enabled_modules)
               ? data.enabled_modules.map((m: any) => String(m || "").toLowerCase().trim())
               : [];
@@ -1504,6 +1527,16 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
 
   // Direct settlement handler for orders selected from the Unified Orders Hub
   const handleSettleUnifiedOrder = (order: UnifiedOrder) => {
+    if (
+      order.paymentStatus === "voided" ||
+      order.kitchenStatus === "voided" ||
+      (order.rawOrderRecord as any)?.order_status === "cancelled" ||
+      (order.rawOrderRecord as any)?.order_status === "voided" ||
+      (order.rawOrderRecord as any)?.status === "voided"
+    ) {
+      showToast("❌ This order has been VOIDED by Admin and cannot be settled or charged.");
+      return;
+    }
     getOrRecoverActiveShift();
     setTargetOrderForSettlement(order);
     setIsPaymentModalOpen(true);
@@ -1539,168 +1572,400 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
 
       const shiftStartIso = activeShift?.shift_start || activeShift?.created_at;
 
-      // Fetch latest orders for this restaurant to reliably match tables, held tickets, and recent orders
-      let { data, error } = await supabase
-        .from("orders")
-        .select("*")
-        .eq("restaurant_id", restId)
-        .neq("order_status", "cancelled")
-        .order("created_at", { ascending: false })
-        .limit(250);
+      // Fetch latest orders and kitchen tickets in parallel to reliably sync KOTs, tables, and voided tickets
+      const [ordersRes, ticketsRes] = await Promise.all([
+        supabase
+          .from("orders")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .order("created_at", { ascending: false })
+          .limit(250),
+        supabase
+          .from("kitchen_tickets")
+          .select("*")
+          .eq("restaurant_id", restId)
+          .order("created_at", { ascending: false })
+          .limit(250),
+      ]);
 
-      if (error) {
-        console.warn("[PosTerminalClient] fetchLiveOrders query error:", error.message);
-        return;
+      if (ordersRes.error) {
+        console.warn("[PosTerminalClient] fetchLiveOrders orders query error:", ordersRes.error.message);
+      }
+      if (ticketsRes.error) {
+        console.warn("[PosTerminalClient] fetchLiveOrders kitchen_tickets query error:", ticketsRes.error.message);
       }
 
-      if (data) {
-        const completedList: OrderRecord[] = [];
-        const runningKotList: OrderRecord[] = [];
-        const heldList: ParkedOrder[] = [];
-        const currentTables = tablesRef.current || [];
+      const ordersData = ordersRes.data || [];
+      const ticketsData = ticketsRes.data || [];
 
-        data.forEach((o: any) => {
-          const items = Array.isArray(o.items) ? o.items : [];
-          const orderNum = o.order_number || o.id;
-          const isHeld = String(orderNum).startsWith("#HOLD-") || o.customer_name === "Held Order";
-          const isPaid = o.payment_status === "paid";
-
-          const matchedTable = currentTables.find(
-            (t) =>
-              (o.table_id && (t.dbId === o.table_id || String(t.id) === String(o.table_id))) ||
-              isTableMatchingIdentifier(t, o.table_id) ||
-              isTableMatchingIdentifier(t, o.customer_name)
-          );
-          const resolvedTableId = matchedTable?.id ?? (isNaN(Number(o.table_id)) ? undefined : Number(o.table_id));
-
-          if (isPaid) {
-            completedList.push({
-              id: orderNum,
-              orderChannel: o.order_channel || "dine_in",
-              tableId: resolvedTableId,
-              tableName: o.customer_name || matchedTable?.label || `Order #${orderNum}`,
-              customerName: o.customer_name,
-              customerPhone: o.customer_phone,
-              delivery_zone: o.delivery_zone,
-              items,
-              subtotal: Number(o.subtotal || o.total_amount || 0),
-              taxAmount: Number(o.tax_amount || 0),
-              discountPercent: 0,
-              discountAmount: Number(o.discount_amount || 0),
-              total: Number(o.total_amount || o.subtotal || 0),
-              paymentMethod: (o.payment_method || "cash").toLowerCase(),
-              cashierName: o.cashier_name || user?.name || "Cashier",
-              timestamp: o.created_at || new Date().toISOString(),
-              status: o.order_status || "completed",
-              payment_status: "paid",
-              kotId: o.kot_id || undefined,
-              shift_id: o.shift_id ?? null,
-            });
-          } else if (isHeld) {
-            heldList.push({
-              id: orderNum,
-              cart: items.map((it: any) => ({
-                item: {
-                  id: it.id || "",
-                  name: it.name,
-                  price: Number(it.price || 0),
-                  category: "General",
-                  imageIcon: "🍲",
-                  prepTime: it.prepTime || "15 mins",
-                  stockStatus: "in_stock",
-                  stockCount: 50,
-                },
-                quantity: Number(it.quantity || 1),
-                notes: it.notes || "",
-              })),
-              orderChannel: o.order_channel || "dine_in",
-              selectedTable: resolvedTableId,
-              customerName: o.customer_name || "Held Order",
-              customerPhone: o.customer_phone || "",
-              deliveryZone: o.delivery_zone || "",
-              total: Number(o.total_amount || 0),
-              timestamp: new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-            });
-          } else {
-            runningKotList.push({
-              id: orderNum,
-              kotId: o.kot_id || `KOT-${String(orderNum).replace(/[^0-9]/g, "").slice(-4) || "1001"}`,
-              orderChannel: o.order_channel || "dine_in",
-              tableId: resolvedTableId,
-              tableName: o.customer_name || matchedTable?.label || (resolvedTableId ? `Table ${resolvedTableId}` : `Order #${orderNum}`),
-              customerName: o.customer_name,
-              customerPhone: o.customer_phone,
-              delivery_zone: o.delivery_zone,
-              items,
-              subtotal: Number(o.subtotal || o.total_amount || 0),
-              taxAmount: Number(o.tax_amount || 0),
-              discountPercent: 0,
-              discountAmount: Number(o.discount_amount || 0),
-              total: Number(o.total_amount || 0),
-              paymentMethod: (o.payment_method || "cash").toLowerCase(),
-              cashierName: o.cashier_name || user?.name || "Cashier",
-              timestamp: o.created_at || new Date().toISOString(),
-              status: o.order_status || "active",
-              payment_status: o.payment_status || "pending",
-              shift_id: o.shift_id ?? null,
-            });
+      // 1. Build comprehensive set of all voided/cancelled ticket and order identifiers
+      const voidedKeys = new Set<string>();
+      ordersData.forEach((o: any) => {
+        const isVoided =
+          o.order_status === "cancelled" ||
+          o.order_status === "voided" ||
+          o.payment_status === "refunded" ||
+          o.payment_status === "voided" ||
+          o.status === "cancelled" ||
+          o.status === "voided";
+        if (isVoided) {
+          if (o.id) voidedKeys.add(String(o.id));
+          if (o.order_number) {
+            voidedKeys.add(String(o.order_number));
+            voidedKeys.add(String(o.order_number).replace(/^#+/, ""));
           }
-        });
+        }
+      });
 
-        // Merge with any locally shared running KOT orders that haven't synced via network yet
-        try {
-          const rawLocalRunning = localStorage.getItem(`pos_running_kot_orders_${currentOrgId}`) || localStorage.getItem(`pos_running_kot_orders_${restId}`);
-          if (rawLocalRunning) {
-            const parsed = JSON.parse(rawLocalRunning);
-            if (Array.isArray(parsed)) {
-              parsed.forEach((localR) => {
-                const isPaidOrCompleted =
-                  completedList.some((c) => String(c.id) === String(localR.id)) ||
-                  !isOrderOccupyingTable(localR);
-                if (!isPaidOrCompleted && !runningKotList.some((r) => r.id === localR.id)) {
-                  runningKotList.unshift(localR);
-                }
-              });
-            }
+      ticketsData.forEach((t: any) => {
+        const isVoided = t.status === "voided" || t.status === "cancelled";
+        if (isVoided) {
+          if (t.id) voidedKeys.add(String(t.id));
+          if (t.ticket_number) {
+            voidedKeys.add(String(t.ticket_number));
+            voidedKeys.add(String(t.ticket_number).replace(/^KOT-/i, ""));
           }
-        } catch { }
-
-        setOrders(completedList);
-        saveStoredOrders(currentOrgId, completedList);
-
-        setRunningTableOrders(runningKotList);
-        setActiveDbOrders(runningKotList);
-        try {
-          localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(runningKotList));
-          if (restId) {
-            localStorage.setItem(`pos_running_kot_orders_${restId}`, JSON.stringify(runningKotList));
+          if (t.order_id) {
+            voidedKeys.add(String(t.order_id));
           }
-        } catch { }
+        }
+      });
 
-        // Immediately reflect running KOTs into table occupancy using single source of truth
-        const activeRecords = runningKotList
-          .filter((ro) => isOrderOccupyingTable(ro))
-          .map((ro) => {
-            const ident = ro.tableName || (ro.tableId ? String(ro.tableId) : "");
-            return {
-              tableIdentifier: ident,
-              tableNumberNorm: normalizeTableNumber(ident),
-              orderId: String(ro.id),
-              kotId: ro.kotId,
-              tableId: ro.tableId,
-              totalAmount: ro.total,
-              source: "order" as const,
-              paymentStatus: ro.payment_status,
-              status: ro.status,
-            };
+      const completedList: OrderRecord[] = [];
+      const runningKotList: OrderRecord[] = [];
+      const heldList: ParkedOrder[] = [];
+      const currentTables = tablesRef.current || [];
+
+      // 2. Process records from central orders table
+      ordersData.forEach((o: any) => {
+        const items = Array.isArray(o.items) ? o.items : [];
+        const orderNum = o.order_number || o.id;
+        const cleanOrderNum = String(orderNum).replace(/^#+/, "");
+        const isHeld = String(orderNum).startsWith("#HOLD-") || o.customer_name === "Held Order";
+        const isVoided =
+          voidedKeys.has(String(o.id)) ||
+          voidedKeys.has(String(orderNum)) ||
+          voidedKeys.has(cleanOrderNum) ||
+          o.order_status === "cancelled" ||
+          o.order_status === "voided" ||
+          o.payment_status === "refunded" ||
+          o.payment_status === "voided" ||
+          o.status === "cancelled" ||
+          o.status === "voided";
+        const isPaid = o.payment_status === "paid" && !isVoided;
+
+        const matchedTable = currentTables.find(
+          (t) =>
+            (o.table_id && (t.dbId === o.table_id || String(t.id) === String(o.table_id))) ||
+            isTableMatchingIdentifier(t, o.table_id) ||
+            isTableMatchingIdentifier(t, o.customer_name)
+        );
+        const resolvedTableId = matchedTable?.id ?? (isNaN(Number(o.table_id)) ? undefined : Number(o.table_id));
+
+        if (isVoided) {
+          completedList.push({
+            id: orderNum,
+            orderChannel: o.order_channel || "dine_in",
+            tableId: resolvedTableId,
+            tableName: o.customer_name || matchedTable?.label || `Order #${orderNum}`,
+            customerName: o.customer_name,
+            customerPhone: o.customer_phone,
+            delivery_zone: o.delivery_zone,
+            items,
+            subtotal: Number(o.subtotal || o.total_amount || 0),
+            taxAmount: Number(o.tax_amount || 0),
+            discountPercent: 0,
+            discountAmount: Number(o.discount_amount || 0),
+            total: Number(o.total_amount || o.subtotal || 0),
+            paymentMethod: (o.payment_method || "voided").toLowerCase(),
+            cashierName: o.cashier_name || user?.name || "Cashier",
+            timestamp: o.created_at || new Date().toISOString(),
+            status: "cancelled",
+            payment_status: "voided",
+            kotId: o.kot_id || undefined,
+            shift_id: o.shift_id ?? null,
+            void_reason: o.void_reason || undefined,
+            voided_at: o.voided_at || undefined,
           });
-        setTables((prev) => reconcileTableStatuses(prev, activeRecords));
+        } else if (isPaid) {
+          completedList.push({
+            id: orderNum,
+            orderChannel: o.order_channel || "dine_in",
+            tableId: resolvedTableId,
+            tableName: o.customer_name || matchedTable?.label || `Order #${orderNum}`,
+            customerName: o.customer_name,
+            customerPhone: o.customer_phone,
+            delivery_zone: o.delivery_zone,
+            items,
+            subtotal: Number(o.subtotal || o.total_amount || 0),
+            taxAmount: Number(o.tax_amount || 0),
+            discountPercent: 0,
+            discountAmount: Number(o.discount_amount || 0),
+            total: Number(o.total_amount || o.subtotal || 0),
+            paymentMethod: (o.payment_method || "cash").toLowerCase(),
+            cashierName: o.cashier_name || user?.name || "Cashier",
+            timestamp: o.created_at || new Date().toISOString(),
+            status: o.order_status || "completed",
+            payment_status: "paid",
+            kotId: o.kot_id || undefined,
+            shift_id: o.shift_id ?? null,
+          });
+        } else if (isHeld) {
+          heldList.push({
+            id: orderNum,
+            cart: items.map((it: any) => ({
+              item: {
+                id: it.id || "",
+                name: it.name,
+                price: Number(it.price || 0),
+                category: "General",
+                imageIcon: "🍲",
+                prepTime: it.prepTime || "15 mins",
+                stockStatus: "in_stock",
+                stockCount: 50,
+              },
+              quantity: Number(it.quantity || 1),
+              notes: it.notes || "",
+            })),
+            orderChannel: o.order_channel || "dine_in",
+            selectedTable: resolvedTableId,
+            customerName: o.customer_name || "Held Order",
+            customerPhone: o.customer_phone || "",
+            deliveryZone: o.delivery_zone || "",
+            total: Number(o.total_amount || 0),
+            timestamp: new Date(o.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          });
+        } else {
+          runningKotList.push({
+            id: orderNum,
+            kotId: o.kot_id || `KOT-${String(orderNum).replace(/[^0-9]/g, "").slice(-4) || "1001"}`,
+            orderChannel: o.order_channel || "dine_in",
+            tableId: resolvedTableId,
+            tableName: o.customer_name || matchedTable?.label || (resolvedTableId ? `Table ${resolvedTableId}` : `Order #${orderNum}`),
+            customerName: o.customer_name,
+            customerPhone: o.customer_phone,
+            delivery_zone: o.delivery_zone,
+            items,
+            subtotal: Number(o.subtotal || o.total_amount || 0),
+            taxAmount: Number(o.tax_amount || 0),
+            discountPercent: 0,
+            discountAmount: Number(o.discount_amount || 0),
+            total: Number(o.total_amount || 0),
+            paymentMethod: (o.payment_method || "cash").toLowerCase(),
+            cashierName: o.cashier_name || user?.name || "Cashier",
+            timestamp: o.created_at || new Date().toISOString(),
+            status: o.order_status || "active",
+            payment_status: o.payment_status || "pending",
+            shift_id: o.shift_id ?? null,
+          });
+        }
+      });
 
-        setParkedOrders(heldList);
-        try {
-          localStorage.setItem(`${PARKED_ORDERS_KEY}_${currentOrgId}`, JSON.stringify(heldList));
-        } catch { }
-      }
+      // 3. Process kitchen_tickets to guarantee KOT orders and Admin cancellations show up in POS Order Hub
+      ticketsData.forEach((t: any) => {
+        const ticketItems = Array.isArray(t.items) ? t.items : [];
+        const ticketNum = t.ticket_number || t.id;
+        const cleanTicketNum = String(ticketNum).replace(/^KOT-/i, "");
+        const isTicketVoided =
+          t.status === "voided" ||
+          t.status === "cancelled" ||
+          voidedKeys.has(String(t.id)) ||
+          voidedKeys.has(String(ticketNum)) ||
+          voidedKeys.has(cleanTicketNum) ||
+          (t.order_id && voidedKeys.has(String(t.order_id)));
+
+        const matchedTable = currentTables.find(
+          (tbl) =>
+            (t.table_number && isTableMatchingIdentifier(tbl, t.table_number)) ||
+            (t.customer_name && isTableMatchingIdentifier(tbl, t.customer_name))
+        );
+        const resolvedTableId = matchedTable?.id;
+
+        const mappedItems = ticketItems.map((it: any) => ({
+          id: it.id || "",
+          name: it.name || "Item",
+          price: Number(it.price || it.price_amount || 0),
+          quantity: Number(it.qty || it.quantity || 1),
+          notes: it.notes || "",
+          prepTime: it.prepTime || "15m",
+          preparation_time: it.preparation_time || 15,
+          variant: it.variant || it.selectedVariant,
+          variant_name: it.variant_name || it.variant?.name,
+        }));
+
+        const subtotal = mappedItems.reduce(
+          (acc: number, it: any) => acc + (it.price * it.quantity),
+          0
+        );
+        const total = subtotal;
+
+        const alreadyInCompleted = completedList.some(
+          (c) =>
+            String(c.id) === String(t.id) ||
+            String(c.id) === String(ticketNum) ||
+            (t.order_id && String(c.id) === String(t.order_id)) ||
+            (c.kotId && c.kotId === ticketNum)
+        );
+
+        if (isTicketVoided) {
+          if (!alreadyInCompleted) {
+            completedList.push({
+              id: ticketNum,
+              orderChannel: t.channel || t.order_type || "dine_in",
+              tableId: resolvedTableId,
+              tableName: t.table_number || matchedTable?.label || (resolvedTableId ? `Table ${resolvedTableId}` : ticketNum),
+              customerName: t.customer_name || t.table_number,
+              customerPhone: t.customer_phone,
+              delivery_zone: t.delivery_area || t.delivery_address,
+              items: mappedItems,
+              subtotal,
+              taxAmount: 0,
+              discountPercent: 0,
+              discountAmount: 0,
+              total,
+              paymentMethod: "voided",
+              cashierName: t.server_name || user?.name || "Cashier",
+              timestamp: t.created_at || new Date().toISOString(),
+              status: "cancelled",
+              payment_status: "voided",
+              kotId: ticketNum,
+              shift_id: null,
+              void_reason: t.void_reason || undefined,
+              voided_at: t.voided_at || undefined,
+            });
+          }
+        } else if (t.status !== "completed" && t.status !== "fulfilled" && t.status !== "archived") {
+          const alreadyInRunning = runningKotList.some(
+            (r) =>
+              String(r.id) === String(t.id) ||
+              String(r.id) === String(ticketNum) ||
+              (t.order_id && String(r.id) === String(t.order_id)) ||
+              (r.kotId && r.kotId === ticketNum)
+          );
+
+          if (!alreadyInRunning && !alreadyInCompleted) {
+            runningKotList.push({
+              id: t.order_id || ticketNum,
+              kotId: ticketNum,
+              orderChannel: t.channel || t.order_type || "dine_in",
+              tableId: resolvedTableId,
+              tableName: t.table_number || matchedTable?.label || (resolvedTableId ? `Table ${resolvedTableId}` : ticketNum),
+              customerName: t.customer_name || t.table_number,
+              customerPhone: t.customer_phone,
+              delivery_zone: t.delivery_area || t.delivery_address,
+              items: mappedItems,
+              subtotal,
+              taxAmount: 0,
+              discountPercent: 0,
+              discountAmount: 0,
+              total,
+              paymentMethod: "cash",
+              cashierName: t.server_name || user?.name || "Floor Server",
+              timestamp: t.created_at || new Date().toISOString(),
+              status: t.status || "active",
+              payment_status: "pending",
+              shift_id: null,
+            });
+          }
+        }
+      });
+
+      // 4. Merge with any locally shared running KOT orders, strictly filtering out voided records
+      try {
+        const rawLocalRunning =
+          localStorage.getItem(`pos_running_kot_orders_${currentOrgId}`) ||
+          localStorage.getItem(`pos_running_kot_orders_${restId}`);
+        if (rawLocalRunning) {
+          const parsed = JSON.parse(rawLocalRunning);
+          if (Array.isArray(parsed)) {
+            parsed.forEach((localR) => {
+              const rId = String(localR.id || "");
+              const rKot = String(localR.kotId || "");
+              const isVoidedLocal =
+                voidedKeys.has(rId) ||
+                voidedKeys.has(rId.replace(/^#+/, "")) ||
+                (rKot && (voidedKeys.has(rKot) || voidedKeys.has(rKot.replace(/^KOT-/i, "")))) ||
+                localR.status === "cancelled" ||
+                localR.status === "voided" ||
+                localR.payment_status === "voided" ||
+                localR.payment_status === "refunded";
+
+              const isPaidOrCompleted =
+                isVoidedLocal ||
+                completedList.some(
+                  (c) =>
+                    String(c.id) === rId ||
+                    (localR.kotId && c.kotId === localR.kotId)
+                ) ||
+                !isOrderOccupyingTable(localR);
+
+              if (
+                !isPaidOrCompleted &&
+                !runningKotList.some(
+                  (r) =>
+                    String(r.id) === rId ||
+                    (localR.kotId && r.kotId === localR.kotId)
+                )
+              ) {
+                runningKotList.unshift(localR);
+              }
+            });
+          }
+        }
+      } catch { }
+
+      // 5. Strict post-filter: NEVER allow any voided order to stay in runningKotList
+      const sanitizedRunning = runningKotList.filter((r) => {
+        const rId = String(r.id || "");
+        const rKot = String(r.kotId || "");
+        const isVoided =
+          voidedKeys.has(rId) ||
+          voidedKeys.has(rId.replace(/^#+/, "")) ||
+          (rKot && (voidedKeys.has(rKot) || voidedKeys.has(rKot.replace(/^KOT-/i, "")))) ||
+          r.status === "cancelled" ||
+          r.status === "voided" ||
+          r.payment_status === "voided" ||
+          r.payment_status === "refunded";
+        return !isVoided;
+      });
+
+      setOrders(completedList);
+      saveStoredOrders(currentOrgId, completedList);
+
+      setRunningTableOrders(sanitizedRunning);
+      setActiveDbOrders(sanitizedRunning);
+
+      // Overwrite localStorage with sanitized active orders so voided orders are never resurrected on refresh
+      try {
+        localStorage.setItem(`pos_running_kot_orders_${currentOrgId}`, JSON.stringify(sanitizedRunning));
+        if (restId) {
+          localStorage.setItem(`pos_running_kot_orders_${restId}`, JSON.stringify(sanitizedRunning));
+        }
+      } catch { }
+
+      // Immediately reflect running KOTs into table occupancy using single source of truth
+      const activeRecords = sanitizedRunning
+        .filter((ro) => isOrderOccupyingTable(ro))
+        .map((ro) => {
+          const ident = ro.tableName || (ro.tableId ? String(ro.tableId) : "");
+          return {
+            tableIdentifier: ident,
+            tableNumberNorm: normalizeTableNumber(ident),
+            orderId: String(ro.id),
+            kotId: ro.kotId,
+            tableId: ro.tableId,
+            totalAmount: ro.total,
+            source: "order" as const,
+            paymentStatus: ro.payment_status,
+            status: ro.status,
+          };
+        });
+      setTables((prev) => reconcileTableStatuses(prev, activeRecords));
+
+      setParkedOrders(heldList);
+      try {
+        localStorage.setItem(`${PARKED_ORDERS_KEY}_${currentOrgId}`, JSON.stringify(heldList));
+      } catch { }
     } catch (err) {
       console.warn("[PosTerminalClient] fetchLiveOrders exception:", err);
     } finally {
@@ -1871,6 +2136,7 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
   useEffect(() => {
     let isMounted = true;
 
+    let unsubTerminalBus: (() => void) | null = null;
     // Debounce timers to batch rapid realtime updates
     let liveOrdersTimer: NodeJS.Timeout | null = null;
     const debouncedFetchLiveOrders = () => {
@@ -2052,6 +2318,20 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         })
       );
 
+      // Dismiss payment settlement modal immediately if the active settlement order was voided or released
+      setTargetOrderForSettlement((currentSettlement) => {
+        if (!currentSettlement) return null;
+        const matchesTarget =
+          (targetOrderId && (String(currentSettlement.id) === String(targetOrderId) || currentSettlement.kotId === targetOrderId)) ||
+          (targetTableNum && isTableMatchingIdentifier({ label: targetTableNum }, currentSettlement.tableName || currentSettlement.customerName || currentSettlement.tableId));
+        if (matchesTarget) {
+          setIsPaymentModalOpen(false);
+          showToast(`Order #${targetOrderId || targetTableNum} was voided/released. Removed from settlement.`);
+          return null;
+        }
+        return currentSettlement;
+      });
+
       debouncedFetchLiveTables();
     };
 
@@ -2075,6 +2355,8 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
 
     let ledgerBc: BroadcastChannel | null = null;
     let occBc: BroadcastChannel | null = null;
+    let kdsBc: BroadcastChannel | null = null;
+    let restOrdersBc: BroadcastChannel | null = null;
     if (typeof window !== "undefined" && "BroadcastChannel" in window) {
       try {
         ledgerBc = new BroadcastChannel("pos_ledger_sync_channel");
@@ -2090,6 +2372,13 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
             debouncedFetchLiveOrders();
             debouncedFetchLiveTables();
             debouncedFetchLiveMenu();
+          } else if (event.data?.type === "TICKET_VOIDED_BY_ADMIN" || event.data?.type === "ORDER_VOIDED") {
+            handleTableReleasedEvent({
+              tableNumber: event.data.tableNumber,
+              orderId: event.data.ticketId || event.data.orderId,
+            });
+            debouncedFetchLiveOrders();
+            debouncedFetchLiveTables();
           }
         };
       } catch { }
@@ -2102,6 +2391,47 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           } else if (event.data?.type === "TABLES_UPDATED" || event.data?.type === "ORDERS_UPDATED") {
             debouncedFetchLiveTables();
             debouncedFetchLiveOrders();
+          } else if (event.data?.type === "TICKET_VOIDED_BY_ADMIN" || event.data?.type === "ORDER_VOIDED") {
+            handleTableReleasedEvent({
+              tableNumber: event.data.tableNumber,
+              orderId: event.data.ticketId || event.data.orderId,
+            });
+            debouncedFetchLiveOrders();
+            debouncedFetchLiveTables();
+          }
+        };
+      } catch { }
+
+      try {
+        kdsBc = new BroadcastChannel("pos_kds_sync");
+        kdsBc.onmessage = (event) => {
+          if (event.data?.type === "TICKET_VOIDED_BY_ADMIN" || event.data?.type === "ORDER_VOIDED") {
+            handleTableReleasedEvent({
+              tableNumber: event.data.tableNumber,
+              orderId: event.data.ticketId || event.data.orderId,
+            });
+            debouncedFetchLiveOrders();
+            debouncedFetchLiveTables();
+          } else if (event.data?.type === "KDS_TICKETS_UPDATED" || event.data?.type === "KOT_CREATED") {
+            debouncedFetchLiveOrders();
+            debouncedFetchLiveTables();
+          }
+        };
+      } catch { }
+
+      try {
+        restOrdersBc = new BroadcastChannel("restaurant_orders_channel");
+        restOrdersBc.onmessage = (event) => {
+          if (event.data?.type === "TICKET_VOIDED_BY_ADMIN" || event.data?.type === "ORDER_VOIDED") {
+            handleTableReleasedEvent({
+              tableNumber: event.data.tableNumber,
+              orderId: event.data.ticketId || event.data.orderId,
+            });
+            debouncedFetchLiveOrders();
+            debouncedFetchLiveTables();
+          } else {
+            debouncedFetchLiveOrders();
+            debouncedFetchLiveTables();
           }
         };
       } catch { }
@@ -2502,7 +2832,66 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
               }
             }
           )
-          .subscribe();
+          .subscribe((status: string, err?: any) => {
+            console.log(`[PosTerminal Realtime ${restId}] Channel status: ${status}`, err || "");
+            if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+              if (isMounted) {
+                console.warn(`[PosTerminal Realtime ${restId}] Disconnected (${status}). Auto-reconnecting...`);
+                setTimeout(() => {
+                  if (isMounted) {
+                    debouncedFetchLiveOrders();
+                    debouncedFetchLiveTables();
+                  }
+                }, 1500);
+              }
+            }
+          });
+
+        unsubTerminalBus = subscribeTerminalEventBus(restId, (payload) => {
+          if (!isMounted) return;
+          console.log("[PosTerminal] Received terminal bus mutation:", payload);
+          if (payload.type === "TABLE_RELEASED") {
+            handleTableReleasedEvent(payload);
+          } else if (payload.type === "ORDER_VOIDED") {
+            handleTableReleasedEvent({
+              tableId: payload.tableId,
+              tableNumber: payload.tableNumber,
+              orderId: payload.orderId || payload.ticketId,
+            });
+            // Optimistically update orders list to mark voided immediately
+            const voidTargetId = payload.orderId || payload.ticketId;
+            if (voidTargetId) {
+              setOrders((prev) =>
+                prev.map((o) =>
+                  String(o.id) === String(voidTargetId) || o.kotId === String(voidTargetId)
+                    ? { ...o, status: "cancelled", payment_status: "voided", paymentMethod: o.paymentMethod || "cash" }
+                    : o
+                )
+              );
+            }
+          } else if (payload.type === "TABLE_MUTATION") {
+            const isRelease = payload.status === "available" || payload.status === "AVAILABLE";
+            if (payload.tableNumber || payload.tableId) {
+              setTables((prev) =>
+                prev.map((t) => {
+                  const matches =
+                    (payload.tableId && (String(t.dbId) === String(payload.tableId) || String(t.id) === String(payload.tableId))) ||
+                    (payload.tableNumber && isTableMatchingIdentifier(t, payload.tableNumber));
+                  if (matches) {
+                    return {
+                      ...t,
+                      status: isRelease ? "available" : "seated",
+                      activeOrderId: isRelease ? undefined : (payload.orderId ? String(payload.orderId) : t.activeOrderId),
+                    };
+                  }
+                  return t;
+                })
+              );
+            }
+          }
+          fetchLiveOrders();
+          fetchLiveTables();
+        });
       } catch { }
     })();
 
@@ -2511,6 +2900,11 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
       if (liveOrdersTimer) clearTimeout(liveOrdersTimer);
       if (liveMenuTimer) clearTimeout(liveMenuTimer);
       if (liveTablesTimer) clearTimeout(liveTablesTimer);
+      if (unsubTerminalBus) {
+        try {
+          unsubTerminalBus();
+        } catch { }
+      }
       if (typeof window !== "undefined") {
         window.removeEventListener("storage", handleStorageUpdate);
         window.removeEventListener("pos_tax_rate_changed", handleCustomTaxChange);
@@ -2556,6 +2950,16 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           occBc.close();
         } catch { }
       }
+      if (kdsBc) {
+        try {
+          kdsBc.close();
+        } catch { }
+      }
+      if (restOrdersBc) {
+        try {
+          restOrdersBc.close();
+        } catch { }
+      }
       if (channel) {
         try {
           const supabase = createClient();
@@ -2580,7 +2984,11 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
             (table.activeOrderId &&
               (o.id === table.activeOrderId || o.kotId === table.activeOrderId))) &&
           o.status !== "completed" &&
-          o.status !== "cancelled"
+          o.status !== "cancelled" &&
+          o.status !== "voided" &&
+          o.payment_status !== "paid" &&
+          o.payment_status !== "refunded" &&
+          o.payment_status !== "voided"
       );
     },
     [runningTableOrders]
@@ -3021,6 +3429,13 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
           }
           window.dispatchEvent(new CustomEvent("restaurant_tables_changed"));
           window.dispatchEvent(new CustomEvent("pos_tables_updated"));
+          broadcastTerminalMutation(restId, {
+            type: "TABLE_MUTATION",
+            tableId: targetTable?.dbId || selectedTable,
+            tableNumber: targetTable?.label || tableIdentifier,
+            orderId: resolvedOrderId,
+            status: "occupied",
+          });
           localStorage.setItem(`omni_tables_trigger_${currentOrgId}`, String(Date.now()));
           window.dispatchEvent(new Event("storage"));
         } catch { }
@@ -3131,6 +3546,13 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
             window.dispatchEvent(new CustomEvent("orders_updated", {
               detail: { restaurantId: restId, orderId: resolvedOrderId, kotId: newKotId, timestamp: Date.now() },
             }));
+            broadcastTerminalMutation(restId, {
+              type: "ORDER_MUTATION",
+              orderId: resolvedOrderId,
+              tableId: targetTable?.dbId || selectedTable,
+              tableNumber: targetTable?.label || tableIdentifier,
+              status: "active",
+            });
             localStorage.setItem(`pos_orders_${currentOrgId}`, String(Date.now()));
             localStorage.setItem(`pos_running_kot_orders_trigger_${currentOrgId}`, String(Date.now()));
             window.dispatchEvent(new Event("storage"));
@@ -3824,6 +4246,22 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
         window.dispatchEvent(new CustomEvent("pos_tables_updated"));
         window.dispatchEvent(new CustomEvent("tables_list_changed"));
       } catch {}
+      if (activeRestId) {
+        broadcastTerminalMutation(activeRestId, {
+          type: "ORDER_MUTATION",
+          orderId: finalOrderId,
+          status: "paid",
+        });
+        if (isTableRelatedSettlement) {
+          broadcastTerminalMutation(activeRestId, {
+            type: "TABLE_RELEASED",
+            tableId: targetTable?.dbId || finalTableId,
+            tableNumber: target?.tableName || selectedTableObj?.label || targetTable?.label || `Table ${resolvedTableId}`,
+            orderId: finalOrderId,
+            status: "available",
+          });
+        }
+      }
     }
 
     // If settled from active cart (not target order from hub), reset active cart
@@ -4019,41 +4457,34 @@ export default function PosTerminalClient({ embedded = false }: PosTerminalClien
             </div>
           )}
 
-          {/* Shift Expiry Continuation Prompt Banner */}
+          {/* Sleek Compact Red Shift Notification Line */}
           {!embedded && isShiftTimeEnded && (
-            <div className="bg-amber-500/15 border border-amber-500/40 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono text-amber-300 shadow-md animate-in fade-in duration-200">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
-                  <Clock className="w-4 h-4 animate-pulse" />
-                </div>
-                <div>
-                  <div className="font-bold text-amber-200 flex items-center gap-2">
-                    <span>Shift Concluded • Action Required</span>
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase tracking-wider">
-                      Rollover Available
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-amber-300/90 mt-0.5">
-                    Your shift has ended. Please close your shift (Z-Report) and logout, or start a new shift.
-                  </p>
-                </div>
+            <div className="w-full bg-rose-500/10 border border-rose-500/30 rounded-xl px-3.5 py-2 flex flex-wrap items-center justify-between gap-2.5 text-xs font-mono text-rose-300 shadow-xs animate-in fade-in duration-200">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse shrink-0" />
+                <span className="font-bold text-rose-200">
+                  Aap ki shift close ho chuki hai (Shift Concluded)
+                </span>
+                <span className="text-rose-300/70 text-[11px] hidden md:inline">
+                  • Shift has ended. Please close your shift (Z-Report) or start a new shift.
+                </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={handleSeamlessStartNewShift}
-                  className="px-3.5 py-2 rounded-xl btn-gold text-[#342c14] font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+                  className="px-2.5 py-1 rounded-lg btn-gold text-[#342c14] text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 shadow-xs active:scale-95 transition-all cursor-pointer"
                 >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Start New Shift / Cover</span>
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Start New Shift</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => router.push("/terminal/pos/z-report")}
-                  className="px-3.5 py-2 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface-hi)]/80 border border-[var(--border)] text-[var(--text-hi)] font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1 transition-all cursor-pointer"
+                  className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 transition-all cursor-pointer"
                 >
-                  <span>Close Shift &amp; Logout (Z-Report)</span>
-                  <ChevronRight className="w-3.5 h-3.5" />
+                  <span>Close Shift (Z-Report)</span>
+                  <ChevronRight className="w-3 h-3" />
                 </button>
               </div>
             </div>

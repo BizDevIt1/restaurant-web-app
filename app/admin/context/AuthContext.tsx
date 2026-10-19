@@ -19,7 +19,11 @@ import {
   validateStaffShiftWindow,
   ShiftWindowValidation,
   isShiftWindowConcluded,
+  getRestaurantShiftConfig,
 } from "../../../lib/shiftSchedule";
+import { useRestaurantStatusGuard } from "../../../lib/useRestaurantStatusGuard";
+import RestaurantStatusGuardModal from "../../../app/components/RestaurantStatusGuardModal";
+import { RestaurantEvictionType } from "../../../lib/restaurantStatusEvents";
 
 interface AuthContextType {
   user: AuthenticatedUser | null;
@@ -48,6 +52,8 @@ interface AuthContextType {
   logout: () => void;
   shiftValidation: ShiftWindowValidation | null;
   isShiftLocked: boolean;
+  isRestaurantEvicted?: boolean;
+  restaurantEvictionType?: RestaurantEvictionType | null;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -60,6 +66,14 @@ export function AuthProvider({
   // Initialize strictly with real authenticated session - ZERO mock seeds
   const [user, setUser] = useState<AuthenticatedUser | null>(() => sanitizeUserSession(getActiveUserSession()));
   const [activeBranchId, setActiveBranchId] = useState<string>("all");
+
+  // Real-Time Restaurant Status & Security Eviction Guard
+  const { isEvicted, evictionType, handleConfirmRedirect } = useRestaurantStatusGuard({
+    user,
+    onEvicted: () => {
+      setUser(null);
+    },
+  });
 
   // Real-time entitlement refresh: queries Supabase restaurants directly to get fresh enabled_modules
   const refreshEntitlements = async () => {
@@ -527,9 +541,38 @@ export function AuthProvider({
       rawAccess === "KDS_ONLY")
   );
 
-  const shiftValidation = useMemo<ShiftWindowValidation | null>(() => {
+  const [shiftValidation, setShiftValidation] = useState<ShiftWindowValidation | null>(() => {
     if (!user || !isTerminalStaff || !user.assignedShift) return null;
-    return validateStaffShiftWindow(user.assignedShift, new Date(), user);
+    const restId = user.restaurantId || (user as any).restaurant_id || user.organizationId || user.id;
+    const cfg = getRestaurantShiftConfig(restId, user);
+    return validateStaffShiftWindow(user.assignedShift, new Date(), user, cfg);
+  });
+
+  useEffect(() => {
+    if (!user || !isTerminalStaff || !user.assignedShift) {
+      setShiftValidation(null);
+      return;
+    }
+
+    const verify = () => {
+      const restId = user.restaurantId || (user as any).restaurant_id || user.organizationId || user.id;
+      const cfg = getRestaurantShiftConfig(restId, user);
+      const res = validateStaffShiftWindow(user.assignedShift, new Date(), user, cfg);
+      setShiftValidation(res);
+    };
+
+    verify();
+    const interval = setInterval(verify, 5000);
+
+    const handleShiftConfigUpdated = () => {
+      verify();
+    };
+    window.addEventListener("restaurant_shift_config_updated", handleShiftConfigUpdated);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("restaurant_shift_config_updated", handleShiftConfigUpdated);
+    };
   }, [user, isTerminalStaff]);
 
   const isShiftLocked = Boolean(isShiftWindowConcluded(shiftValidation));
@@ -555,9 +598,16 @@ export function AuthProvider({
         logout,
         shiftValidation,
         isShiftLocked,
+        isRestaurantEvicted: isEvicted,
+        restaurantEvictionType: evictionType,
       }}
     >
       {children}
+      <RestaurantStatusGuardModal
+        isOpen={isEvicted}
+        evictionType={evictionType}
+        onConfirmRedirect={handleConfirmRedirect}
+      />
     </AuthContext.Provider>
   );
 }

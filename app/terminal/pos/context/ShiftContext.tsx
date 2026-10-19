@@ -7,6 +7,7 @@ import {
   ShiftWindowValidation,
   isShiftFromPreviousDate,
   isShiftWindowConcluded,
+  getRestaurantShiftConfig,
 } from "@/lib/shiftSchedule";
 
 export interface ShiftContextValue {
@@ -76,7 +77,9 @@ export function ShiftProvider({
         setShiftValidation(null);
         return;
       }
-      const result = validateCashierShiftWindow(shiftToValidate, new Date(), activeShift);
+      const restId = user?.restaurantId || (user as any)?.restaurant_id || user?.id;
+      const cfg = getRestaurantShiftConfig(restId, user);
+      const result = validateCashierShiftWindow(shiftToValidate, new Date(), activeShift, cfg);
       setShiftValidation(result);
 
       // Check 10-minute warning trigger
@@ -93,7 +96,12 @@ export function ShiftProvider({
 
     verify();
     const timer = setInterval(verify, 5000);
-    return () => clearInterval(timer);
+    const handleShiftConfigUpdated = () => verify();
+    window.addEventListener("restaurant_shift_config_updated", handleShiftConfigUpdated);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("restaurant_shift_config_updated", handleShiftConfigUpdated);
+    };
   }, [user, isCashier, activeShift, lastWarningDismissedAt]);
 
   const snoozeWarningModal = useCallback(() => {

@@ -94,26 +94,42 @@ function TerminalShell({ children }: { children: React.ReactNode }) {
     } catch { }
   };
 
+  const [isRoleAuthorized, setIsRoleAuthorized] = useState(false);
+
   // Authentication & Route Protection Guard
   useEffect(() => {
     if (!isMounted) return;
     if (!user) {
+      setIsRoleAuthorized(false);
       const redirectUrl = `/login?redirect=${encodeURIComponent(pathname || "/terminal")}`;
       router.replace(redirectUrl);
       return;
     }
 
-    // Strict Role-Based Financial Isolation Guard:
-    // Ensure Waiters, Chefs, and Riders cannot access POS registers or financial Z-Report views
+    // Admins and Super Admins have unrestricted access to all terminals
+    const userTypeClean = String(user.userType || "").toUpperCase().trim();
+    const roleClean = String(user.role || "").toUpperCase().trim();
+    if (
+      userTypeClean === "ADMIN" ||
+      roleClean === "SUPER_ADMIN" ||
+      roleClean === "STANDALONE_ADMIN" ||
+      roleClean === "FRANCHISE_OWNER" ||
+      roleClean === "BRANCH_ADMIN"
+    ) {
+      setIsRoleAuthorized(true);
+      return;
+    }
+
+    // Operational Staff Role Resolution
     const staffRoleClean = (user.staffRole || "").toLowerCase().trim();
-    const roleClean = (user.role || "").toLowerCase().trim();
+    const lowerRole = (user.role || "").toLowerCase().trim();
     const terminalAccessClean = String(user.terminalAccess || "").toUpperCase().trim();
 
     const isWaiter =
       staffRoleClean === "waiter" ||
       staffRoleClean === "server" ||
-      roleClean === "waiter" ||
-      roleClean === "server" ||
+      lowerRole === "waiter" ||
+      lowerRole === "server" ||
       terminalAccessClean === "WAITER_ONLY" ||
       terminalAccessClean === "WAITER";
 
@@ -122,36 +138,70 @@ function TerminalShell({ children }: { children: React.ReactNode }) {
       staffRoleClean === "kitchen" ||
       staffRoleClean === "cook" ||
       staffRoleClean === "kds" ||
-      roleClean === "chef" ||
-      roleClean === "kitchen" ||
-      roleClean === "cook" ||
-      roleClean === "kds" ||
+      lowerRole === "chef" ||
+      lowerRole === "kitchen" ||
+      lowerRole === "cook" ||
+      lowerRole === "kds" ||
       terminalAccessClean === "KDS_ONLY" ||
       terminalAccessClean === "KITCHEN_ONLY";
 
     const isRider =
       staffRoleClean === "rider" ||
-      roleClean === "rider" ||
+      lowerRole === "rider" ||
       terminalAccessClean === "RIDER_ONLY";
 
-    const isFinancialPath =
-      pathname.startsWith("/terminal/pos") ||
-      pathname.startsWith("/terminal/z-report");
+    const isCashier =
+      staffRoleClean === "cashier" ||
+      staffRoleClean === "manager" ||
+      lowerRole === "cashier" ||
+      lowerRole === "manager" ||
+      terminalAccessClean === "POS_ONLY" ||
+      (!isWaiter && !isChef && !isRider);
 
-    if (isFinancialPath) {
-      if (isWaiter) {
-        router.replace("/terminal/waiter");
-        return;
-      }
-      if (isChef) {
-        router.replace("/terminal/kitchen");
-        return;
-      }
-      if (isRider) {
-        router.replace("/terminal/rider");
+    const getStaffDesignatedTerminal = () => {
+      if (isWaiter) return "/terminal/waiter";
+      if (isChef) return "/terminal/kitchen";
+      if (isRider) return "/terminal/rider";
+      return "/terminal/pos";
+    };
+
+    // 1. POS & Financial Views: Allow ONLY Cashier or Manager
+    if (pathname.startsWith("/terminal/pos") || pathname.startsWith("/terminal/z-report")) {
+      if (!isCashier) {
+        setIsRoleAuthorized(false);
+        router.replace(getStaffDesignatedTerminal());
         return;
       }
     }
+
+    // 2. Waiter Terminal: Allow ONLY Waiter
+    if (pathname.startsWith("/terminal/waiter")) {
+      if (!isWaiter) {
+        setIsRoleAuthorized(false);
+        router.replace(getStaffDesignatedTerminal());
+        return;
+      }
+    }
+
+    // 3. Kitchen KDS Terminal: Allow ONLY Kitchen Staff / Chef
+    if (pathname.startsWith("/terminal/kitchen")) {
+      if (!isChef) {
+        setIsRoleAuthorized(false);
+        router.replace(getStaffDesignatedTerminal());
+        return;
+      }
+    }
+
+    // 4. Rider Terminal: Allow ONLY Rider
+    if (pathname.startsWith("/terminal/rider")) {
+      if (!isRider) {
+        setIsRoleAuthorized(false);
+        router.replace(getStaffDesignatedTerminal());
+        return;
+      }
+    }
+
+    setIsRoleAuthorized(true);
   }, [user, isMounted, pathname, router]);
 
   const handleLogout = () => {
@@ -169,7 +219,7 @@ function TerminalShell({ children }: { children: React.ReactNode }) {
     router.replace("/login");
   };
 
-  if (!isMounted || !user) {
+  if (!isMounted || !user || !isRoleAuthorized) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-[var(--bg-deep)] text-[var(--text-hi)]">
         <div className="flex flex-col items-center gap-3">
@@ -177,7 +227,7 @@ function TerminalShell({ children }: { children: React.ReactNode }) {
             <ShieldCheck className="w-6 h-6 text-[var(--gold)]" />
           </div>
           <span className="text-xs font-mono font-bold tracking-widest uppercase text-[var(--text-lo)]">
-            Loading Staff Terminal...
+            Verifying Terminal Clearance...
           </span>
         </div>
       </div>

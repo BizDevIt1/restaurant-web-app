@@ -1,25 +1,28 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Flame,
   Clock,
   CheckCircle2,
-  Check,
-  Bell,
   Volume2,
   Archive,
-  RefreshCw,
-  Sparkles,
   AlertTriangle,
-  RotateCcw,
-  ChevronDown,
+  Ban,
+  Search,
+  Calendar,
+  Utensils,
+  Receipt,
+  X,
+  AlertCircle,
+  HelpCircle,
 } from "lucide-react";
 import { KdsTicket } from "../../types";
 import ResponsiveSelect from "../ResponsiveSelect";
 import { useAuth } from "../../context/AuthContext";
-import { playKitchenBuzzer, saveStoredKdsTickets } from "../../../../lib/tenantStore";
+import { playKitchenBuzzer } from "../../../../lib/tenantStore";
 import { formatSmartDuration } from "../../../../utils/timeFormatters";
+import { cancelAndVoidOrderByAdmin } from "../../../../lib/adminOrderVoid";
 
 interface KdsViewProps {
   kdsTickets: KdsTicket[];
@@ -35,14 +38,27 @@ export default function KdsView({
   showToast,
 }: KdsViewProps) {
   const { user } = useAuth();
-  const currentOrgId = user?.organizationId || user?.id || "default";
 
-  // Filter tab state
-  const [activeTab, setActiveTab] = useState<"all_active" | "queued" | "preparing" | "ready" | "completed">("all_active");
+  // Scope filter: Today's Orders (default true) vs All Time
+  const [onlyToday, setOnlyToday] = useState(true);
+
+  // Active filter tab
+  const [activeTab, setActiveTab] = useState<
+    "all" | "queued" | "preparing" | "ready" | "completed" | "voided" | "expired"
+  >("all");
+
+  const [searchQuery, setSearchQuery] = useState("");
   const [isBuzzerRinging, setIsBuzzerRinging] = useState(false);
   const [nowTime, setNowTime] = useState(Date.now());
 
-  // Real-time 1-second ticking interval for live reverse cook timers
+  // Cancel/Void modal state
+  const [cancellingTicket, setCancellingTicket] = useState<KdsTicket | null>(null);
+  const [cancelReasonPreset, setCancelReasonPreset] = useState("Customer Changed Mind");
+  const [cancelReasonCustom, setCancelReasonCustom] = useState("");
+  const [isVoiding, setIsVoiding] = useState(false);
+  const customReasonInputRef = useRef<HTMLInputElement | null>(null);
+
+  // 1-second ticking interval for reverse cook timers and elapsed times
   useEffect(() => {
     const timer = setInterval(() => {
       setNowTime(Date.now());
@@ -50,7 +66,7 @@ export default function KdsView({
     return () => clearInterval(timer);
   }, []);
 
-  // Sound Buzzer Chime with visual wave effect
+  // Buzzer chime with visual wave animation
   const triggerBuzzerChime = () => {
     playKitchenBuzzer();
     setIsBuzzerRinging(true);
@@ -60,11 +76,105 @@ export default function KdsView({
     }, 1200);
   };
 
-  // Live reverse countdown timing engine
+  // Helper to parse ticket creation timestamp in ms
+  const getTicketCreatedAtMs = (ticket: KdsTicket, fallbackNow: number): number => {
+    if (ticket.created_at) {
+      const t = new Date(ticket.created_at).getTime();
+      if (!isNaN(t)) return t;
+    }
+    if (ticket.createdAt) {
+      const t = new Date(ticket.createdAt).getTime();
+      if (!isNaN(t)) return t;
+      const match = ticket.createdAt.match(/(\d+):(\d+)(?::(\d+))?\s*(AM|PM)?/i);
+      if (match) {
+        const d = new Date();
+        let h = parseInt(match[1], 10);
+        const m = parseInt(match[2], 10);
+        const ampm = match[4];
+        if (ampm) {
+          if (ampm.toUpperCase() === "PM" && h < 12) h += 12;
+          if (ampm.toUpperCase() === "AM" && h === 12) h = 0;
+        }
+        d.setHours(h, m, 0, 0);
+        return d.getTime();
+      }
+    }
+    return fallbackNow;
+  };
+
+  // Date check for today's orders
+  const isTodayTicket = (ticket: KdsTicket): boolean => {
+    const ts = ticket.created_at || ticket.createdAt;
+    if (!ts) return true;
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return true;
+    const now = new Date();
+    return (
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate()
+    );
+  };
+
+  // Status classification helpers
+  const isVoidedStatus = (status?: string | null): boolean => {
+    if (!status) return false;
+    const s = status.trim().toLowerCase();
+    return s === "voided" || s === "cancelled";
+  };
+
+  const isCompletedStatus = (status?: string | null): boolean => {
+    if (!status) return false;
+    const s = status.trim().toLowerCase();
+    return (
+      s === "completed" ||
+      s === "fulfilled" ||
+      s === "done" ||
+      s === "closed" ||
+      s === "archived"
+    );
+  };
+
+  const isQueuedStatus = (status?: string | null): boolean => {
+    if (!status) return false;
+    const s = status.trim().toLowerCase();
+    return s === "queued" || s === "pending" || s === "new";
+  };
+
+  const isCookingStatus = (status?: string | null): boolean => {
+    if (!status) return false;
+    const s = status.trim().toLowerCase();
+    return s === "preparing" || s === "cooking" || s === "in_progress";
+  };
+
+  const isReadyStatus = (status?: string | null): boolean => {
+    if (!status) return false;
+    const s = status.trim().toLowerCase();
+    return s === "ready" || s === "prepared";
+  };
+
+  // 60-minute threshold for stale/expired tickets
+  const STALE_THRESHOLD_MINUTES = 60;
+
+  const checkIsTicketExpired = (ticket: KdsTicket, nowMs: number) => {
+    if (ticket.isExpired || ticket.is_expired) {
+      return { isExpired: true, elapsedMinutes: 60, elapsedText: "Expired" };
+    }
+    if (!isQueuedStatus(ticket.status)) {
+      return { isExpired: false, elapsedMinutes: 0, elapsedText: "" };
+    }
+    const createdMs = getTicketCreatedAtMs(ticket, nowMs);
+    const elapsedSeconds = Math.max(0, Math.floor((nowMs - createdMs) / 1000));
+    const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+    const isExpired = elapsedMinutes >= STALE_THRESHOLD_MINUTES;
+    const elapsedText = formatSmartDuration(elapsedSeconds);
+    return { isExpired, elapsedMinutes, elapsedText };
+  };
+
+  // Dynamic reverse countdown timing calculation
   const getTicketTiming = (ticket: KdsTicket) => {
     let estimatedMinutes =
-      ticket.estimatedPrepTime ||
-      ticket.estimated_prep_time;
+      ticket.estimatedPrepTime || ticket.estimated_prep_time;
 
     if (!estimatedMinutes && ticket.items && ticket.items.length > 0) {
       const itemTimes = ticket.items.map((it: any) => {
@@ -80,9 +190,7 @@ export default function KdsView({
       estimatedMinutes = 15;
     }
 
-    const startedAt =
-      ticket.prep_timer_started_at ||
-      ticket.prepStartedAt;
+    const startedAt = ticket.prep_timer_started_at || ticket.prepStartedAt;
 
     if (!startedAt || ticket.status === "queued") {
       return {
@@ -125,463 +233,746 @@ export default function KdsView({
     };
   };
 
-  // Advance ticket status through full workflow: queued -> preparing -> ready -> completed
-  const handleTransition = (ticketId: string) => {
-    handleAdvanceKds(ticketId);
-  };
+  // Base list filtered by Today's Scope
+  const scopedTickets = useMemo(() => {
+    if (!onlyToday) return kdsTickets;
+    return kdsTickets.filter((t) => isTodayTicket(t));
+  }, [kdsTickets, onlyToday]);
 
-  // Re-open completed ticket if needed
-  const handleReopenTicket = (ticketId: string) => {
-    handleAdvanceKds(ticketId, "preparing");
-  };
+  // Telemetry Audit Counts
+  const telemetry = useMemo(() => {
+    let queued = 0;
+    let cooking = 0;
+    let ready = 0;
+    let completed = 0;
+    let voided = 0;
+    let expired = 0;
 
-  // Stale Ticket Threshold Configuration (60 minutes unstarted)
-  const STALE_THRESHOLD_MINUTES = 60;
-
-  // Helper to parse ticket creation timestamp in ms
-  const getTicketCreatedAtMs = (ticket: KdsTicket, fallbackNow: number): number => {
-    if (ticket.created_at) {
-      const t = new Date(ticket.created_at).getTime();
-      if (!isNaN(t)) return t;
-    }
-    if (ticket.createdAt) {
-      const t = new Date(ticket.createdAt).getTime();
-      if (!isNaN(t)) return t;
-      const match = ticket.createdAt.match(/(\d+):(\d+)(?::(\d+))?\s*(AM|PM)?/i);
-      if (match) {
-        const d = new Date();
-        let h = parseInt(match[1], 10);
-        const m = parseInt(match[2], 10);
-        const ampm = match[4];
-        if (ampm) {
-          if (ampm.toUpperCase() === "PM" && h < 12) h += 12;
-          if (ampm.toUpperCase() === "AM" && h === 12) h = 0;
-        }
-        d.setHours(h, m, 0, 0);
-        return d.getTime();
+    scopedTickets.forEach((t) => {
+      const { isExpired } = checkIsTicketExpired(t, nowTime);
+      if (isVoidedStatus(t.status)) {
+        voided += 1;
+      } else if (isExpired) {
+        expired += 1;
+      } else if (isCompletedStatus(t.status)) {
+        completed += 1;
+      } else if (isReadyStatus(t.status)) {
+        ready += 1;
+      } else if (isCookingStatus(t.status)) {
+        cooking += 1;
+      } else if (isQueuedStatus(t.status)) {
+        queued += 1;
       }
+    });
+
+    return {
+      total: scopedTickets.length,
+      queued,
+      cooking,
+      ready,
+      completed,
+      voided,
+      expired,
+    };
+  }, [scopedTickets, nowTime]);
+
+  // Filtered tickets based on active tab and search query
+  const filteredTickets = useMemo(() => {
+    return scopedTickets.filter((ticket) => {
+      const { isExpired } = checkIsTicketExpired(ticket, nowTime);
+      const isVoid = isVoidedStatus(ticket.status);
+      const isDone = isCompletedStatus(ticket.status);
+      const isCook = isCookingStatus(ticket.status);
+      const isRdy = isReadyStatus(ticket.status);
+      const isQueue = isQueuedStatus(ticket.status) && !isExpired && !isVoid;
+
+      // Filter by tab
+      if (activeTab === "queued" && !isQueue) return false;
+      if (activeTab === "preparing" && !isCook) return false;
+      if (activeTab === "ready" && !isRdy) return false;
+      if (activeTab === "completed" && !isDone) return false;
+      if (activeTab === "voided" && !isVoid) return false;
+      if (activeTab === "expired" && (!isExpired || isVoid || isDone)) return false;
+
+      // Search query filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const idMatch = ticket.id?.toLowerCase().includes(q);
+        const tblMatch = ticket.tableOrChannel?.toLowerCase().includes(q);
+        const serverMatch = ticket.serverName?.toLowerCase().includes(q);
+        const itemsMatch = ticket.items?.some((it) =>
+          it.name?.toLowerCase().includes(q) || (it.notes && it.notes.toLowerCase().includes(q))
+        );
+        if (!idMatch && !tblMatch && !serverMatch && !itemsMatch) return false;
+      }
+
+      return true;
+    });
+  }, [scopedTickets, activeTab, searchQuery, nowTime]);
+
+  // Cancel / Void Handler via Universal adminOrderVoid helper
+  const handleConfirmCancelOrder = async () => {
+    if (!cancellingTicket) return;
+
+    if (cancelReasonPreset === "Other" && !cancelReasonCustom.trim()) {
+      showToast("Please write a custom reason for cancellation.");
+      customReasonInputRef.current?.focus();
+      return;
     }
-    return fallbackNow;
+
+    setIsVoiding(true);
+
+    const finalReason =
+      cancelReasonPreset === "Other"
+        ? cancelReasonCustom.trim()
+        : cancelReasonCustom.trim()
+        ? `${cancelReasonPreset} - ${cancelReasonCustom.trim()}`
+        : cancelReasonPreset;
+
+    try {
+      const res = await cancelAndVoidOrderByAdmin(user, {
+        ticketId: cancellingTicket.id,
+        orderId: cancellingTicket.orderId || cancellingTicket.id,
+        tableNumber: cancellingTicket.table_number || cancellingTicket.tableOrChannel,
+        reason: finalReason,
+        adminName: user?.name || user?.email || "Admin",
+      });
+
+      if (res.success) {
+        // Optimistically update local tickets state
+        if (setKdsTickets) {
+          setKdsTickets((prev) =>
+            prev.map((t) =>
+              t.id === cancellingTicket.id
+                ? {
+                    ...t,
+                    status: "voided",
+                    void_reason: `Cancelled by Admin: ${finalReason}`,
+                    voided_at: new Date().toISOString(),
+                  }
+                : t
+            )
+          );
+        }
+
+        showToast(
+          `Order ${cancellingTicket.id} cancelled & voided across Kitchen, Waiter, and POS.`
+        );
+        setCancellingTicket(null);
+        setCancelReasonCustom("");
+      } else {
+        showToast(`Failed to cancel order: ${res.error || "Unknown error"}`);
+      }
+    } catch (err: any) {
+      showToast(`Error cancelling order: ${err?.message || "Internal error"}`);
+    } finally {
+      setIsVoiding(false);
+    }
   };
 
-  // Status check helpers
-  const isCompletedStatus = (status?: string | null): boolean => {
-    if (!status) return false;
-    const s = status.trim().toLowerCase();
-    return (
-      s === "completed" ||
-      s === "archived" ||
-      s === "fulfilled" ||
-      s === "cancelled" ||
-      s === "done" ||
-      s === "closed"
-    );
-  };
-
-  const isQueuedStatus = (status?: string | null): boolean => {
-    if (!status) return false;
-    const s = status.trim().toLowerCase();
-    return s === "queued" || s === "pending" || s === "new";
-  };
-
-  const isCookingStatus = (status?: string | null): boolean => {
-    if (!status) return false;
-    const s = status.trim().toLowerCase();
-    return s === "preparing" || s === "cooking" || s === "in_progress";
-  };
-
-  const isReadyStatus = (status?: string | null): boolean => {
-    if (!status) return false;
-    const s = status.trim().toLowerCase();
-    return s === "ready" || s === "prepared";
-  };
-
-  const checkIsTicketStale = (ticket: KdsTicket, nowMs: number) => {
-    if (!isQueuedStatus(ticket.status)) {
-      return { isStale: false, elapsedMinutes: 0, elapsedText: "" };
-    }
-    const createdMs = getTicketCreatedAtMs(ticket, nowMs);
-    const elapsedSeconds = Math.max(0, Math.floor((nowMs - createdMs) / 1000));
-    const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-    const isStale = elapsedMinutes >= STALE_THRESHOLD_MINUTES;
-    const elapsedText = formatSmartDuration(elapsedSeconds);
-    return { isStale, elapsedMinutes, elapsedText };
-  };
-
-  // Counts for telemetry
-  const queuedTickets = kdsTickets.filter((t) => isQueuedStatus(t.status));
-  const preparingTickets = kdsTickets.filter((t) => isCookingStatus(t.status));
-  const readyTickets = kdsTickets.filter((t) => isReadyStatus(t.status));
-  const completedTickets = kdsTickets.filter((t) => isCompletedStatus(t.status));
-
-  const filteredTickets = kdsTickets.filter((ticket) => {
-    if (activeTab === "all_active") {
-      return !isCompletedStatus(ticket.status);
-    }
-    if (activeTab === "queued") {
-      return isQueuedStatus(ticket.status);
-    }
-    if (activeTab === "preparing") {
-      return isCookingStatus(ticket.status);
-    }
-    if (activeTab === "ready") {
-      return isReadyStatus(ticket.status);
-    }
-    if (activeTab === "completed") {
-      return isCompletedStatus(ticket.status);
-    }
-    return true;
+  const todayDateStr = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
   });
 
   return (
-    <div className={`px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200 transition-all ${isBuzzerRinging ? "ring-4 ring-amber-500/50" : ""
-      }`}>
+    <div
+      className={`px-4 sm:px-6 md:px-8 py-6 space-y-6 sm:space-y-8 max-w-[1400px] w-full mx-auto animate-in fade-in duration-200 transition-all ${
+        isBuzzerRinging ? "ring-4 ring-amber-500/50" : ""
+      }`}
+    >
       {/* Header Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-[var(--border)]">
         <div>
-          <h1 className="font-display font-black text-2xl sm:text-4xl text-[var(--text-hi)] tracking-tight">
-            Kitchen Order Display{" "}
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-emerald-400">
+              Live Order & Kitchen Audit
+            </span>
+            <span className="text-[11px] font-mono text-[var(--text-faint)]">•</span>
+            <span className="text-[11px] font-mono text-[var(--text-faint)] flex items-center gap-1">
+              <Calendar className="w-3 h-3 text-[var(--gold)]" />
+              {todayDateStr}
+            </span>
+          </div>
+          <h1 className="font-display font-black text-2xl sm:text-3xl text-[var(--text-hi)] tracking-tight">
+            Order Audit &{" "}
             <span className="bg-gradient-to-r from-[#fcebc0] via-[#e3b13b] to-[#e04e17] bg-clip-text text-transparent">
-              (KDS Station)
+              Kitchen Operations Hub
             </span>
           </h1>
+          <p className="text-xs font-mono text-[var(--text-lo)] mt-0.5">
+            Real-time daily incoming orders, preparation stages, and cross-terminal order cancellation control.
+          </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Today Only vs All History Switcher */}
+          <button
+            type="button"
+            onClick={() => setOnlyToday((prev) => !prev)}
+            className={`px-3.5 py-2 rounded-xl border text-xs font-mono font-bold cursor-pointer flex items-center gap-2 transition-all shadow-2xs ${
+              onlyToday
+                ? "bg-[var(--gold)] text-[#2a2007] border-[var(--gold)] font-black"
+                : "bg-white/80 dark:bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--text-hi)]"
+            }`}
+          >
+            <Calendar className="w-3.5 h-3.5" />
+            <span>{onlyToday ? "Daily Audit: Today Only" : "All Records (All Dates)"}</span>
+          </button>
+
+          {/* Test Buzzer Chime */}
           <button
             type="button"
             onClick={triggerBuzzerChime}
-            className={`px-4 py-2.5 rounded-xl border text-xs font-bold font-mono cursor-pointer flex items-center gap-2 transition-all shadow-md ${isBuzzerRinging
+            className={`px-3.5 py-2 rounded-xl border text-xs font-bold font-mono cursor-pointer flex items-center gap-2 transition-all shadow-2xs ${
+              isBuzzerRinging
                 ? "bg-amber-500 text-black border-amber-400 shadow-amber-500/40 scale-105"
-                : "bg-white/80 dark:bg-[var(--surface-hi)] border border-[var(--border)] hover:border-amber-500/50 text-amber-900 dark:text-amber-400 shadow-2xs"
-              }`}
+                : "bg-white/80 dark:bg-[var(--surface-hi)] border border-[var(--border)] hover:border-amber-500/50 text-amber-900 dark:text-amber-400"
+            }`}
           >
-            <Volume2 className={`w-4 h-4 ${isBuzzerRinging ? "animate-bounce" : ""}`} />
-            <span>Test Buzzer (Chime)</span>
+            <Volume2 className={`w-3.5 h-3.5 ${isBuzzerRinging ? "animate-bounce" : ""}`} />
+            <span>Test Buzzer</span>
           </button>
         </div>
       </div>
 
-      {/* KDS Stage Telemetry Bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-[var(--surface-hi)]/70 border border-[var(--border)] space-y-1 shadow-2xs">
-          <div className="flex items-center justify-between text-[11px] font-mono text-[var(--text-lo)] dark:text-[var(--text-faint)] uppercase">
+      {/* Telemetry Bar (7 KPI Cards) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
+        {/* Total Orders Today */}
+        <div
+          onClick={() => setActiveTab("all")}
+          className={`p-3 rounded-2xl border space-y-1 transition-all cursor-pointer shadow-2xs ${
+            activeTab === "all"
+              ? "bg-[var(--surface-hi)] border-[var(--gold)] ring-1 ring-[var(--gold)]"
+              : "bg-white/80 dark:bg-[var(--surface-hi)]/70 border-[var(--border)] hover:border-[var(--gold)]/40"
+          }`}
+        >
+          <div className="flex items-center justify-between text-[11px] font-mono text-[var(--text-lo)] uppercase">
+            <span>Total Today</span>
+            <Receipt className="w-3.5 h-3.5 text-[var(--gold)]" />
+          </div>
+          <p className="text-xl font-display font-black text-[var(--text-hi)]">{telemetry.total}</p>
+        </div>
+
+        {/* Queued / Placed (Not Cooking Yet) */}
+        <div
+          onClick={() => setActiveTab("queued")}
+          className={`p-3 rounded-2xl border space-y-1 transition-all cursor-pointer shadow-2xs ${
+            activeTab === "queued"
+              ? "bg-blue-500/10 border-blue-500 ring-1 ring-blue-500"
+              : "bg-white/80 dark:bg-[var(--surface-hi)]/70 border-[var(--border)] hover:border-blue-400/40"
+          }`}
+        >
+          <div className="flex items-center justify-between text-[11px] font-mono text-blue-400 uppercase">
             <span>Queued</span>
-            <Clock className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+            <Clock className="w-3.5 h-3.5 text-blue-500" />
           </div>
-          <p className="text-xl font-display font-black text-blue-700 dark:text-blue-400">{queuedTickets.length}</p>
+          <p className="text-xl font-display font-black text-blue-600 dark:text-blue-400">{telemetry.queued}</p>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-[var(--surface-hi)]/70 border border-[var(--border)] space-y-1 shadow-2xs">
-          <div className="flex items-center justify-between text-[11px] font-mono text-[var(--text-lo)] dark:text-[var(--text-faint)] uppercase">
-            <span>Cooking Now</span>
-            <Flame className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+        {/* Cooking Now */}
+        <div
+          onClick={() => setActiveTab("preparing")}
+          className={`p-3 rounded-2xl border space-y-1 transition-all cursor-pointer shadow-2xs ${
+            activeTab === "preparing"
+              ? "bg-amber-500/10 border-amber-500 ring-1 ring-amber-500"
+              : "bg-white/80 dark:bg-[var(--surface-hi)]/70 border-[var(--border)] hover:border-amber-400/40"
+          }`}
+        >
+          <div className="flex items-center justify-between text-[11px] font-mono text-amber-500 uppercase">
+            <span>Cooking</span>
+            <Flame className="w-3.5 h-3.5 text-amber-500" />
           </div>
-          <p className="text-xl font-display font-black text-amber-800 dark:text-amber-400">{preparingTickets.length}</p>
+          <p className="text-xl font-display font-black text-amber-600 dark:text-amber-400">{telemetry.cooking}</p>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-[var(--surface-hi)]/70 border border-[var(--border)] space-y-1 shadow-2xs">
-          <div className="flex items-center justify-between text-[11px] font-mono text-[var(--text-lo)] dark:text-[var(--text-faint)] uppercase">
-            <span>Ready for Handoff</span>
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-[#25d366]" />
+        {/* Ready for Handoff */}
+        <div
+          onClick={() => setActiveTab("ready")}
+          className={`p-3 rounded-2xl border space-y-1 transition-all cursor-pointer shadow-2xs ${
+            activeTab === "ready"
+              ? "bg-emerald-500/10 border-emerald-500 ring-1 ring-emerald-500"
+              : "bg-white/80 dark:bg-[var(--surface-hi)]/70 border-[var(--border)] hover:border-emerald-400/40"
+          }`}
+        >
+          <div className="flex items-center justify-between text-[11px] font-mono text-emerald-500 uppercase">
+            <span>Ready</span>
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
           </div>
-          <p className="text-xl font-display font-black text-emerald-700 dark:text-[#25d366]">{readyTickets.length}</p>
+          <p className="text-xl font-display font-black text-emerald-600 dark:text-[#25d366]">{telemetry.ready}</p>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-white/80 dark:bg-[var(--surface-hi)]/70 border border-[var(--border)] space-y-1 shadow-2xs">
-          <div className="flex items-center justify-between text-[11px] font-mono text-[var(--text-lo)] dark:text-[var(--text-faint)] uppercase">
-            <span>Completed Today</span>
-            <Archive className="w-3.5 h-3.5 text-amber-700 dark:text-[var(--gold)]" />
+        {/* Completed Today */}
+        <div
+          onClick={() => setActiveTab("completed")}
+          className={`p-3 rounded-2xl border space-y-1 transition-all cursor-pointer shadow-2xs ${
+            activeTab === "completed"
+              ? "bg-[var(--surface-hi)] border-[var(--gold)] ring-1 ring-[var(--gold)]"
+              : "bg-white/80 dark:bg-[var(--surface-hi)]/70 border-[var(--border)] hover:border-[var(--gold)]/40"
+          }`}
+        >
+          <div className="flex items-center justify-between text-[11px] font-mono text-[var(--gold)] uppercase">
+            <span>Completed</span>
+            <Archive className="w-3.5 h-3.5 text-[var(--gold)]" />
           </div>
-          <p className="text-xl font-display font-black text-amber-800 dark:text-[var(--gold)]">{completedTickets.length}</p>
+          <p className="text-xl font-display font-black text-amber-700 dark:text-[var(--gold)]">{telemetry.completed}</p>
+        </div>
+
+        {/* Voided / Cancelled */}
+        <div
+          onClick={() => setActiveTab("voided")}
+          className={`p-3 rounded-2xl border space-y-1 transition-all cursor-pointer shadow-2xs ${
+            activeTab === "voided"
+              ? "bg-red-500/10 border-red-500 ring-1 ring-red-500"
+              : "bg-white/80 dark:bg-[var(--surface-hi)]/70 border-[var(--border)] hover:border-red-400/40"
+          }`}
+        >
+          <div className="flex items-center justify-between text-[11px] font-mono text-red-400 uppercase">
+            <span>Voided</span>
+            <Ban className="w-3.5 h-3.5 text-red-500" />
+          </div>
+          <p className="text-xl font-display font-black text-red-600 dark:text-red-400">{telemetry.voided}</p>
+        </div>
+
+        {/* Expired / Stale */}
+        <div
+          onClick={() => setActiveTab("expired")}
+          className={`p-3 rounded-2xl border space-y-1 transition-all cursor-pointer shadow-2xs ${
+            activeTab === "expired"
+              ? "bg-rose-500/10 border-rose-500 ring-1 ring-rose-500"
+              : "bg-white/80 dark:bg-[var(--surface-hi)]/70 border-[var(--border)] hover:border-rose-400/40"
+          }`}
+        >
+          <div className="flex items-center justify-between text-[11px] font-mono text-rose-400 uppercase">
+            <span>Expired</span>
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
+          </div>
+          <p className="text-xl font-display font-black text-rose-600 dark:text-rose-400">{telemetry.expired}</p>
         </div>
       </div>
 
-      {/* Stage Filter Tabs (Mobile Dropdown < 1024px, Desktop Pills >= 1024px) */}
-      <div className="w-full">
-        {/* Mobile & Tablet Dropdown Filter (< 1024px) */}
-        <div className="lg:hidden w-full mb-3">
+      {/* Filter Tabs & Search Bar */}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+        {/* Mobile Filter Dropdown */}
+        <div className="lg:hidden w-full">
           <ResponsiveSelect
             value={activeTab}
             onChange={(val) => setActiveTab(val as any)}
             options={[
-              { id: "all_active", label: "All Active", count: queuedTickets.length + preparingTickets.length + readyTickets.length },
-              { id: "queued", label: "Queued", count: queuedTickets.length },
-              { id: "preparing", label: "Cooking", count: preparingTickets.length },
-              { id: "ready", label: "Ready", count: readyTickets.length },
-              { id: "completed", label: "Completed", count: completedTickets.length },
+              { id: "all", label: "All Orders", count: telemetry.total },
+              { id: "queued", label: "Queued (Not Started)", count: telemetry.queued },
+              { id: "preparing", label: "Cooking Now", count: telemetry.cooking },
+              { id: "ready", label: "Ready for Handoff", count: telemetry.ready },
+              { id: "completed", label: "Completed", count: telemetry.completed },
+              { id: "voided", label: "Voided / Cancelled", count: telemetry.voided },
+              { id: "expired", label: "Expired / Stale", count: telemetry.expired },
             ]}
           />
         </div>
 
-        {/* Desktop Horizontal Pills (>= 1024px) */}
-        <div className="hidden lg:flex items-center gap-1.5 p-1 rounded-2xl bg-[var(--surface-hi)]/60 border border-[var(--border)] overflow-x-auto max-w-full scrollbar-none">
+        {/* Desktop Filter Pills */}
+        <div className="hidden lg:flex items-center gap-1 p-1 rounded-2xl bg-[var(--surface-hi)]/60 border border-[var(--border)] overflow-x-auto max-w-full scrollbar-none">
           {[
-            { id: "all_active", label: `All Active (${queuedTickets.length + preparingTickets.length + readyTickets.length})` },
-            { id: "queued", label: `Queued (${queuedTickets.length})` },
-            { id: "preparing", label: `Cooking (${preparingTickets.length})` },
-            { id: "ready", label: `Ready (${readyTickets.length})` },
-            { id: "completed", label: `Completed (${completedTickets.length})` },
+            { id: "all", label: `All (${telemetry.total})` },
+            { id: "queued", label: `Queued (${telemetry.queued})` },
+            { id: "preparing", label: `Cooking (${telemetry.cooking})` },
+            { id: "ready", label: `Ready (${telemetry.ready})` },
+            { id: "completed", label: `Completed (${telemetry.completed})` },
+            { id: "voided", label: `Voided (${telemetry.voided})` },
+            { id: "expired", label: `Expired (${telemetry.expired})` },
           ].map((tab) => (
             <button
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id as any)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer whitespace-nowrap ${activeTab === tab.id
+              className={`px-3 py-1.5 rounded-xl text-xs font-mono font-bold transition-all cursor-pointer whitespace-nowrap ${
+                activeTab === tab.id
                   ? "btn-gold text-[#342c14] shadow-sm font-black"
                   : "text-[var(--text-lo)] hover:text-[var(--text-hi)] hover:bg-[var(--surface-hi)]"
-                }`}
+              }`}
             >
               {tab.label}
             </button>
           ))}
         </div>
-      </div>
 
-      {/* KDS Ticket Cards Grid */}
-      {filteredTickets.length === 0 ? (
-        <div className="glass-panel p-12 text-center rounded-2xl border border-[var(--border)] space-y-3">
-          {activeTab === "completed" ? (
-            <>
-              <Archive className="w-12 h-12 text-[var(--gold)] mx-auto opacity-70" />
-              <p className="font-display font-bold text-base text-[var(--text-hi)]">No Completed Orders Yet</p>
-              <p className="text-xs font-mono text-[var(--text-faint)]">
-                Orders marked as completed, fulfilled, or archived will appear here.
-              </p>
-            </>
-          ) : (
-            <>
-              <CheckCircle2 className="w-12 h-12 text-[#25d366] mx-auto opacity-70" />
-              <p className="font-display font-bold text-base text-[var(--text-hi)]">Kitchen Queue is Clear!</p>
-              <p className="text-xs font-mono text-[var(--text-faint)]">
-                All orders in this stage have been prepared or dispatched.
-              </p>
-            </>
+        {/* Search Input */}
+        <div className="relative min-w-[240px] md:w-72">
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-lo)]" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search KOT, table, dish..."
+            className="w-full pl-9 pr-3 py-1.5 rounded-xl bg-white/70 dark:bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-mono text-[var(--text-hi)] placeholder:text-[var(--text-faint)] focus:outline-none focus:border-[var(--gold)] transition-colors"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--text-lo)] hover:text-[var(--text-hi)]"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           )}
         </div>
+      </div>
+
+      {/* Orders ListTile Form */}
+      {filteredTickets.length === 0 ? (
+        <div className="glass-panel p-12 text-center rounded-2xl border border-[var(--border)] space-y-3">
+          <Utensils className="w-12 h-12 text-[var(--gold)] mx-auto opacity-70" />
+          <p className="font-display font-bold text-base text-[var(--text-hi)]">
+            No Orders Found in This View
+          </p>
+          <p className="text-xs font-mono text-[var(--text-faint)] max-w-md mx-auto">
+            {activeTab === "voided"
+              ? "No orders have been voided or cancelled today."
+              : activeTab === "expired"
+              ? "All placed orders were initiated on time. No stale/expired tickets."
+              : activeTab === "completed"
+              ? "No orders completed yet for the selected period."
+              : "No tickets matching your filter criteria."}
+          </p>
+        </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
+        <div className="space-y-3">
           {filteredTickets.map((ticket) => {
             const timing = getTicketTiming(ticket);
-            const { isStale, elapsedMinutes: elapsedSincePlaced, elapsedText: elapsedSincePlacedText } = checkIsTicketStale(ticket, nowTime);
+            const { isExpired, elapsedMinutes: elapsedSincePlaced, elapsedText: elapsedSincePlacedText } =
+              checkIsTicketExpired(ticket, nowTime);
             const isCooking = isCookingStatus(ticket.status);
             const isReady = isReadyStatus(ticket.status);
             const isCompleted = isCompletedStatus(ticket.status);
+            const isVoided = isVoidedStatus(ticket.status);
             const isOverdue = isCooking && timing.isOverdue;
+
+            // Status border accent
+            const statusAccentColor = isVoided
+              ? "border-l-red-500 bg-red-950/10"
+              : isExpired
+              ? "border-l-rose-500 bg-rose-950/10"
+              : isCompleted
+              ? "border-l-[var(--gold)]/40 bg-[var(--surface-hi)]/20 opacity-80"
+              : isReady
+              ? "border-l-[#25d366] bg-[#25d366]/5"
+              : isOverdue
+              ? "border-l-red-500 bg-red-500/5"
+              : isCooking
+              ? "border-l-amber-500 bg-amber-500/5"
+              : "border-l-blue-500 bg-blue-500/5";
 
             return (
               <div
                 key={ticket.id}
-                className={`glass-panel p-5 rounded-2xl border space-y-4 transition-all duration-300 relative group overflow-hidden flex flex-col justify-between shadow-xl ${isStale
-                    ? "bg-red-950/20 border-red-500/50 shadow-red-950/30 opacity-90"
-                    : isCompleted
-                      ? "opacity-60 border-[var(--border)] bg-[var(--surface-hi)]/30"
-                      : isReady
-                        ? "bg-[#25d366]/5 border-[#25d366]/50 hover:border-[#25d366]"
-                        : isOverdue
-                          ? "bg-red-500/10 border-red-500/50 shadow-red-500/20 hover:border-red-400"
-                          : isCooking
-                            ? "bg-amber-500/5 border-amber-500/40 hover:border-amber-400"
-                            : "border-[var(--border)] hover:border-[var(--gold)]/40"
-                  }`}
+                className={`glass-panel p-4 rounded-2xl border border-[var(--border)] border-l-4 transition-all duration-200 shadow-sm hover:shadow-md hover:border-[var(--gold)]/40 flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${statusAccentColor}`}
               >
-                {/* Stale Ticket Expiration Warning Banner */}
-                {isStale && (
-                  <div className="bg-red-500/25 border-b border-red-500/40 px-3 py-1.5 text-center text-[10.5px] font-mono font-black text-red-300 uppercase tracking-wider flex items-center justify-center gap-1.5 -mx-5 -mt-5 mb-3 shadow-inner">
-                    <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0 animate-pulse" />
-                    <span>ORDER EXPIRED / STALE (Elapsed: &gt;{elapsedSincePlacedText || `${elapsedSincePlaced}m`})</span>
-                  </div>
-                )}
+                {/* Left Section: Ticket Info & Table */}
+                <div className="flex items-start sm:items-center gap-3.5 min-w-[280px]">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono font-black text-sm sm:text-base text-[var(--text-hi)] flex items-center gap-1.5">
+                        {ticket.priority === "urgent" && (
+                          <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                        )}
+                        {ticket.id}
+                      </span>
 
-                {/* Progress bar line along top of cooking tickets */}
-                {isCooking && (
-                  <div className="absolute top-0 left-0 right-0 h-1 bg-black/40 overflow-hidden">
-                    <div
-                      className={`h-full transition-all duration-1000 ${isOverdue
-                          ? "bg-gradient-to-r from-red-600 via-rose-500 to-red-400 animate-pulse w-full"
-                          : "bg-gradient-to-r from-amber-500 via-[#e3b13b] to-emerald-400"
-                        }`}
-                      style={{ width: isOverdue ? "100%" : `${timing.progressPercent}%` }}
-                    />
-                  </div>
-                )}
+                      <span className="px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold bg-[var(--gold)]/15 text-[var(--gold)] border border-[var(--gold)]/30">
+                        {ticket.tableOrChannel || "Takeaway"}
+                      </span>
 
-                <div className="space-y-2 pb-3 border-b border-[var(--border)]">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono font-black text-sm text-[var(--text-hi)] flex items-center gap-1.5">
-                      {ticket.priority === "urgent" && (
-                        <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                      {ticket.orderType && (
+                        <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-[var(--surface-hi)] text-[var(--text-lo)] border border-[var(--border)]">
+                          {ticket.orderType.replace("_", " ")}
+                        </span>
                       )}
-                      {ticket.id}
-                    </span>
+                    </div>
 
-                    {/* Live Reverse Countdown Timer Badge / Stale Badge */}
-                    <span
-                      className={`badge-pill ${isStale
-                          ? "badge-danger animate-pulse font-black"
-                          : isCompleted
-                            ? "badge-neutral font-bold"
-                            : isReady
-                              ? "badge-success font-black"
-                              : isOverdue
-                                ? "badge-danger animate-pulse font-extrabold"
-                                : isCooking
-                                  ? "badge-warning font-extrabold"
-                                  : "badge-info"
-                        }`}
-                    >
-                      {isStale ? (
-                        <>
-                          <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
-                          <span>VOID / STALE</span>
-                        </>
-                      ) : isReady ? (
-                        <>
-                          <CheckCircle2 className="w-3.5 h-3.5 text-[#25d366]" />
-                          <span>READY</span>
-                        </>
-                      ) : isCompleted ? (
-                        <>
-                          <Archive className="w-3.5 h-3.5" />
-                          <span>
-                            {ticket.status?.toLowerCase() === "cancelled"
-                              ? "CANCELLED"
-                              : ticket.status?.toLowerCase() === "archived"
-                                ? "ARCHIVED"
-                                : ticket.status?.toLowerCase() === "fulfilled"
-                                  ? "FULFILLED"
-                                  : "COMPLETED"}
+                    <div className="flex items-center gap-2 text-xs font-mono text-[var(--text-lo)] flex-wrap">
+                      <span>Server: <strong className="text-[var(--text-hi)]">{ticket.serverName || "Front Desk"}</strong></span>
+                      <span>•</span>
+                      {ticket.createdAt && (
+                        <span>
+                          Placed: {ticket.createdAt}
+                          {isExpired ? ` (${elapsedSincePlacedText || `${elapsedSincePlaced}m`} ago)` : ""}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Middle Section: Dishes List & Custom Notes */}
+                <div className="flex-1 space-y-1.5 max-w-2xl">
+                  <div className="flex flex-wrap gap-1.5">
+                    {ticket.items.map((it, idx) => {
+                      const qty = Number(it.qty || (it as any).quantity || 1);
+                      return (
+                        <div
+                          key={idx}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white/70 dark:bg-[var(--surface-hi)] border border-[var(--border)] text-xs font-medium text-[var(--text-hi)]"
+                        >
+                          <span className="font-mono font-bold text-[var(--gold)] bg-[var(--gold)]/10 px-1.5 py-0.2 rounded text-[11px]">
+                            {qty}x
                           </span>
-                        </>
-                      ) : isOverdue ? (
-                        <>
-                          <AlertTriangle className="w-3.5 h-3.5 text-red-400 animate-bounce" />
-                          <span>{timing.formattedTime}</span>
-                        </>
-                      ) : isCooking ? (
-                        <>
-                          <Flame className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-                          <span>{timing.formattedTime}</span>
-                        </>
-                      ) : (
-                        <>
-                          <Clock className="w-3.5 h-3.5 text-blue-400" />
-                          <span>{timing.formattedTime}</span>
-                        </>
-                      )}
-                    </span>
+                          <span>{it.name}</span>
+                          {it.notes && (
+                            <span className="text-[10px] text-amber-500 font-mono italic flex items-center gap-0.5 ml-1">
+                              <AlertCircle className="w-2.5 h-2.5" />
+                              {it.notes}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
 
-                  <div className="flex items-center justify-between text-xs font-mono">
-                    <span className="font-bold text-[var(--gold)]">{ticket.tableOrChannel}</span>
-                    <span className="text-[var(--text-faint)] text-[11px]">{ticket.serverName}</span>
-                  </div>
+                  {/* Voided Details Notice */}
+                  {isVoided && (
+                    <div className="text-xs font-mono text-red-400 bg-red-500/10 border border-red-500/20 px-2.5 py-1 rounded-lg flex items-center gap-1.5">
+                      <Ban className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        <strong>Voided by Admin:</strong>{" "}
+                        {ticket.void_reason || "Cancelled and payment blocked across all terminals."}
+                      </span>
+                    </div>
+                  )}
 
-                  {ticket.createdAt && (
-                    <div className="text-[10px] font-mono text-[var(--text-faint)]">
-                      Placed: {ticket.createdAt} {isStale ? `(${elapsedSincePlacedText || `${elapsedSincePlaced}m`} ago)` : ""}
+                  {/* Expired Stale Notice */}
+                  {isExpired && !isVoided && (
+                    <div className="text-xs font-mono text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2.5 py-1 rounded-lg flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        <strong>Expired Ticket:</strong> Exceeded {STALE_THRESHOLD_MINUTES}m in queue without cooking.
+                      </span>
                     </div>
                   )}
                 </div>
 
-                {/* Checklist of dishes */}
-                <div className="space-y-2 flex-1">
-                  {ticket.items.map((it, idx) => (
-                    <div
-                      key={idx}
-                      className="p-2.5 rounded-xl bg-[var(--surface-hi)]/70 border border-[var(--border)] text-xs space-y-1"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-[var(--text-hi)]">{it.name}</span>
-                        {(() => {
-                          const qty = Number(it.qty || (it as any).quantity || 1);
-                          if (qty > 1) {
-                            return (
-                              <span className="font-mono font-black text-[var(--gold)] bg-[var(--gold-dim)] px-2 py-0.5 rounded-lg text-[11px]">
-                                {qty}x
-                              </span>
-                            );
-                          }
-                          return null;
-                        })()}
-                      </div>
-                      {it.notes && (
-                        <p className="text-[10.5px] text-amber-800 dark:text-amber-400/90 font-mono italic flex items-center gap-1 mt-0.5">
-                          <AlertTriangle className="w-3 h-3 shrink-0" />
-                          <span>{it.notes}</span>
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                {/* Status Badge & Actions Section */}
+                <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-[var(--border)]">
+                  {/* Status Indicator Badge */}
+                  <div className="min-w-[120px] text-right">
+                    {isVoided ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-black bg-red-500/15 text-red-400 border border-red-500/30">
+                        <Ban className="w-3.5 h-3.5" />
+                        VOIDED
+                      </span>
+                    ) : isExpired ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-black bg-rose-500/15 text-rose-400 border border-rose-500/30 animate-pulse">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        EXPIRED
+                      </span>
+                    ) : isReady ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-black bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        READY
+                      </span>
+                    ) : isCompleted ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold bg-[var(--surface-hi)] text-[var(--gold)] border border-[var(--border)]">
+                        <Archive className="w-3.5 h-3.5" />
+                        COMPLETED
+                      </span>
+                    ) : isOverdue ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-black bg-red-500/15 text-red-400 border border-red-500/30 animate-bounce">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        {timing.formattedTime}
+                      </span>
+                    ) : isCooking ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-black bg-amber-500/15 text-amber-400 border border-amber-500/30 animate-pulse">
+                        <Flame className="w-3.5 h-3.5" />
+                        {timing.formattedTime}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold bg-blue-500/15 text-blue-400 border border-blue-500/30">
+                        <Clock className="w-3.5 h-3.5" />
+                        QUEUED
+                      </span>
+                    )}
+                  </div>
 
-                {/* Status Advance Action Button */}
-                <div className="pt-2">
-                  {isCompleted ? (
-                    <button
-                      type="button"
-                      onClick={() => handleReopenTicket(ticket.id)}
-                      className="w-full py-2.5 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface)] text-[var(--text-lo)] hover:text-[var(--text-hi)] border border-[var(--border)] font-bold text-xs cursor-pointer flex items-center justify-center gap-2 transition-all"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Re-open Ticket</span>
-                    </button>
-                  ) : isStale ? (
-                    <div className="space-y-2">
+                  {/* Actions Group */}
+                  <div className="flex items-center gap-2">
+                    {/* Universal Admin Cancel / Void Button (Available for all non-completed and non-voided tickets) */}
+                    {!isCompleted && !isVoided && (
                       <button
                         type="button"
-                        disabled={true}
-                        title="Ticket expired (>60m unstarted). Contact Floor Manager to void or re-issue."
-                        className="w-full py-2.5 rounded-xl font-bold text-xs cursor-not-allowed opacity-50 bg-neutral-800 text-neutral-400 border border-neutral-700 flex items-center justify-center gap-2"
+                        onClick={() => {
+                          setCancellingTicket(ticket);
+                          setCancelReasonPreset("Customer Changed Mind");
+                          setCancelReasonCustom("");
+                        }}
+                        className="px-3 py-1.5 rounded-xl border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-400 font-mono font-bold text-xs cursor-pointer flex items-center gap-1.5 transition-all shadow-2xs hover:scale-102"
+                        title="Cancel & Void order across Kitchen, Waiter, and POS terminals"
                       >
-                        <Flame className="w-4 h-4 text-neutral-500" />
-                        <span>Start Cooking (Locked)</span>
+                        <Ban className="w-3.5 h-3.5" />
+                        <span>Cancel Order</span>
                       </button>
-                      <p className="text-[10px] text-red-400/90 font-mono text-center leading-tight">
-                        Ticket expired (&gt;60m unstarted). Contact Floor Manager to void or re-issue.
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => handleAdvanceKds(ticket.id, "archived")}
-                        className="w-full py-2 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 hover:text-red-200 border border-red-500/30 font-mono font-bold text-xs cursor-pointer flex items-center justify-center gap-1.5 transition-all shadow-sm"
-                      >
-                        <Archive className="w-3.5 h-3.5 text-red-400" />
-                        <span>Archive Stale Ticket</span>
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => handleTransition(ticket.id)}
-                      className={`w-full py-2.5 rounded-xl font-bold text-xs cursor-pointer flex items-center justify-center gap-2 transition-all ${isReady
-                          ? "bg-[#25d366] text-[#140c0c] font-black shadow-lg shadow-[#25d366]/20 hover:bg-[#20ba59]"
-                          : ticket.status === "preparing"
-                            ? "bg-amber-500 hover:bg-amber-400 text-black font-black shadow-md"
-                            : "btn-gold animate-sheen"
-                        }`}
-                    >
-                      {isReady ? (
-                        <>
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span>Handed to Waiter / Rider</span>
-                        </>
-                      ) : ticket.status === "preparing" ? (
-                        <>
-                          <Check className="w-4 h-4" />
-                          <span>Mark Order Ready (Ding!)</span>
-                        </>
-                      ) : (
-                        <>
-                          <Flame className="w-4 h-4" />
-                          <span>Start Cooking</span>
-                        </>
-                      )}
-                    </button>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Admin Cancel & Void Confirmation Modal */}
+      {cancellingTicket && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md overflow-y-auto animate-in fade-in duration-150">
+          <div className="w-full max-w-lg bg-[var(--bg-deep)] border border-[var(--border-hi)] rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden font-sans animate-in zoom-in-95 duration-150 relative">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 sm:px-6 py-4 border-b border-[var(--border)] bg-[var(--surface-hi)]/30">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-500/15 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0">
+                  <Ban className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-display font-black text-base sm:text-lg text-[var(--text-hi)]">
+                    Cancel &amp; Void Order
+                  </h3>
+                  <p className="text-xs font-mono text-[var(--text-lo)]">
+                    Target: <strong className="text-[var(--gold)]">{cancellingTicket.id}</strong> ({cancellingTicket.tableOrChannel || "Table"})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCancellingTicket(null)}
+                disabled={isVoiding}
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface)] border border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--text-hi)] flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-95"
+                aria-label="Close modal"
+              >
+                <X className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 sm:p-6 space-y-4 sm:space-y-5">
+              {/* Warning Explanation Notice */}
+              <div className="p-3.5 sm:p-4 rounded-2xl bg-amber-950/25 border border-amber-600/30 space-y-1.5 text-xs font-mono text-amber-200/90">
+                <div className="flex items-center gap-2 font-bold text-amber-400 uppercase tracking-wide">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                  <span>Permanent Cross-Terminal Cancellation</span>
+                </div>
+                <p className="leading-relaxed text-[var(--text-lo)]">
+                  Cancelling this order will immediately mark it as <strong className="text-red-400 font-bold">VOIDED</strong> across the Kitchen Station, Waiter Terminal, and POS Order Hub. The occupied table will be released, and payment settlement will be strictly blocked.
+                </p>
+              </div>
+
+              {/* Quick Reason Presets */}
+              <div className="space-y-2">
+                <label className="text-xs font-mono font-bold text-[var(--text-lo)] uppercase">
+                  Select Cancellation Reason
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {[
+                    "Customer Changed Mind",
+                    "Guest Left / Walked Out",
+                    "Duplicate / Mistake Order",
+                    "Kitchen Delay / Out of Stock",
+                    "Other",
+                  ].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setCancelReasonPreset(preset);
+                        if (preset === "Other") {
+                          setTimeout(() => customReasonInputRef.current?.focus(), 50);
+                        }
+                      }}
+                      className={`px-3.5 py-2.5 rounded-xl text-xs font-mono text-left border transition-all cursor-pointer ${
+                        cancelReasonPreset === preset
+                          ? "bg-[var(--gold-dim)] text-[var(--gold)] border-[var(--gold)] ring-1 ring-[var(--gold)] font-black shadow-sm"
+                          : "bg-[var(--surface-hi)]/60 hover:bg-[var(--surface-hi)] border-[var(--border)] text-[var(--text-lo)] hover:text-[var(--text-hi)] hover:border-[var(--gold)]/40 font-bold"
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Notes / Details (Mandatory if 'Other' selected) */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-mono font-bold uppercase">
+                  <label
+                    htmlFor="cancel-custom-reason"
+                    className={
+                      cancelReasonPreset === "Other"
+                        ? "text-amber-400 flex items-center gap-1.5"
+                        : "text-[var(--text-lo)]"
+                    }
+                  >
+                    {cancelReasonPreset === "Other" ? (
+                      <>
+                        <span>Specify Cancellation Reason</span>
+                        <span className="text-red-400 font-bold">* (Required)</span>
+                      </>
+                    ) : (
+                      "Additional Notes (Optional)"
+                    )}
+                  </label>
+                  {cancelReasonPreset === "Other" && !cancelReasonCustom.trim() && (
+                    <span className="text-[10px] text-amber-400 font-normal normal-case">
+                      Reason required to proceed
+                    </span>
+                  )}
+                </div>
+                <input
+                  id="cancel-custom-reason"
+                  ref={customReasonInputRef}
+                  type="text"
+                  value={cancelReasonCustom}
+                  onChange={(e) => setCancelReasonCustom(e.target.value)}
+                  placeholder={
+                    cancelReasonPreset === "Other"
+                      ? "Write cancellation reason here (required)..."
+                      : "e.g. Guest had to rush, table bill cleared as void..."
+                  }
+                  className={`w-full px-4 py-2.5 rounded-xl bg-[var(--surface-hi)]/60 border text-xs font-mono text-[var(--text-hi)] placeholder:text-[var(--text-faint)] focus:outline-none transition-all ${
+                    cancelReasonPreset === "Other" && !cancelReasonCustom.trim()
+                      ? "border-amber-500/70 focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
+                      : "border-[var(--border)] focus:border-[var(--gold)] focus:ring-1 focus:ring-[var(--gold)]"
+                  }`}
+                />
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[var(--border)]">
+                <button
+                  type="button"
+                  onClick={() => setCancellingTicket(null)}
+                  disabled={isVoiding}
+                  className="px-4 py-2.5 rounded-xl bg-[var(--surface-hi)] hover:bg-[var(--surface)] text-[var(--text-lo)] hover:text-[var(--text-hi)] font-mono font-bold text-xs cursor-pointer border border-[var(--border)] transition-all"
+                >
+                  Keep Order
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmCancelOrder}
+                  disabled={isVoiding || (cancelReasonPreset === "Other" && !cancelReasonCustom.trim())}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-red-600 via-rose-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white font-mono font-black text-xs cursor-pointer shadow-lg shadow-red-950/60 flex items-center gap-2 transition-all disabled:opacity-40 disabled:cursor-not-allowed active:scale-95"
+                >
+                  {isVoiding ? (
+                    <>
+                      <div className="w-3.5 h-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />
+                      <span>Voiding Order...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Ban className="w-3.5 h-3.5" />
+                      <span>Confirm &amp; Void Order</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

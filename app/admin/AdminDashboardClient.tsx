@@ -59,6 +59,10 @@ import {
   isTableMatchingIdentifier,
 } from "@/lib/tableOccupancy";
 import {
+  broadcastTerminalMutation,
+  subscribeTerminalEventBus,
+} from "@/lib/terminalRealtimeSync";
+import {
   getStoredNotifications,
   markAllNotificationsRead,
   dispatchLowStockAlert,
@@ -130,6 +134,20 @@ export default function AdminDashboardClient({
       try {
         const localSession = getActiveUserSession();
         if (localSession) {
+          if (localSession.userType === "STAFF") {
+            const rawRole = (localSession.staffRole || (localSession as any).role || "").toLowerCase().trim();
+            if (rawRole === "waiter" || rawRole === "server") {
+              router.replace("/terminal/waiter");
+            } else if (rawRole === "chef" || rawRole === "kitchen" || rawRole === "cook") {
+              router.replace("/terminal/kitchen");
+            } else if (rawRole === "rider") {
+              router.replace("/terminal/rider");
+            } else {
+              router.replace("/terminal/pos");
+            }
+            return;
+          }
+
           if (!isMounted) return;
           setIsAuthenticated(true);
           setIsLoading(false);
@@ -918,6 +936,10 @@ function AdminDashboardContent({
         if (!ticketErr && ticketData && isMounted) {
           const mappedTickets: KdsTicket[] = ticketData.map((t: any) => ({
             id: t.ticket_number || t.id,
+            dbId: t.id,
+            ticket_number: t.ticket_number,
+            orderId: t.order_id,
+            table_number: t.table_number,
             tableOrChannel: t.table_number || t.channel,
             orderType: t.channel,
             elapsedMinutes: t.prep_timer_started_at
@@ -941,6 +963,8 @@ function AdminDashboardContent({
             prep_timer_started_at: t.prep_timer_started_at || undefined,
             estimatedPrepTime: Number(t.estimated_prep_time) || undefined,
             estimated_prep_time: Number(t.estimated_prep_time) || undefined,
+            void_reason: t.void_reason || null,
+            voided_at: t.voided_at || null,
           }));
           setKdsTickets(mappedTickets);
           saveStoredKdsTickets(orgId, mappedTickets);
@@ -1024,10 +1048,12 @@ function AdminDashboardContent({
               const updatedRow: any = payload.new;
               setKdsTickets((prev) =>
                 prev.map((t) =>
-                  t.id === updatedRow.ticket_number || t.id === updatedRow.id
+                  t.id === updatedRow.ticket_number || t.id === updatedRow.id || (t.dbId && t.dbId === updatedRow.id)
                     ? {
                       ...t,
                       status: updatedRow.status,
+                      void_reason: updatedRow.void_reason ?? t.void_reason,
+                      voided_at: updatedRow.voided_at ?? t.voided_at,
                       prepStartedAt: updatedRow.prep_timer_started_at || t.prepStartedAt,
                       prep_timer_started_at: updatedRow.prep_timer_started_at || t.prep_timer_started_at,
                       estimatedPrepTime: Number(updatedRow.estimated_prep_time) || t.estimatedPrepTime,
@@ -1043,6 +1069,10 @@ function AdminDashboardContent({
               const newRow: any = payload.new;
               const newTicket: KdsTicket = {
                 id: newRow.ticket_number || newRow.id,
+                dbId: newRow.id,
+                ticket_number: newRow.ticket_number,
+                orderId: newRow.order_id,
+                table_number: newRow.table_number,
                 tableOrChannel: newRow.table_number || newRow.channel,
                 orderType: newRow.channel,
                 elapsedMinutes: 0,
@@ -1062,6 +1092,8 @@ function AdminDashboardContent({
                 prep_timer_started_at: newRow.prep_timer_started_at || undefined,
                 estimatedPrepTime: Number(newRow.estimated_prep_time) || undefined,
                 estimated_prep_time: Number(newRow.estimated_prep_time) || undefined,
+                void_reason: newRow.void_reason || null,
+                voided_at: newRow.voided_at || null,
               };
               setKdsTickets((prev) => [newTicket, ...prev.filter((t) => t.id !== newTicket.id)]);
             }
@@ -1257,10 +1289,36 @@ function AdminDashboardContent({
       handleTableReleasedEvent((e as CustomEvent).detail);
     };
 
+    const handleTicketVoidedEvent = (e: any) => {
+      const detail = e?.detail || e;
+      if (!detail) return;
+      const { ticketId, orderId, reason } = detail;
+      if (ticketId) {
+        setKdsTickets((prev) =>
+          prev.map((t) =>
+            t.id === ticketId || t.ticket_number === ticketId || (t.orderId && String(t.orderId) === String(orderId))
+              ? { ...t, status: "voided", void_reason: reason || "Cancelled by Admin" }
+              : t
+          )
+        );
+      }
+      if (orderId) {
+        setOrders((prev) =>
+          prev.map((o) =>
+            String(o.id) === String(orderId) || String(o.kotId) === String(ticketId)
+              ? { ...o, status: "cancelled", payment_status: "voided", order_status: "cancelled" }
+              : o
+          )
+        );
+      }
+      loadSupabaseData();
+    };
+
     if (typeof window !== "undefined") {
       window.addEventListener("pos_tables_updated", handleSyncEvent);
       window.addEventListener("restaurant_tables_changed", handleSyncEvent);
       window.addEventListener("table_released", handleTableReleasedWindow);
+      window.addEventListener("kitchen_ticket_voided", handleTicketVoidedEvent);
       window.addEventListener("orders_updated", handleSyncEvent);
       window.addEventListener("inventory_stock_deducted", handleSyncEvent);
       window.addEventListener("pos_menu_updated", handleSyncEvent);
@@ -1288,10 +1346,51 @@ function AdminDashboardContent({
 
     const unsubRelease = subscribeToTableReleased(restId, handleTableReleasedEvent);
 
+    const unsubTerminalBus = subscribeTerminalEventBus(restId, (payload) => {
+      if (!isMounted) return;
+      console.log("[AdminDashboard] Terminal bus mutation received:", payload);
+      if (payload.type === "TABLE_RELEASED") {
+        handleTableReleasedEvent(payload);
+      } else if (payload.type === "TABLE_MUTATION") {
+        const isRelease = payload.status === "available" || payload.status === "AVAILABLE";
+        const tableId = payload.tableId;
+        const tableNum = payload.tableNumber;
+        setTables((prev) =>
+          prev.map((t) => {
+            const matches =
+              (tableId && (String(t.dbId) === String(tableId) || String(t.id) === String(tableId))) ||
+              (tableNum && (isTableMatchingIdentifier(t, tableNum) || String(t.label) === String(tableNum)));
+            if (matches) {
+              return {
+                ...t,
+                status: isRelease ? "available" : "seated",
+                activeOrderId: isRelease ? undefined : (payload.orderId ? String(payload.orderId) : t.activeOrderId),
+              };
+            }
+            return t;
+          })
+        );
+        loadSupabaseData();
+      } else if (payload.type === "ORDER_VOIDED") {
+        handleTicketVoidedEvent({
+          ticketId: payload.ticketId,
+          orderId: payload.orderId,
+          reason: payload.reason,
+        });
+        if (payload.tableNumber || payload.tableId) {
+          handleTableReleasedEvent(payload);
+        }
+        loadSupabaseData();
+      } else if (payload.type === "ORDER_MUTATION") {
+        loadSupabaseData();
+      }
+    });
+
     return () => {
       isMounted = false;
       if (unsubStock) unsubStock();
       if (unsubRelease) unsubRelease();
+      if (unsubTerminalBus) unsubTerminalBus();
       if (typeof window !== "undefined") {
         window.removeEventListener("pos_tables_updated", handleSyncEvent);
         window.removeEventListener("restaurant_tables_changed", handleSyncEvent);

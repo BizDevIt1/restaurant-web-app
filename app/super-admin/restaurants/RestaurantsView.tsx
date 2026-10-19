@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createClient } from "@/lib/supabase";
 import { purgeTenantOrderCache } from "@/lib/tenantStore";
+import { broadcastRestaurantEviction } from "@/lib/restaurantStatusEvents";
 import {
   Store,
   Plus,
@@ -1422,6 +1423,11 @@ export default function RestaurantsView({
     const target = restaurants.find((r) => r.id === id);
     if (!target) return;
 
+    // Critical Security: Immediately broadcast eviction across terminals if deactivating
+    if (nextStatus === "Deactivated" || nextStatus === "Suspended") {
+      broadcastRestaurantEviction(id, "RESTAURANT_DEACTIVATED");
+    }
+
     const updated = restaurants.map((r) =>
       r.id === id ? { ...r, status: nextStatus } : r
     );
@@ -1442,7 +1448,11 @@ export default function RestaurantsView({
       await fetch("/api/super-admin/restaurants", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, initial_status: nextStatus }),
+        body: JSON.stringify({
+          id,
+          initial_status: nextStatus,
+          status: nextStatus === "Deactivated" || nextStatus === "Suspended" ? "inactive" : "active",
+        }),
       });
     } catch (err) {
       console.error(err);
@@ -1457,6 +1467,9 @@ export default function RestaurantsView({
     if (!restaurantToDelete) return;
     const target = restaurantToDelete;
     setIsDeleting(true);
+
+    // Critical Security: Immediately send the real-time broadcast eviction signal before completing the database transaction
+    broadcastRestaurantEviction(target.id, "RESTAURANT_DELETED");
 
     purgeTenantOrderCache(target.id);
     const updated = restaurants.filter((r) => r.id !== target.id);

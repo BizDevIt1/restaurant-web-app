@@ -18,26 +18,17 @@ import {
 import { useAuth } from "../../admin/context/AuthContext";
 import {
   parseShiftOption,
+  getShiftStartLabel,
   getShiftEndLabel,
   getShiftWindowLabel,
+  getRestaurantShiftConfig,
+  getEffectiveShiftsList,
+  format24HourTo12Hour,
   ShiftTypeOption,
 } from "../../../lib/shiftSchedule";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import PosSidebar from "../pos/components/PosSidebar";
-
-function getShiftStartLabel(shift: ShiftTypeOption | null): string {
-  switch (shift) {
-    case "First Shift (Morning)":
-      return "08:00 AM";
-    case "Second Shift (Evening)":
-      return "04:00 PM";
-    case "Third Shift (Night / Closing)":
-      return "12:00 AM";
-    default:
-      return "08:00 AM";
-  }
-}
 
 export default function StaffProfileClient() {
   const router = useRouter();
@@ -111,16 +102,19 @@ export default function StaffProfileClient() {
     user.staffRole?.toUpperCase() ||
     (user.role === "STAFF_MEMBER" ? "STAFF" : user.role || "OPERATOR");
 
-  // Determine assigned shift schedule details
-  const parsedShift = parseShiftOption(user.assignedShift || shiftValidation?.assignedShift);
-  const shiftTitle = user.assignedShift || shiftValidation?.assignedShift || "First Shift (Morning)";
+  // Determine assigned shift schedule details dynamically from config
+  const restId = user.restaurantId || (user as any).restId || user.organizationId;
+  const shiftConfig = React.useMemo(() => getRestaurantShiftConfig(restId, user), [restId, user]);
+  const effectiveShifts = React.useMemo(() => getEffectiveShiftsList(shiftConfig), [shiftConfig]);
+  const parsedShift = parseShiftOption(user.assignedShift || shiftValidation?.assignedShift, shiftConfig);
+  const shiftTitle = user.assignedShift || shiftValidation?.assignedShift || effectiveShifts[0]?.name || "Assigned Shift";
   const shiftWindowLabel = parsedShift
-    ? getShiftWindowLabel(parsedShift)
-    : shiftValidation?.windowLabel || "08:00 AM - 04:00 PM";
-  const shiftStartFormatted = getShiftStartLabel(parsedShift);
+    ? getShiftWindowLabel(parsedShift, shiftConfig)
+    : shiftValidation?.windowLabel || (effectiveShifts[0] ? `${format24HourTo12Hour(effectiveShifts[0].start)} - ${format24HourTo12Hour(effectiveShifts[0].end)}` : "Operating Hours");
+  const shiftStartFormatted = getShiftStartLabel(parsedShift, shiftConfig);
   const shiftEndFormatted = parsedShift
-    ? getShiftEndLabel(parsedShift)
-    : shiftValidation?.shiftEndLabel || "04:00 PM";
+    ? getShiftEndLabel(parsedShift, shiftConfig)
+    : shiftValidation?.shiftEndLabel || (effectiveShifts[0] ? format24HourTo12Hour(effectiveShifts[0].end) : "12:00 AM");
 
   return (
     <div className="flex-1 w-full flex h-full min-h-0 relative overflow-hidden bg-[var(--bg)] text-[var(--text-hi)] font-sans select-none transition-colors duration-150">
